@@ -3,8 +3,9 @@
 // ===============================
 // FW
 // ===============================
-#define FIRMWARE_VERSION "0.1.4"
-#define FIRMWARE_DATE    "2026-02-20"
+#define FIRMWARE_VERSION "0.2.0"
+#define FIRMWARE_DATE "2026-02-20"
+#define FIRMWARE_FEATURES "UART Controlled Motor"
 
 // ===============================
 // PIN TB6600

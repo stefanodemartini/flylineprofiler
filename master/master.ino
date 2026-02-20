@@ -5,8 +5,8 @@
 #include <WiFiManager.h>  // https://github.com/tzapu/WiFiManager
 #include <HardwareSerial.h>
 
-#define FIRMWARE_VERSION "2.3.0"
-#define FIRMWARE_DATE "2026-02-07"
+#define FIRMWARE_VERSION "0.2.0"
+#define FIRMWARE_DATE "2026-02-20"
 #define FIRMWARE_FEATURES "WiFi Manager + EMA + 0.01mm + UART Motor"
 
 // -----------------------------
