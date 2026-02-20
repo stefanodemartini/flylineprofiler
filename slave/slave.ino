@@ -1,6 +1,12 @@
 #include <FastAccelStepper.h>
 
 // ===============================
+// FW
+// ===============================
+#define FIRMWARE_VERSION "0.1.4"
+#define FIRMWARE_DATE    "2026-02-20"
+
+// ===============================
 // PIN TB6600
 // ===============================
 const int PUL_PIN = 4;
@@ -10,15 +16,15 @@ const int ENA_PIN = 6;
 // ===============================
 // PIN PULSANTI (ATTIVI LOW)
 // ===============================
-const int BTN_SCAN   = 10;
-const int BTN_FAST_S = 11;
-const int BTN_FAST_O = 12;
+const int BTN_SCAN   = 10;  // toggle SCAN
+const int BTN_FAST_S = 11;  // toggle FAST stessa direzione
+const int BTN_FAST_O = 12;  // toggle FAST direzione opposta
 
 // ===============================
-// UART2 BIDIREZIONALE (16/17)
+// UART2 BIDIREZIONALE (VERSO MASTER)
 // ===============================
-static const int UART_RX_PIN = 16;  // RX2
-static const int UART_TX_PIN = 17;  // TX2
+static const int UART_RX_PIN = 21;  // RX slave
+static const int UART_TX_PIN = 18;  // TX slave
 HardwareSerial SerialMaster(2);
 
 // ===============================
@@ -44,8 +50,20 @@ bool currentDirForward = true;
 // ===============================
 // FASTACCELSTEPPER
 // ===============================
-FastAccelStepperEngine engine;
+FastAccelStepperEngine engine = FastAccelStepperEngine();
 FastAccelStepper *stepper = nullptr;
+
+// ===============================
+// UART RX line buffer (non bloccante)
+// ===============================
+static char rxLine[32];
+static size_t rxLen = 0;
+
+// ===============================
+// UART TX status queue (no-loss)
+// ===============================
+static String pendingTx;
+static bool txPending = false;
 
 // ===============================
 // UTILS
@@ -62,13 +80,18 @@ const char* modeToStr(Mode m) {
   return "UNKNOWN";
 }
 
-void sendStatus() {
-  // STATUS:<MODE>:<DIR>
-  String s = "STATUS:";
-  s += modeToStr(mode);
-  s += ":";
-  s += (currentDirForward ? "FWD" : "BWD");
-  SerialMaster.println(s);
+void queueStatus() {
+  pendingTx = String("STATUS:") + modeToStr(mode) + ":" + (currentDirForward ? "FWD" : "BWD") + "\n";
+  txPending = true;
+}
+
+void pumpUartTx() {
+  if (!txPending) return;
+  int freeBytes = SerialMaster.availableForWrite();
+  if (freeBytes >= (int)pendingTx.length()) {
+    SerialMaster.print(pendingTx);
+    txPending = false;
+  }
 }
 
 void applyAndRun(bool forward, uint32_t speed_hz) {
@@ -84,37 +107,57 @@ void stopMotor() {
   mode = MODE_STOPPED;
 }
 
-void handleRemoteCommand(const String& cmd) {
-  if (cmd == "SCAN") {
+// ===============================
+// UART command handler
+// ===============================
+void handleRemoteCommand(const char* cmd) {
+  if (strcmp(cmd, "SCAN") == 0) {
     applyAndRun(currentDirForward, SCAN_SPEED_HZ);
     mode = MODE_SCAN;
-    sendStatus();
+    queueStatus();
     return;
   }
-  if (cmd == "STOP") {
+  if (strcmp(cmd, "STOP") == 0) {
     stopMotor();
-    sendStatus();
+    queueStatus();
     return;
   }
-  if (cmd == "FAST_S") {
+  if (strcmp(cmd, "FAST_S") == 0) {
     applyAndRun(currentDirForward, FAST_SPEED_HZ);
     mode = MODE_FAST_SAME;
-    sendStatus();
+    queueStatus();
     return;
   }
-  if (cmd == "FAST_O") {
+  if (strcmp(cmd, "FAST_O") == 0) {
     applyAndRun(!currentDirForward, FAST_SPEED_HZ);
     mode = MODE_FAST_OPP;
-    sendStatus();
+    queueStatus();
     return;
   }
-  if (cmd == "STATUS?") {
-    sendStatus();
+  if (strcmp(cmd, "STATUS?") == 0) {
+    queueStatus();
     return;
   }
 
-  // sconosciuto: rispondo comunque con stato
-  sendStatus();
+  // sconosciuto: rispondo comunque
+  queueStatus();
+}
+
+void pumpUartRx() {
+  while (SerialMaster.available() > 0) {
+    char c = (char)SerialMaster.read();
+    if (c == '\r') continue;
+
+    if (c == '\n') {
+      rxLine[rxLen] = '\0';
+      if (rxLen > 0) handleRemoteCommand(rxLine);
+      rxLen = 0;
+      continue;
+    }
+
+    if (rxLen < sizeof(rxLine) - 1) rxLine[rxLen++] = c;
+    else rxLen = 0;
+  }
 }
 
 void setup() {
@@ -135,45 +178,49 @@ void setup() {
   }
 
   stepper->setDirectionPin(DIR_PIN);
+
+  // IDENTICO al tuo codice funzionante:
   stepper->setEnablePin(ENA_PIN);
   stepper->setAutoEnable(true);
 
+  // IDENTICO al tuo codice funzionante:
   applyAndRun(true, SCAN_SPEED_HZ);
   stopMotor();
 
-  sendStatus();
+  queueStatus();
+
+  Serial.println("Pronto: bottoni + UART (SCAN/STOP/FAST_S/FAST_O/STATUS?)");
 }
 
 void loop() {
   const unsigned long now = millis();
 
-  // UART RX da master
-  if (SerialMaster.available()) {
-    String cmd = SerialMaster.readStringUntil('\n');
-    cmd.trim();
-    if (cmd.length()) handleRemoteCommand(cmd);
-  }
+  // UART
+  pumpUartRx();
+  pumpUartTx();
 
-  // Pulsanti fisici (rimangono)
+  // BTN_SCAN (toggle)
   if (pressed(BTN_SCAN) && (now - lastScanMs > debounceDelay)) {
     if (mode == MODE_SCAN) stopMotor();
     else { applyAndRun(currentDirForward, SCAN_SPEED_HZ); mode = MODE_SCAN; }
     lastScanMs = now;
-    sendStatus();
+    queueStatus();
   }
 
+  // BTN_FAST_S (toggle)
   if (pressed(BTN_FAST_S) && (now - lastFastSMs > debounceDelay)) {
     if (mode == MODE_FAST_SAME) stopMotor();
     else { applyAndRun(currentDirForward, FAST_SPEED_HZ); mode = MODE_FAST_SAME; }
     lastFastSMs = now;
-    sendStatus();
+    queueStatus();
   }
 
+  // BTN_FAST_O (toggle)
   if (pressed(BTN_FAST_O) && (now - lastFastOMs > debounceDelay)) {
     if (mode == MODE_FAST_OPP) stopMotor();
     else { applyAndRun(!currentDirForward, FAST_SPEED_HZ); mode = MODE_FAST_OPP; }
     lastFastOMs = now;
-    sendStatus();
+    queueStatus();
   }
 
   delay(5);

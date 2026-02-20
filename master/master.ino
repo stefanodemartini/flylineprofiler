@@ -2,7 +2,7 @@
 #include <WebServer.h>
 #include <WebSocketsServer.h>
 #include <EEPROM.h>
-#include <WiFiManager.h> // https://github.com/tzapu/WiFiManager
+#include <WiFiManager.h>  // https://github.com/tzapu/WiFiManager
 #include <HardwareSerial.h>
 
 #define FIRMWARE_VERSION "2.3.0"
@@ -40,15 +40,29 @@ float smoothedDiameter = 0.0;
 bool filterInitialized = false;
 
 // -----------------------------
-// UART2 verso ESP32 motore (bidirezionale)
+// UART2 verso ESP32 motore (bidirezionale) - ROBUSTO
 // -----------------------------
 static const int MOTOR_UART_RX_PIN = 16;  // RX2
 static const int MOTOR_UART_TX_PIN = 17;  // TX2
 HardwareSerial SerialMotor(2);
 
+// Stato motore per UI
 String motorMode = "UNKNOWN";
-String motorDir  = "UNKNOWN";
+String motorDir = "UNKNOWN";
 unsigned long motorLastSeenMs = 0;
+
+// RX line buffer (non bloccante)
+static char motorRxLine[48];
+static size_t motorRxLen = 0;
+
+// TX queue (un comando pending)
+static String motorTxPending;
+static bool motorTxHasPending = false;
+
+// Watchdog status
+static unsigned long lastMotorPollMs = 0;
+static const unsigned long MOTOR_POLL_INTERVAL_MS = 2000;
+static const unsigned long MOTOR_STALE_MS = 4000;
 
 // Struttura per gestione dati illimitati
 struct DataPoint {
@@ -93,6 +107,12 @@ void addDataPoint(int cm, float diameter, float rawDisplay);
 void clearAllData();
 int getTotalDataPoints();
 void setDisplayZero();
+
+void motorQueueTx(const String& lineNoNewline);
+void motorPumpTx();
+void motorPumpRx();
+void motorPollIfNeeded();
+void motorHandleStatusLine(const char* line);
 
 // -----------------------------
 // Gestione Dati Illimitati
@@ -170,12 +190,77 @@ void IRAM_ATTR updateEncoder() {
 }
 
 // -----------------------------
+// UART motore: funzioni robuste
+// -----------------------------
+void motorQueueTx(const String& lineNoNewline) {
+  motorTxPending = lineNoNewline + "\n";
+  motorTxHasPending = true;
+}
+
+void motorPumpTx() {
+  if (!motorTxHasPending) return;
+  int freeBytes = SerialMotor.availableForWrite();
+  if (freeBytes >= (int)motorTxPending.length()) {
+    SerialMotor.print(motorTxPending);
+    motorTxHasPending = false;
+  }
+}
+
+void motorHandleStatusLine(const char* line) {
+  if (strncmp(line, "STATUS:", 7) != 0) return;
+
+  const char* p = line + 7;
+  const char* colon = strchr(p, ':');
+  if (!colon) return;
+
+  motorMode = String(p).substring(0, colon - p);
+  motorDir = String(colon + 1);
+
+  motorLastSeenMs = millis();
+
+  String json = "{\"type\":\"motor\",\"mode\":\"" + motorMode + "\",\"dir\":\"" + motorDir + "\"}";
+  webSocket.broadcastTXT(json);
+}
+
+void motorPumpRx() {
+  while (SerialMotor.available() > 0) {
+    char c = (char)SerialMotor.read();
+    if (c == '\r') continue;
+
+    if (c == '\n') {
+      motorRxLine[motorRxLen] = '\0';
+      if (motorRxLen > 0) motorHandleStatusLine(motorRxLine);
+      motorRxLen = 0;
+      continue;
+    }
+
+    if (motorRxLen < sizeof(motorRxLine) - 1) motorRxLine[motorRxLen++] = c;
+    else motorRxLen = 0;
+  }
+}
+
+void motorPollIfNeeded() {
+  unsigned long now = millis();
+  bool stale = (motorLastSeenMs == 0) || (now - motorLastSeenMs > MOTOR_STALE_MS);
+
+  if (stale && (now - lastMotorPollMs > MOTOR_POLL_INTERVAL_MS)) {
+    motorQueueTx("STATUS?");
+    lastMotorPollMs = now;
+
+    // UI: segnala offline
+    String json = "{\"type\":\"motor\",\"mode\":\"OFFLINE\",\"dir\":\"--\"}";
+    webSocket.broadcastTXT(json);
+  }
+}
+
+// -----------------------------
 void setup() {
   Serial.begin(115200);
   EEPROM.begin(EEPROM_SIZE);
 
   // UART motore
   SerialMotor.begin(115200, SERIAL_8N1, MOTOR_UART_RX_PIN, MOTOR_UART_TX_PIN);
+  motorQueueTx("STATUS?");
 
   pinMode(ENCODER_DATA_PIN, INPUT_PULLUP);
   pinMode(ENCODER_CLOCK_PIN, INPUT_PULLUP);
@@ -202,7 +287,7 @@ void setup() {
     delay(1000);
   }
   wifiManager.setConfigPortalTimeout(180);
-  wifiManager.setAPCallback([](WiFiManager *m) {
+  wifiManager.setAPCallback([](WiFiManager* m) {
     Serial.println("AP: " + String(m->getConfigPortalSSID()));
     Serial.println("Pwd: 12345678 | IP: 192.168.4.1");
   });
@@ -255,6 +340,7 @@ void setup() {
         .upload-area { text-align: center; padding: 20px; }
         .file-input { margin: 10px 0; }
         .upload-info { margin-top: 10px; font-size: 0.9em; color: #6c757d; }
+        .dataset-controls { display: flex; gap: 10px; justify-content: center; margin-top: 10px; }
         .dataset-list { margin-top: 10px; max-height: 200px; overflow-y: auto; border: 1px solid #ddd; border-radius: 5px; padding: 10px; background: white; }
         .dataset-item { display: flex; justify-content: space-between; align-items: center; padding: 5px; margin: 2px 0; border-radius: 3px; background: #f8f9fa; }
         .dataset-item:hover { background: #e9ecef; }
@@ -276,13 +362,34 @@ void setup() {
         </div>
 
         <div class="status-panel">
-            <div class="status-item"><div>Lunghezza Attuale</div><div class="status-value" id="currentLength">0 cm</div></div>
-            <div class="status-item"><div>Diametro Compensato</div><div class="status-value" id="currentDiameter">0.00 mm</div></div>
-            <div class="status-item"><div>Display Calibro</div><div class="status-value" id="currentDisplay">0.00 mm</div></div>
-            <div class="status-item"><div>Velocit&agrave;</div><div class="status-value" id="currentSpeed">0.00 cm/s</div></div>
-            <div class="status-item"><div>Stato Velocit&agrave;</div><div class="status-value" id="speedStatus">Ottimale</div></div>
-            <div class="status-item"><div>Punti Registrati</div><div class="status-value" id="dataPointsCount">0</div></div>
-            <div class="status-item"><div>Stato Connessione</div><div class="status-value" id="connectionStatus">Connesso</div></div>
+            <div class="status-item">
+                <div>Lunghezza Attuale</div>
+                <div class="status-value" id="currentLength">0 cm</div>
+            </div>
+            <div class="status-item">
+                <div>Diametro Compensato</div>
+                <div class="status-value" id="currentDiameter">0.00 mm</div>
+            </div>
+            <div class="status-item">
+                <div>Display Calibro</div>
+                <div class="status-value" id="currentDisplay">0.00 mm</div>
+            </div>
+            <div class="status-item">
+                <div>Velocit&agrave;</div>
+                <div class="status-value" id="currentSpeed">0.00 cm/s</div>
+            </div>
+            <div class="status-item">
+                <div>Stato Velocit&agrave;</div>
+                <div class="status-value" id="speedStatus">Ottimale</div>
+            </div>
+            <div class="status-item">
+                <div>Punti Registrati</div>
+                <div class="status-value" id="dataPointsCount">0</div>
+            </div>
+            <div class="status-item">
+                <div>Stato Connessione</div>
+                <div class="status-value" id="connectionStatus">Connesso</div>
+            </div>
         </div>
 
         <div class="display-info">
@@ -293,7 +400,9 @@ void setup() {
         </div>
 
         <div class="chart-wrapper">
-            <div class="chart-container"><canvas id="lineChart"></canvas></div>
+            <div class="chart-container">
+                <canvas id="lineChart"></canvas>
+            </div>
             <div class="chart-controls">
                 <div class="zoom-controls">
                     <button onclick="zoomIn()">Zoom +</button>
@@ -308,10 +417,40 @@ void setup() {
             <div class="control-group">
                 <h3>Controlli Motore Trascinamento</h3>
                 <button class="success" onclick="sendCommand('motor scan')">START SCAN</button>
-                <button class="danger"  onclick="sendCommand('motor stop')">STOP</button>
+                <button class="danger" onclick="sendCommand('motor stop')">STOP</button>
                 <button class="warning" onclick="sendCommand('motor fast_s')">FAST stessa dir</button>
                 <button class="warning" onclick="sendCommand('motor fast_o')">FAST opposta dir</button>
                 <button onclick="sendCommand('motor status')">Aggiorna Stato</button>
+            </div>
+
+            <div class="control-group">
+                <h3>Carica e Confronta Dati CSV</h3>
+                <div class="upload-section">
+                    <div class="upload-area">
+                        <input type="file" id="csvFile" accept=".csv" class="file-input">
+                        <br>
+                        <input type="text" id="datasetName" placeholder="Nome dataset" style="padding: 8px; margin: 5px; border: 1px solid #ddd; border-radius: 4px; width: 200px;">
+
+                        <div class="color-palette" id="colorPalette">
+                            <!-- I colori verranno generati dinamicamente -->
+                        </div>
+
+                        <button onclick="uploadCSV()" class="success">Carica CSV</button>
+                        <button onclick="clearAllDatasets()" class="danger">Rimuovi Tutti</button>
+
+                        <div class="dataset-list" id="datasetList">
+                            <!-- Lista dataset caricati -->
+                        </div>
+
+                        <div class="upload-info">
+                            Formati supportati:<br>
+                            - Con header: "Dataset,Lunghezza (cm),Diametro (mm)"<br>
+                            - Con header: "Lunghezza (cm),Diametro (mm)"<br>
+                            - Senza header: "0.0,0.000" (solo dati)<br>
+                            Prima riga: "0,0.000" (punto zero)
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <div class="control-group">
@@ -340,8 +479,11 @@ void setup() {
             <div class="control-group">
                 <h3>Parametri Correnti</h3>
                 <div>
-                    <span>Zero Display: </span><span class="param-display" id="currentDisplayZero">0.00</span>
-                    <span> mm | Offset: </span><span class="param-display" id="currentOffsetValue">0.00</span><span> mm</span>
+                    <span>Zero Display: </span>
+                    <span class="param-display" id="currentDisplayZero">0.00</span>
+                    <span> mm | Offset: </span>
+                    <span class="param-display" id="currentOffsetValue">0.00</span>
+                    <span> mm</span>
                 </div>
             </div>
         </div>
@@ -353,11 +495,11 @@ void setup() {
             <p style="font-size: 0.85em; color: #999;">
                 <strong>Sistema Monitoraggio Diametro Linea</strong><br>
                 Versione <strong>)rawliteral"
-                + String(FIRMWARE_VERSION) + R"rawliteral(</strong> |
+                  + String(FIRMWARE_VERSION) + R"rawliteral(</strong> |
                 Build <strong>)rawliteral"
-                + String(FIRMWARE_DATE) + R"rawliteral(</strong> |
+                  + String(FIRMWARE_DATE) + R"rawliteral(</strong> |
                 <strong>)rawliteral"
-                + String(FIRMWARE_FEATURES) + R"rawliteral(</strong>
+                  + String(FIRMWARE_FEATURES) + R"rawliteral(</strong>
             </p>
         </div>
     </div>
@@ -371,39 +513,66 @@ void setup() {
         let currentDisplayZero = 0.0;
         let currentOffset = 0.0;
 
+        let uploadedDatasets = [];
+        let nextDatasetId = 1;
+        const colorPalette = [
+            '#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF',
+            '#FF9F40', '#FF6384', '#C9CBCF', '#7CFFB2', '#F465D4',
+            '#8C564B', '#E377C2', '#7F7F7F', '#BCBD22', '#17BECF'
+        ];
+        let selectedColor = colorPalette[0];
+
         const OPTIMAL_SPEED_MIN = 0.5;
         const OPTIMAL_SPEED_MAX = 2.0;
 
         function initializeChart() {
             const ctx = document.getElementById('lineChart').getContext('2d');
+
+            initializeColorPalette();
+
             chart = new Chart(ctx, {
                 type: 'line',
                 data: {
-                    datasets: [{
-                        label: 'Diametro Compensato (mm)',
-                        data: dataPoints,
-                        borderColor: '#007bff',
-                        backgroundColor: 'rgba(0, 123, 255, 0.1)',
-                        borderWidth: 2,
-                        fill: false,
-                        pointRadius: 3,
-                        pointBackgroundColor: '#007bff',
-                        pointBorderColor: '#ffffff',
-                        pointBorderWidth: 1
-                    }]
+                    datasets: [
+                        {
+                            label: 'Diametro Compensato (mm)',
+                            data: dataPoints,
+                            borderColor: '#007bff',
+                            backgroundColor: 'rgba(0, 123, 255, 0.1)',
+                            borderWidth: 2,
+                            fill: false,
+                            pointRadius: 3,
+                            pointBackgroundColor: '#007bff',
+                            pointBorderColor: '#ffffff',
+                            pointBorderWidth: 1
+                        }
+                    ]
                 },
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
                     animation: { duration: 0 },
                     scales: {
-                        x: { type: 'linear', title: { display: true, text: 'Lunghezza (cm)', font: { size: 14, weight: 'bold' } }, grid: { color: 'rgba(0,0,0,0.1)' } },
-                        y: { title: { display: true, text: 'Diametro Compensato (mm)', font: { size: 14, weight: 'bold' } }, grid: { color: 'rgba(0,0,0,0.1)' } }
+                        x: {
+                            type: 'linear',
+                            title: { display: true, text: 'Lunghezza (cm)', font: { size: 14, weight: 'bold' } },
+                            grid: { color: 'rgba(0,0,0,0.1)' }
+                        },
+                        y: {
+                            title: { display: true, text: 'Diametro Compensato (mm)', font: { size: 14, weight: 'bold' } },
+                            grid: { color: 'rgba(0,0,0,0.1)' }
+                        }
                     },
                     plugins: {
                         legend: { display: true, position: 'top' },
-                        tooltip: { mode: 'index', intersect: false,
-                            callbacks: { label: function(context) { return `${context.dataset.label}: ${context.parsed.y.toFixed(3)} mm a ${context.parsed.x} cm`; } }
+                        tooltip: {
+                            mode: 'index',
+                            intersect: false,
+                            callbacks: {
+                                label: function(context) {
+                                    return `${context.dataset.label}: ${context.parsed.y.toFixed(3)} mm a ${context.parsed.x} cm`;
+                                }
+                            }
                         },
                         zoom: {
                             pan: { enabled: true, mode: 'xy', modifierKey: 'ctrl' },
@@ -417,6 +586,25 @@ void setup() {
 
             ensureZeroPoint();
             fitToData();
+        }
+
+        function initializeColorPalette() {
+            const paletteContainer = document.getElementById('colorPalette');
+            paletteContainer.innerHTML = '';
+
+            colorPalette.forEach(color => {
+                const colorOption = document.createElement('div');
+                colorOption.className = 'color-option';
+                colorOption.style.backgroundColor = color;
+                if (color === selectedColor) colorOption.classList.add('selected');
+
+                colorOption.onclick = function() {
+                    document.querySelectorAll('.color-option').forEach(opt => opt.classList.remove('selected'));
+                    this.classList.add('selected');
+                    selectedColor = color;
+                };
+                paletteContainer.appendChild(colorOption);
+            });
         }
 
         function updateSpeedDisplay(speed) {
@@ -439,11 +627,263 @@ void setup() {
                 speedElement.className = 'status-value speed-optimal';
             }
         }
+        function uploadCSV() {
+            const fileInput = document.getElementById('csvFile');
+            const datasetNameInput = document.getElementById('datasetName');
+            const file = fileInput.files[0];
+            const datasetName = datasetNameInput.value || `Dataset ${nextDatasetId}`;
+
+            if (!file) {
+                showCommandStatus('Seleziona un file CSV', true);
+                return;
+            }
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    const csv = e.target.result;
+                    const lines = csv.split('\n');
+                    const newDataPoints = [];
+
+                    let hasHeader = false;
+                    let xIndex = 1;
+                    let yIndex = 2;
+
+                    if (lines.length > 0) {
+                        const firstLine = lines[0].toLowerCase();
+                        if (firstLine.includes('dataset') || firstLine.includes('lunghezza') ||
+                            firstLine.includes('diametro') || firstLine.includes(',')) {
+                            hasHeader = true;
+
+                            const headers = firstLine.split(',').map(h => h.trim().toLowerCase().replace(/\"/g, ''));
+
+                            xIndex = 0;
+                            yIndex = 1;
+
+                            for (let i = 0; i < headers.length; i++) {
+                                if (headers[i].includes('lunghezza') || headers[i].includes('cm')) xIndex = i;
+                                if (headers[i].includes('diametro') || headers[i].includes('mm')) yIndex = i;
+                            }
+
+                            if (headers.includes('dataset') && headers.length >= 3) {
+                                xIndex = 1;
+                                yIndex = 2;
+                            }
+                        }
+                    }
+
+                    const startLine = hasHeader ? 1 : 0;
+                    let validPoints = 0;
+                    let invalidPoints = 0;
+
+                    for (let i = startLine; i < lines.length; i++) {
+                        const line = lines[i].trim();
+                        if (line) {
+                            const parts = line.split(',').map(part => part.trim().replace(/\"/g, ''));
+
+                            if (parts.length >= Math.max(xIndex, yIndex) + 1) {
+                                const x = parseFloat(parts[xIndex]);
+                                const y = parseFloat(parts[yIndex]);
+
+                                if (!isNaN(x) && !isNaN(y)) {
+                                    newDataPoints.push({x: x, y: y});
+                                    validPoints++;
+                                } else {
+                                    invalidPoints++;
+                                }
+                            } else {
+                                invalidPoints++;
+                            }
+                        }
+                    }
+
+                    if (newDataPoints.length === 0) {
+                        showCommandStatus('Nessun dato valido trovato nel file. Controlla il formato.', true);
+                        return;
+                    }
+
+                    newDataPoints.sort((a, b) => a.x - b.x);
+
+                    const newDataset = {
+                        id: nextDatasetId++,
+                        name: datasetName,
+                        color: selectedColor,
+                        data: newDataPoints,
+                        visible: true
+                    };
+
+                    uploadedDatasets.push(newDataset);
+                    addDatasetToChart(newDataset);
+                    updateDatasetList();
+
+                    if (autoScaleEnabled) fitToData();
+                    else chart.update();
+
+                    let statusMsg = `Caricati ${newDataPoints.length} punti dati come "${datasetName}"`;
+                    if (invalidPoints > 0) statusMsg += ` (${invalidPoints} punti ignorati)`;
+                    showCommandStatus(statusMsg);
+
+                    fileInput.value = '';
+                    datasetNameInput.value = '';
+
+                } catch (error) {
+                    console.error('Errore processing CSV:', error);
+                    showCommandStatus('Errore nel processare il file CSV: ' + error.message, true);
+                }
+            };
+
+            reader.onerror = function() {
+                showCommandStatus('Errore nella lettura del file', true);
+            };
+
+            reader.readAsText(file);
+        }
+
+        function addDatasetToChart(dataset) {
+            const newDatasetConfig = {
+                label: dataset.name,
+                data: dataset.data,
+                borderColor: dataset.color,
+                backgroundColor: dataset.color + '20',
+                borderWidth: 2,
+                borderDash: [5, 5],
+                fill: false,
+                pointRadius: 2,
+                pointBackgroundColor: dataset.color,
+                pointBorderColor: '#ffffff',
+                pointBorderWidth: 1,
+                hidden: !dataset.visible
+            };
+
+            chart.data.datasets.push(newDatasetConfig);
+            chart.update();
+        }
+
+        function updateDatasetList() {
+            const datasetList = document.getElementById('datasetList');
+            datasetList.innerHTML = '';
+
+            uploadedDatasets.forEach(dataset => {
+                const datasetItem = document.createElement('div');
+                datasetItem.className = 'dataset-item';
+
+                let maxLengthMeters = 0;
+                if (dataset.data.length > 0) {
+                    const maxLengthCm = Math.max(...dataset.data.map(point => point.x));
+                    maxLengthMeters = (maxLengthCm / 100).toFixed(1);
+                }
+
+                datasetItem.innerHTML = `
+                    <div style="display: flex; align-items: center; flex-grow: 1;">
+                        <div class="dataset-color" style="background-color: ${dataset.color}"></div>
+                        <div class="dataset-name">
+                            ${dataset.name}
+                            (${dataset.data.length} punti, ${maxLengthMeters} m)
+                        </div>
+                    </div>
+                    <div class="dataset-controls">
+                        <button onclick="toggleDataset(${dataset.id})" style="padding: 2px 8px; font-size: 0.8em;">
+                            ${dataset.visible ? 'Nascondi' : 'Mostra'}
+                        </button>
+                        <button onclick="removeDataset(${dataset.id})" style="padding: 2px 8px; font-size: 0.8em; background: #dc3545;">
+                            Rimuovi
+                        </button>
+                    </div>
+                `;
+
+                datasetList.appendChild(datasetItem);
+            });
+        }
+
+        function toggleDataset(datasetId) {
+            const dataset = uploadedDatasets.find(ds => ds.id === datasetId);
+            if (dataset) {
+                dataset.visible = !dataset.visible;
+
+                const chartDataset = chart.data.datasets.find(ds => ds.label === dataset.name);
+                if (chartDataset) chartDataset.hidden = !dataset.visible;
+
+                chart.update();
+                updateDatasetList();
+            }
+        }
+
+        function removeDataset(datasetId) {
+            const datasetIndex = uploadedDatasets.findIndex(ds => ds.id === datasetId);
+            if (datasetIndex !== -1) {
+                const dataset = uploadedDatasets[datasetIndex];
+
+                const chartDatasetIndex = chart.data.datasets.findIndex(ds => ds.label === dataset.name);
+                if (chartDatasetIndex !== -1) chart.data.datasets.splice(chartDatasetIndex, 1);
+
+                uploadedDatasets.splice(datasetIndex, 1);
+                chart.update();
+                updateDatasetList();
+                showCommandStatus(`Dataset "${dataset.name}" rimosso`);
+            }
+        }
+
+        function clearAllDatasets() {
+            if (uploadedDatasets.length === 0) {
+                showCommandStatus('Nessun dataset da rimuovere', true);
+                return;
+            }
+
+            if (confirm('Sei sicuro di voler rimuovere tutti i dataset caricati?')) {
+                chart.data.datasets = [chart.data.datasets[0]];
+                uploadedDatasets = [];
+                chart.update();
+                updateDatasetList();
+                showCommandStatus('Tutti i dataset rimossi');
+            }
+        }
+
+        async function loadHistoryFromExport() {
+        try {
+            const r = await fetch('/export', { cache: 'no-store' });
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            const csv = await r.text();
+
+            const lines = csv.trim().split('\n');
+            // header: Dataset,Lunghezza cm,Diametro mm,Display mm
+            dataPoints = [];
+            ensureZeroPoint();
+
+            for (let i = 1; i < lines.length; i++) {
+            const line = lines[i].trim();
+            if (!line) continue;
+
+            const parts = line.split(',');
+            if (parts.length < 3) continue;
+
+            const x = parseFloat(parts[1]); // Lunghezza cm
+            const y = parseFloat(parts[2]); // Diametro mm (compensato)
+            if (!isNaN(x) && !isNaN(y)) dataPoints.push({ x: x, y: y });
+            }
+
+            dataPoints.sort((a, b) => a.x - b.x);
+            chart.data.datasets[0].data = dataPoints;
+
+            // aggiorna contatore punti (coerente col grafico)
+            document.getElementById('dataPointsCount').textContent = dataPoints.length;
+
+            if (autoScaleEnabled) fitToData();
+            else chart.update();
+
+            showCommandStatus('Storico caricato: ' + (dataPoints.length - 1) + ' punti', false);
+        } catch (e) {
+            console.error('loadHistoryFromExport error', e);
+            showCommandStatus('Errore caricamento storico (/export): ' + e.message, true);
+        }
+        }
+
+
 
         function connectWebSocket() {
             ws = new WebSocket('ws://' + location.hostname + ':81/');
 
             ws.onopen = function() {
+                console.log('WebSocket connesso');
                 document.getElementById('connectionStatus').innerHTML = 'Connesso';
                 document.getElementById('connectionStatus').style.color = '#28a745';
                 sendCommand('getparams');
@@ -451,6 +891,7 @@ void setup() {
             };
 
             ws.onclose = function() {
+                console.log('WebSocket disconnesso');
                 document.getElementById('connectionStatus').innerHTML = 'Disconnesso';
                 document.getElementById('connectionStatus').style.color = '#dc3545';
                 setTimeout(connectWebSocket, 3000);
@@ -473,6 +914,10 @@ void setup() {
                     console.error('Errore parsing JSON:', e);
                 }
             };
+
+            ws.onerror = function(error) {
+                console.error('WebSocket error:', error);
+            };
         }
 
         function updateParamsDisplay(displayZero, offset) {
@@ -490,6 +935,7 @@ void setup() {
             document.getElementById('currentDisplay').textContent = msg.rawDisplay.toFixed(2) + ' mm';
             document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString();
             document.getElementById('dataPointsCount').textContent = msg.totalPoints || dataPoints.length;
+
             addDataPoint(msg.cm, msg.diameter);
         }
 
@@ -500,6 +946,7 @@ void setup() {
 
         function addDataPoint(x, y) {
             const point = {x: x, y: y};
+
             ensureZeroPoint();
 
             const existingIndex = dataPoints.findIndex(p => p.x === x);
@@ -517,21 +964,34 @@ void setup() {
 
         function zoomIn() { chart.zoom(1.1); }
         function zoomOut() { chart.zoom(0.9); }
-        function resetZoom() { chart.resetZoom(); if (autoScaleEnabled) fitToData(); }
+        function resetZoom() {
+            chart.resetZoom();
+            if (autoScaleEnabled) fitToData();
+        }
 
         function fitToData() {
-            if (dataPoints.length === 0) return;
-            const xValues = dataPoints.map(p => p.x);
-            const yValues = dataPoints.map(p => p.y);
+            if (dataPoints.length === 0 && uploadedDatasets.length === 0) return;
 
-            let minX = Math.min(...xValues), maxX = Math.max(...xValues);
-            let minY = Math.min(...yValues), maxY = Math.max(...yValues);
+            const allChartData = [...dataPoints];
+            uploadedDatasets.forEach(dataset => { if (dataset.visible) allChartData.push(...dataset.data); });
+            if (allChartData.length === 0) return;
+
+            const xValues = allChartData.map(p => p.x);
+            const yValues = allChartData.map(p => p.y);
+
+            let minX = Math.min(...xValues);
+            let maxX = Math.max(...xValues);
+            let minY = Math.min(...yValues);
+            let maxY = Math.max(...yValues);
 
             const xRange = maxX - minX;
             const yRange = maxY - minY;
 
-            if (xRange === 0) { minX -= 10; maxX += 10; } else { minX -= xRange * 0.05; maxX += xRange * 0.05; }
-            if (yRange === 0) { minY -= 0.1; maxY += 0.1; } else { minY -= yRange * 0.1; maxY += yRange * 0.1; }
+            if (xRange === 0) { minX -= 10; maxX += 10; }
+            else { minX -= xRange * 0.05; maxX += xRange * 0.05; }
+
+            if (yRange === 0) { minY -= 0.1; maxY += 0.1; }
+            else { minY -= yRange * 0.1; maxY += yRange * 0.1; }
 
             chart.options.scales.x.min = minX;
             chart.options.scales.x.max = maxX;
@@ -546,12 +1006,13 @@ void setup() {
             ensureZeroPoint();
             if (autoScaleEnabled) fitToData();
             else chart.update();
-            document.getElementById('dataPointsCount').textContent = '0';
+            document.getElementById('dataPointsCount').textContent = 0;
             showCommandStatus('Grafico resettato');
         }
 
         function exportAllData() {
-            showCommandStatus('Usa il tasto Export dal firmware (endpoint /export) o la funzione confronto CSV');
+            // scarico dal firmware (endpoint /export) con un link semplice
+            window.location.href = '/export';
         }
 
         function toggleAutoScale() {
@@ -566,6 +1027,15 @@ void setup() {
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(command);
                 showCommandStatus('Comando inviato: ' + command);
+
+                if (command === 'reset') {
+                    dataPoints = [];
+                    chart.data.datasets[0].data = dataPoints;
+                    ensureZeroPoint();
+                    if (autoScaleEnabled) fitToData();
+                    else chart.update();
+                    document.getElementById('dataPointsCount').textContent = 0;
+                }
             } else {
                 showCommandStatus('Errore: WebSocket non connesso', true);
             }
@@ -588,30 +1058,34 @@ void setup() {
             setTimeout(() => { statusElement.textContent = ''; }, 3000);
         }
 
-        document.addEventListener('DOMContentLoaded', function() {
-            initializeChart();
-            connectWebSocket();
-            document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString();
-        });
+document.addEventListener('DOMContentLoaded', async function () {
+  initializeChart();
+  await loadHistoryFromExport();  // <-- carica storico prima del WS
+  connectWebSocket();
+  document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString();
+});
+
     </script>
 </body>
 </html>
 )rawliteral";
+
     server.send(200, "text/html", html);
   });
 
   server.on("/export", HTTP_GET, []() {
-    String csv = "Dataset,Lunghezza (cm),Diametro (mm),Display (mm)\n";
-
+    String csv = "Dataset,Lunghezza cm,Diametro mm,Display mm\n";
     DataPoint* current = firstDataPoint;
     while (current != nullptr) {
-      csv += "\"Live\"," + String(current->cm) + "," + String(current->diameter, 3) + "," + String(current->rawDisplay, 3) + "\n";
+      csv += "Live," + String(current->cm) + "," + String(current->diameter, 3) + "," + String(current->rawDisplay, 3) + "\n";
       current = current->next;
     }
 
+    server.sendHeader("Content-Disposition", "attachment; filename=diametrolineacompleto.csv");
+    server.sendHeader("Cache-Control", "no-store");
     server.send(200, "text/csv", csv);
-    server.sendHeader("Content-Disposition", "attachment; filename=diametro_linea_completo.csv");
   });
+
 
   server.begin();
 
@@ -634,9 +1108,6 @@ void setup() {
 
   Serial.println("Sistema pronto - CALIBRO FISSO");
   Serial.println("cm,diametro_compensato,display_calibro");
-
-  // chiedo subito stato motore (manuale: non avvio nulla)
-  SerialMotor.println("STATUS?");
 }
 
 // -----------------------------
@@ -668,31 +1139,15 @@ float readCaliperDisplay() {
   readCaliper();
   return lineDiameter;
 }
-
 // -----------------------------
 void loop() {
   server.handleClient();
   webSocket.loop();
 
-  // RX stato motore via UART -> invio al browser
-  if (SerialMotor.available()) {
-    String line = SerialMotor.readStringUntil('\n');
-    line.trim();
-
-    if (line.startsWith("STATUS:")) {
-      // STATUS:<MODE>:<DIR>
-      int p1 = line.indexOf(':');           // dopo STATUS
-      int p2 = line.indexOf(':', p1 + 1);   // separatore mode/dir
-      if (p2 > 0) {
-        motorMode = line.substring(p1 + 1, p2);
-        motorDir  = line.substring(p2 + 1);
-        motorLastSeenMs = millis();
-
-        String json = "{\"type\":\"motor\",\"mode\":\"" + motorMode + "\",\"dir\":\"" + motorDir + "\"}";
-        webSocket.broadcastTXT(json);
-      }
-    }
-  }
+  // UART motore robusta
+  motorPumpRx();
+  motorPollIfNeeded();
+  motorPumpTx();
 
   calculateSpeed();
 
@@ -702,28 +1157,30 @@ void loop() {
   if (currentCm != lastCm && currentCm >= 0) {
     lastCm = currentCm;
 
+    // Legge valore display calibro
     float displayValue = readCaliperDisplay();
 
+    // EMA
     if (!filterInitialized) {
       smoothedDiameter = displayValue;
       filterInitialized = true;
     } else {
       smoothedDiameter = (ALPHA * displayValue) + ((1.0 - ALPHA) * smoothedDiameter);
     }
-
     displayValue = smoothedDiameter;
 
+    // Diametro compensato: display - zeroDisplay - offset
     float compensatedDiameter = (displayValue - displayZeroValue) - caliperZeroOffset;
     compensatedDiameter = round(compensatedDiameter * 1000.0) / 1000.0;
 
+    // Salva punto
     addDataPoint(currentCm, compensatedDiameter, displayValue);
 
-    String json = "{\"cm\":" + String(currentCm) +
-                  ",\"diameter\":" + String(compensatedDiameter, 2) +
-                  ",\"rawDisplay\":" + String(displayValue, 2) +
-                  ",\"totalPoints\":" + String(getTotalDataPoints()) + "}";
+    // Push via WS
+    String json = "{\"cm\":" + String(currentCm) + ",\"diameter\":" + String(compensatedDiameter, 2) + ",\"rawDisplay\":" + String(displayValue, 2) + ",\"totalPoints\":" + String(getTotalDataPoints()) + "}";
     webSocket.broadcastTXT(json);
 
+    // Serial debug
     Serial.print(currentCm);
     Serial.print(",");
     Serial.print(compensatedDiameter, 2);
@@ -731,6 +1188,7 @@ void loop() {
     Serial.println(displayValue, 2);
   }
 
+  // Comandi da seriale USB (opzionale)
   if (Serial.available()) {
     String cmd = Serial.readStringUntil('\n');
     cmd.trim();
@@ -739,7 +1197,7 @@ void loop() {
 }
 
 // -----------------------------
-// LETTURA CALIBRO (INVARIATA)
+// LETTURA CALIBRO
 // -----------------------------
 float readCaliperAverage(int samples) {
   float sum = 0;
@@ -773,10 +1231,10 @@ void decodeCaliperReadings() {
 }
 
 // -----------------------------
-// COMANDI SERIALI + MOTORE
+// COMANDI SERIALI / WEBSOCKET
 // -----------------------------
 void handleCommand(String cmd) {
-  // ---- COMANDI MOTORE via UART (manuali via web) ----
+  // ---- COMANDI MOTORE via UART (manuale da UI) ----
   // motor scan | motor stop | motor fast_s | motor fast_o | motor status
   if (cmd.startsWith("motor")) {
     String arg = cmd;
@@ -784,22 +1242,22 @@ void handleCommand(String cmd) {
     arg.trim();
     arg.toLowerCase();
 
-    if (arg == "scan") SerialMotor.println("SCAN");
-    else if (arg == "stop") SerialMotor.println("STOP");
-    else if (arg == "fast_s") SerialMotor.println("FAST_S");
-    else if (arg == "fast_o") SerialMotor.println("FAST_O");
-    else SerialMotor.println("STATUS?");
+    if (arg == "scan") motorQueueTx("SCAN");
+    else if (arg == "stop") motorQueueTx("STOP");
+    else if (arg == "fast_s") motorQueueTx("FAST_S");
+    else if (arg == "fast_o") motorQueueTx("FAST_O");
+    else motorQueueTx("STATUS?");
 
     return;
   }
 
   if (cmd == "help") {
     Serial.println("Comandi disponibili:");
-    Serial.println("  reset               - Azzera la lunghezza (encoder) e dati");
+    Serial.println("  reset               - Azzera la lunghezza encoder e dati");
     Serial.println("  setoffset <val>     - Imposta offset di compensazione");
     Serial.println("  setdisplayzero      - Imposta display corrente come zero riferimento");
     Serial.println("  readraw             - Mostra lettura grezza del calibro (display)");
-    Serial.println("  resetoffset         - Azzera offset (a 0)");
+    Serial.println("  resetoffset         - Azzera offset a 0");
     Serial.println("  getparams           - Mostra parametri correnti");
     Serial.println("  debugdata           - Mostra statistiche dati");
     Serial.println("  resetwifi           - Reset WiFi");
@@ -826,7 +1284,7 @@ void handleCommand(String cmd) {
     encoderValue = 0;
     lastCm = -1;
     clearAllData();
-    Serial.println("Lunghezza azzerata e dati resetati.");
+    Serial.println("Lunghezza azzerata e dati resettati.");
     return;
   }
 
