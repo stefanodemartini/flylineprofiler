@@ -838,44 +838,55 @@ void setup() {
             }
         }
 
-        async function loadHistoryFromExport() {
-        try {
-            const r = await fetch('/export', { cache: 'no-store' });
-            if (!r.ok) throw new Error('HTTP ' + r.status);
-            const csv = await r.text();
+async function loadHistoryFromExport() {
+  try {
+    const r = await fetch('/export', { cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const csv = await r.text();
 
-            const lines = csv.trim().split('\n');
-            // header: Dataset,Lunghezza cm,Diametro mm,Display mm
-            dataPoints = [];
-            ensureZeroPoint();
+    const lines = csv.trim().split('\n');
 
-            for (let i = 1; i < lines.length; i++) {
-            const line = lines[i].trim();
-            if (!line) continue;
+    dataPoints = [];
+    ensureZeroPoint();
 
-            const parts = line.split(',');
-            if (parts.length < 3) continue;
+    if (lines.length === 0) return;
 
-            const x = parseFloat(parts[1]); // Lunghezza cm
-            const y = parseFloat(parts[2]); // Diametro mm (compensato)
-            if (!isNaN(x) && !isNaN(y)) dataPoints.push({ x: x, y: y });
-            }
+    // se prima riga contiene testo (header), la salto
+    const first = (lines[0] || '').trim().toLowerCase();
+    const hasHeader = first.includes('lunghezza') || first.includes('diametro') || first.includes('dataset');
+    const start = hasHeader ? 1 : 0;
 
-            dataPoints.sort((a, b) => a.x - b.x);
-            chart.data.datasets[0].data = dataPoints;
+    for (let i = start; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
 
-            // aggiorna contatore punti (coerente col grafico)
-            document.getElementById('dataPointsCount').textContent = dataPoints.length;
+      const parts = line.split(',').map(p => p.trim());
+      if (parts.length < 2) continue;
 
-            if (autoScaleEnabled) fitToData();
-            else chart.update();
+      let xStr = (parts.length >= 3 ? parts[1] : parts[0]);
+      let yStr = (parts.length >= 3 ? parts[2] : parts[1]);
 
-            showCommandStatus('Storico caricato: ' + (dataPoints.length - 1) + ' punti', false);
-        } catch (e) {
-            console.error('loadHistoryFromExport error', e);
-            showCommandStatus('Errore caricamento storico (/export): ' + e.message, true);
-        }
-        }
+      const x = parseFloat(xStr.replace(',', '.'));
+      const y = parseFloat(yStr.replace(',', '.'));
+
+      if (!isNaN(x) && !isNaN(y)) dataPoints.push({ x, y });
+    }
+
+    dataPoints.sort((a, b) => a.x - b.x);
+    chart.data.datasets[0].data = dataPoints;
+
+    document.getElementById('dataPointsCount').textContent = dataPoints.length;
+
+    if (autoScaleEnabled) fitToData();
+    else chart.update();
+
+    showCommandStatus('Storico caricato: ' + (dataPoints.length - 1) + ' punti', false);
+  } catch (e) {
+    console.error('loadHistoryFromExport error', e);
+    showCommandStatus('Errore caricamento storico (/export): ' + e.message, true);
+  }
+}
+
 
 
 
@@ -1073,29 +1084,26 @@ document.addEventListener('DOMContentLoaded', async function () {
     server.send(200, "text/html", html);
   });
 
-server.on("/export", HTTP_GET, []() {
-  WiFiClient client = server.client();
+  server.on("/export", HTTP_GET, []() {
+    server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+    server.sendHeader("Content-Disposition", "attachment; filename=diametrolinea.csv");
+    server.sendHeader("Cache-Control", "no-store");
+    server.send(200, "text/csv", "");
 
-  server.setContentLength(CONTENT_LENGTH_UNKNOWN);
-  server.sendHeader("Content-Disposition", "attachment; filename=diametrolineacompleto.csv");
-  server.sendHeader("Cache-Control", "no-store");
-  server.send(200, "text/csv", "");   // apre la risposta
+    // Header: solo 2 colonne
+    server.sendContent("Lunghezza cm,Diametro mm\r\n");
 
-  // Header CSV (uguale a prima)
-  client.print("Dataset,Lunghezza cm,Diametro mm,Display mm\r\n");
+    char line[64];
+    int n = 0;
+    for (DataPoint* cur = firstDataPoint; cur != nullptr; cur = cur->next) {
+      snprintf(line, sizeof(line), "%d,%.3f\r\n", cur->cm, cur->diameter);
+      server.sendContent(line);
 
-  // Dati: streaming riga-per-riga (niente String csv gigante)
-  for (DataPoint* current = firstDataPoint; current != nullptr; current = current->next) {
-    client.print("Live,");
-    client.print(current->cm);
-    client.print(",");
-    client.print(current->diameter, 3);
-    client.print(",");
-    client.print(current->rawDisplay, 3);
-    client.print("\r\n");
-    delay(0); // lascia respirare WiFi/WD
-  }
-});
+      if ((++n % 50) == 0) delay(1);
+      else delay(0);
+    }
+  });
+
 
   server.begin();
 
