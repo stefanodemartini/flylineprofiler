@@ -5,8 +5,8 @@
 #include <WiFiManager.h>  // https://github.com/tzapu/WiFiManager
 #include <HardwareSerial.h>
 
-#define FIRMWARE_VERSION "0.2.0"
-#define FIRMWARE_DATE "2026-02-20"
+#define FIRMWARE_VERSION "0.2.1"
+#define FIRMWARE_DATE "2026-02-27"
 #define FIRMWARE_FEATURES "WiFi Manager + EMA + 0.01mm + UART Motor"
 
 // -----------------------------
@@ -1073,19 +1073,29 @@ document.addEventListener('DOMContentLoaded', async function () {
     server.send(200, "text/html", html);
   });
 
-  server.on("/export", HTTP_GET, []() {
-    String csv = "Dataset,Lunghezza cm,Diametro mm,Display mm\n";
-    DataPoint* current = firstDataPoint;
-    while (current != nullptr) {
-      csv += "Live," + String(current->cm) + "," + String(current->diameter, 3) + "," + String(current->rawDisplay, 3) + "\n";
-      current = current->next;
-    }
+server.on("/export", HTTP_GET, []() {
+  WiFiClient client = server.client();
 
-    server.sendHeader("Content-Disposition", "attachment; filename=diametrolineacompleto.csv");
-    server.sendHeader("Cache-Control", "no-store");
-    server.send(200, "text/csv", csv);
-  });
+  server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+  server.sendHeader("Content-Disposition", "attachment; filename=diametrolineacompleto.csv");
+  server.sendHeader("Cache-Control", "no-store");
+  server.send(200, "text/csv", "");   // apre la risposta
 
+  // Header CSV (uguale a prima)
+  client.print("Dataset,Lunghezza cm,Diametro mm,Display mm\r\n");
+
+  // Dati: streaming riga-per-riga (niente String csv gigante)
+  for (DataPoint* current = firstDataPoint; current != nullptr; current = current->next) {
+    client.print("Live,");
+    client.print(current->cm);
+    client.print(",");
+    client.print(current->diameter, 3);
+    client.print(",");
+    client.print(current->rawDisplay, 3);
+    client.print("\r\n");
+    delay(0); // lascia respirare WiFi/WD
+  }
+});
 
   server.begin();
 
