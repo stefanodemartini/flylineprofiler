@@ -5,9 +5,12 @@
 #include <WiFiManager.h>  // https://github.com/tzapu/WiFiManager
 #include <HardwareSerial.h>
 
-#define FIRMWARE_VERSION "0.2.1"
-#define FIRMWARE_DATE "2026-02-27"
-#define FIRMWARE_FEATURES "WiFi Manager + EMA + 0.01mm + UART Motor"
+// ===============================
+// FW
+// ===============================
+#define FIRMWARE_VERSION "0.2.2"
+#define FIRMWARE_DATE "2026-03-04"
+#define FIRMWARE_FEATURES "WiFi Manager + EMA + 0.01mm + UART Motor + Scan timer (starts on encoder move, no reset on WS reconnect)"  // [file:1]
 
 // -----------------------------
 // Pin Encoder
@@ -128,19 +131,16 @@ void addDataPoint(int cm, float diameter, float rawDisplay) {
     firstDataPoint = newPoint;
     lastDataPoint = newPoint;
   } else {
-    // Verifica se il punto già esiste (per aggiornamento)
     DataPoint* current = firstDataPoint;
     DataPoint* prev = nullptr;
     while (current != nullptr) {
       if (current->cm == cm) {
-        // Aggiorna il punto esistente
         current->diameter = diameter;
         current->rawDisplay = rawDisplay;
         delete newPoint;
         return;
       }
       if (current->cm > cm) {
-        // Inserisci in ordine
         newPoint->next = current;
         if (prev == nullptr) firstDataPoint = newPoint;
         else prev->next = newPoint;
@@ -151,7 +151,6 @@ void addDataPoint(int cm, float diameter, float rawDisplay) {
       current = current->next;
     }
 
-    // Inserisci alla fine
     lastDataPoint->next = newPoint;
     lastDataPoint = newPoint;
   }
@@ -168,6 +167,7 @@ void clearAllData() {
   firstDataPoint = nullptr;
   lastDataPoint = nullptr;
   totalDataPoints = 0;
+
   filterInitialized = false;
   smoothedDiameter = 0.0;
 }
@@ -247,7 +247,6 @@ void motorPollIfNeeded() {
     motorQueueTx("STATUS?");
     lastMotorPollMs = now;
 
-    // UI: segnala offline
     String json = "{\"type\":\"motor\",\"mode\":\"OFFLINE\",\"dir\":\"--\"}";
     webSocket.broadcastTXT(json);
   }
@@ -352,6 +351,7 @@ void setup() {
         .color-option.selected { border-color: #000; }
         .info-badge { display: inline-block; padding: 2px 8px; background: #007bff; color: white; border-radius: 12px; font-size: 0.85em; margin-left: 10px; }
         .display-info { background: #e8f4f8; padding: 10px; border-radius: 5px; margin: 10px 0; }
+        .scan-timer { font-family: monospace; font-weight: bold; }
     </style>
 </head>
 <body>
@@ -396,7 +396,8 @@ void setup() {
             <strong>Configurazione:</strong> Calibro fisso (punto di misura 20mm dietro encoder) |
             <strong>Zero Display:</strong> <span id="displayZeroValue">0.00</span> mm |
             <strong>Offset:</strong> <span id="currentOffset">0.00</span> mm |
-            <strong>Motore:</strong> <span id="motorState">--</span>
+            <strong>Motore:</strong> <span id="motorState">--</span> |
+            <strong>Timer:</strong> <span class="scan-timer" id="scanTimer">00:00</span>
         </div>
 
         <div class="chart-wrapper">
@@ -416,8 +417,8 @@ void setup() {
         <div class="controls">
             <div class="control-group">
                 <h3>Controlli Motore Trascinamento</h3>
-                <button class="success" onclick="sendCommand('motor scan')">START SCAN</button>
-                <button class="danger" onclick="sendCommand('motor stop')">STOP</button>
+                <button class="success" onclick="startScan()">START SCAN</button>
+                <button class="danger" onclick="stopScan()">STOP</button>
                 <button class="warning" onclick="sendCommand('motor fast_s')">FAST stessa dir</button>
                 <button class="warning" onclick="sendCommand('motor fast_o')">FAST opposta dir</button>
                 <button onclick="sendCommand('motor status')">Aggiorna Stato</button>
@@ -431,16 +432,12 @@ void setup() {
                         <br>
                         <input type="text" id="datasetName" placeholder="Nome dataset" style="padding: 8px; margin: 5px; border: 1px solid #ddd; border-radius: 4px; width: 200px;">
 
-                        <div class="color-palette" id="colorPalette">
-                            <!-- I colori verranno generati dinamicamente -->
-                        </div>
+                        <div class="color-palette" id="colorPalette"></div>
 
                         <button onclick="uploadCSV()" class="success">Carica CSV</button>
                         <button onclick="clearAllDatasets()" class="danger">Rimuovi Tutti</button>
 
-                        <div class="dataset-list" id="datasetList">
-                            <!-- Lista dataset caricati -->
-                        </div>
+                        <div class="dataset-list" id="datasetList"></div>
 
                         <div class="upload-info">
                             Formati supportati:<br>
@@ -510,6 +507,7 @@ void setup() {
         let autoScaleEnabled = true;
         let ws;
         let zeroPoint = {x: 0, y: 0};
+
         let currentDisplayZero = 0.0;
         let currentOffset = 0.0;
 
@@ -522,8 +520,51 @@ void setup() {
         ];
         let selectedColor = colorPalette[0];
 
+        // ===== Timer scan robusto v2 =====
+            let scanRunning = false;
+            let scanStartMs = 0;
+            let scanInterval = null;
+
+            function formatMMSS(totalSeconds) {
+                const m = Math.floor(totalSeconds / 60);
+                const s = totalSeconds % 60;
+                return String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0');
+            }
+
+            function startTimerIfNeeded() {
+                if (scanRunning) return;
+                scanRunning = true;
+                scanStartMs = Date.now();
+                document.getElementById('scanTimer').textContent = "00:00";
+                if (scanInterval) clearInterval(scanInterval);
+                scanInterval = setInterval(() => {
+                    if (!scanRunning) return;
+                    const elapsed = Math.floor((Date.now() - scanStartMs) / 1000);
+                    document.getElementById('scanTimer').textContent = formatMMSS(elapsed);
+                }, 500);  // aggiorno ogni 500ms per maggiore reattività
+            }
+
+            function stopTimer() {
+                scanRunning = false;
+                if (scanInterval) { clearInterval(scanInterval); scanInterval = null; }
+            }
+
+            function startScan() {
+                // Parte subito al click, senza aspettare l'encoder
+                stopTimer();
+                document.getElementById('scanTimer').textContent = "00:00";
+                startTimerIfNeeded();
+                sendCommand('motor scan');
+            }
+
+            function stopScan() {
+                sendCommand('motor stop');
+                stopTimer();
+            }
+
+
         const OPTIMAL_SPEED_MIN = 0.5;
-        const OPTIMAL_SPEED_MAX = 2.0;
+        const OPTIMAL_SPEED_MAX = 2.5;
 
         function initializeChart() {
             const ctx = document.getElementById('lineChart').getContext('2d');
@@ -539,13 +580,15 @@ void setup() {
                             data: dataPoints,
                             borderColor: '#007bff',
                             backgroundColor: 'rgba(0, 123, 255, 0.1)',
-                            borderWidth: 2,
+                            borderWidth: 3,
                             fill: false,
-                            pointRadius: 3,
+                            pointRadius: 1,
+                            pointHoverRadius: 4,
                             pointBackgroundColor: '#007bff',
-                            pointBorderColor: '#ffffff',
-                            pointBorderWidth: 1
+                            pointBorderColor: '#007bff',
+                            pointBorderWidth: 0
                         }
+
                     ]
                 },
                 options: {
@@ -627,16 +670,15 @@ void setup() {
                 speedElement.className = 'status-value speed-optimal';
             }
         }
+
+        // ====== CSV upload / dataset handling (INVARIATO dal tuo sketch) ======
         function uploadCSV() {
             const fileInput = document.getElementById('csvFile');
             const datasetNameInput = document.getElementById('datasetName');
             const file = fileInput.files[0];
             const datasetName = datasetNameInput.value || `Dataset ${nextDatasetId}`;
 
-            if (!file) {
-                showCommandStatus('Seleziona un file CSV', true);
-                return;
-            }
+            if (!file) { showCommandStatus('Seleziona un file CSV', true); return; }
 
             const reader = new FileReader();
             reader.onload = function(e) {
@@ -673,7 +715,6 @@ void setup() {
                     }
 
                     const startLine = hasHeader ? 1 : 0;
-                    let validPoints = 0;
                     let invalidPoints = 0;
 
                     for (let i = startLine; i < lines.length; i++) {
@@ -685,15 +726,9 @@ void setup() {
                                 const x = parseFloat(parts[xIndex]);
                                 const y = parseFloat(parts[yIndex]);
 
-                                if (!isNaN(x) && !isNaN(y)) {
-                                    newDataPoints.push({x: x, y: y});
-                                    validPoints++;
-                                } else {
-                                    invalidPoints++;
-                                }
-                            } else {
-                                invalidPoints++;
-                            }
+                                if (!isNaN(x) && !isNaN(y)) newDataPoints.push({x: x, y: y});
+                                else invalidPoints++;
+                            } else invalidPoints++;
                         }
                     }
 
@@ -732,10 +767,7 @@ void setup() {
                 }
             };
 
-            reader.onerror = function() {
-                showCommandStatus('Errore nella lettura del file', true);
-            };
-
+            reader.onerror = function() { showCommandStatus('Errore nella lettura del file', true); };
             reader.readAsText(file);
         }
 
@@ -744,16 +776,18 @@ void setup() {
                 label: dataset.name,
                 data: dataset.data,
                 borderColor: dataset.color,
-                backgroundColor: dataset.color + '20',
-                borderWidth: 2,
-                borderDash: [5, 5],
+                backgroundColor: dataset.color + '1A',
+                borderWidth: 3,
+                borderDash: [],
                 fill: false,
-                pointRadius: 2,
+                pointRadius: 1,
+                pointHoverRadius: 4,
                 pointBackgroundColor: dataset.color,
-                pointBorderColor: '#ffffff',
-                pointBorderWidth: 1,
+                pointBorderColor: dataset.color,
+                pointBorderWidth: 0,
                 hidden: !dataset.visible
             };
+
 
             chart.data.datasets.push(newDatasetConfig);
             chart.update();
@@ -824,10 +858,7 @@ void setup() {
         }
 
         function clearAllDatasets() {
-            if (uploadedDatasets.length === 0) {
-                showCommandStatus('Nessun dataset da rimuovere', true);
-                return;
-            }
+            if (uploadedDatasets.length === 0) { showCommandStatus('Nessun dataset da rimuovere', true); return; }
 
             if (confirm('Sei sicuro di voler rimuovere tutti i dataset caricati?')) {
                 chart.data.datasets = [chart.data.datasets[0]];
@@ -838,63 +869,57 @@ void setup() {
             }
         }
 
-async function loadHistoryFromExport() {
-  try {
-    const r = await fetch('/export', { cache: 'no-store' });
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    const csv = await r.text();
+        async function loadHistoryFromExport() {
+          try {
+            const r = await fetch('/export', { cache: 'no-store' });
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            const csv = await r.text();
 
-    const lines = csv.trim().split('\n');
+            const lines = csv.trim().split('\n');
+            dataPoints = [];
+            ensureZeroPoint();
 
-    dataPoints = [];
-    ensureZeroPoint();
+            if (lines.length === 0) return;
 
-    if (lines.length === 0) return;
+            const first = (lines[0] || '').trim().toLowerCase();
+            const hasHeader = first.includes('lunghezza') || first.includes('diametro') || first.includes('dataset');
+            const start = hasHeader ? 1 : 0;
 
-    // se prima riga contiene testo (header), la salto
-    const first = (lines[0] || '').trim().toLowerCase();
-    const hasHeader = first.includes('lunghezza') || first.includes('diametro') || first.includes('dataset');
-    const start = hasHeader ? 1 : 0;
+            for (let i = start; i < lines.length; i++) {
+              const line = lines[i].trim();
+              if (!line) continue;
 
-    for (let i = start; i < lines.length; i++) {
-      const line = lines[i].trim();
-      if (!line) continue;
+              const parts = line.split(',').map(p => p.trim());
+              if (parts.length < 2) continue;
 
-      const parts = line.split(',').map(p => p.trim());
-      if (parts.length < 2) continue;
+              let xStr = (parts.length >= 3 ? parts[1] : parts[0]);
+              let yStr = (parts.length >= 3 ? parts[2] : parts[1]);
 
-      let xStr = (parts.length >= 3 ? parts[1] : parts[0]);
-      let yStr = (parts.length >= 3 ? parts[2] : parts[1]);
+              const x = parseFloat(xStr.replace(',', '.'));
+              const y = parseFloat(yStr.replace(',', '.'));
 
-      const x = parseFloat(xStr.replace(',', '.'));
-      const y = parseFloat(yStr.replace(',', '.'));
+              if (!isNaN(x) && !isNaN(y)) dataPoints.push({ x, y });
+            }
 
-      if (!isNaN(x) && !isNaN(y)) dataPoints.push({ x, y });
-    }
+            dataPoints.sort((a, b) => a.x - b.x);
+            chart.data.datasets[0].data = dataPoints;
 
-    dataPoints.sort((a, b) => a.x - b.x);
-    chart.data.datasets[0].data = dataPoints;
+            document.getElementById('dataPointsCount').textContent = dataPoints.length;
 
-    document.getElementById('dataPointsCount').textContent = dataPoints.length;
+            if (autoScaleEnabled) fitToData();
+            else chart.update();
 
-    if (autoScaleEnabled) fitToData();
-    else chart.update();
-
-    showCommandStatus('Storico caricato: ' + (dataPoints.length - 1) + ' punti', false);
-  } catch (e) {
-    console.error('loadHistoryFromExport error', e);
-    showCommandStatus('Errore caricamento storico (/export): ' + e.message, true);
-  }
-}
-
-
-
+            showCommandStatus('Storico caricato: ' + (dataPoints.length - 1) + ' punti', false);
+          } catch (e) {
+            console.error('loadHistoryFromExport error', e);
+            showCommandStatus('Errore caricamento storico (/export): ' + e.message, true);
+          }
+        }
 
         function connectWebSocket() {
             ws = new WebSocket('ws://' + location.hostname + ':81/');
 
             ws.onopen = function() {
-                console.log('WebSocket connesso');
                 document.getElementById('connectionStatus').innerHTML = 'Connesso';
                 document.getElementById('connectionStatus').style.color = '#28a745';
                 sendCommand('getparams');
@@ -902,33 +927,34 @@ async function loadHistoryFromExport() {
             };
 
             ws.onclose = function() {
-                console.log('WebSocket disconnesso');
                 document.getElementById('connectionStatus').innerHTML = 'Disconnesso';
                 document.getElementById('connectionStatus').style.color = '#dc3545';
+                // FIX: non stoppo/azzero il timer qui (evita reset ogni 3s se WS flappa)
                 setTimeout(connectWebSocket, 3000);
             };
 
-            ws.onmessage = function(event) {
-                try {
-                    const msg = JSON.parse(event.data);
+        ws.onmessage = function(event) {
+            try {
+                const msg = JSON.parse(event.data);
 
-                    if (msg.type === 'params') {
-                        updateParamsDisplay(msg.displayZero, msg.offset);
-                    } else if (msg.type === 'speed') {
-                        updateSpeedDisplay(msg.speed);
-                    } else if (msg.type === 'motor') {
-                        document.getElementById('motorState').textContent = msg.mode + ' ' + msg.dir;
-                    } else if (msg.cm !== undefined) {
-                        updateDisplay(msg);
-                    }
-                } catch(e) {
-                    console.error('Errore parsing JSON:', e);
+                if (msg.type === 'params') {
+                    updateParamsDisplay(msg.displayZero, msg.offset);
+                } else if (msg.type === 'speed') {
+                    updateSpeedDisplay(msg.speed);
+                } else if (msg.type === 'motor') {
+                    document.getElementById('motorState').textContent = msg.mode + ' ' + msg.dir;
+                    // NON stoppiamo il timer qui: solo il tasto STOP o 'reset' lo fermano
+                } else if (msg.cm !== undefined) {
+                    updateDisplay(msg);
                 }
-            };
+            } catch(e) {
+                console.error('Errore parsing JSON:', e);
+            }
+        };
 
             ws.onerror = function(error) {
                 console.error('WebSocket error:', error);
-            };
+            }
         }
 
         function updateParamsDisplay(displayZero, offset) {
@@ -1022,7 +1048,6 @@ async function loadHistoryFromExport() {
         }
 
         function exportAllData() {
-            // scarico dal firmware (endpoint /export) con un link semplice
             window.location.href = '/export';
         }
 
@@ -1046,6 +1071,9 @@ async function loadHistoryFromExport() {
                     if (autoScaleEnabled) fitToData();
                     else chart.update();
                     document.getElementById('dataPointsCount').textContent = 0;
+
+                    stopTimer();
+                    document.getElementById('scanTimer').textContent = "00:00";
                 }
             } else {
                 showCommandStatus('Errore: WebSocket non connesso', true);
@@ -1069,13 +1097,12 @@ async function loadHistoryFromExport() {
             setTimeout(() => { statusElement.textContent = ''; }, 3000);
         }
 
-document.addEventListener('DOMContentLoaded', async function () {
-  initializeChart();
-  await loadHistoryFromExport();  // <-- carica storico prima del WS
-  connectWebSocket();
-  document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString();
-});
-
+        document.addEventListener('DOMContentLoaded', async function () {
+          initializeChart();
+          await loadHistoryFromExport();
+          connectWebSocket();
+          document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString();
+        });
     </script>
 </body>
 </html>
@@ -1096,14 +1123,13 @@ document.addEventListener('DOMContentLoaded', async function () {
     char line[64];
     int n = 0;
     for (DataPoint* cur = firstDataPoint; cur != nullptr; cur = cur->next) {
-      snprintf(line, sizeof(line), "%d,%.3f\r\n", cur->cm, cur->diameter);
+      snprintf(line, sizeof(line), "%d,%.2f\r\n", cur->cm, cur->diameter);
       server.sendContent(line);
 
       if ((++n % 50) == 0) delay(1);
       else delay(0);
     }
   });
-
 
   server.begin();
 
@@ -1157,6 +1183,7 @@ float readCaliperDisplay() {
   readCaliper();
   return lineDiameter;
 }
+
 // -----------------------------
 void loop() {
   server.handleClient();
@@ -1169,7 +1196,7 @@ void loop() {
 
   calculateSpeed();
 
-  // MODIFICA: Sottrai 2 cm per compensare la distanza calibro-encoder
+  // MODIFICA: Sottrai 2 cm per compensare la distanza calibro-encoder (INVARIATO)
   int currentCm = (encoderValue / PULSES_PER_CM) - 2;
 
   if (currentCm != lastCm && currentCm >= 0) {
@@ -1195,7 +1222,10 @@ void loop() {
     addDataPoint(currentCm, compensatedDiameter, displayValue);
 
     // Push via WS
-    String json = "{\"cm\":" + String(currentCm) + ",\"diameter\":" + String(compensatedDiameter, 2) + ",\"rawDisplay\":" + String(displayValue, 2) + ",\"totalPoints\":" + String(getTotalDataPoints()) + "}";
+    String json = "{\"cm\":" + String(currentCm) +
+                  ",\"diameter\":" + String(compensatedDiameter, 2) +
+                  ",\"rawDisplay\":" + String(displayValue, 2) +
+                  ",\"totalPoints\":" + String(getTotalDataPoints()) + "}";
     webSocket.broadcastTXT(json);
 
     // Serial debug
@@ -1293,10 +1323,7 @@ void handleCommand(String cmd) {
     return;
   }
 
-  if (cmd == "setdisplayzero") {
-    setDisplayZero();
-    return;
-  }
+  if (cmd == "setdisplayzero") { setDisplayZero(); return; }
 
   if (cmd == "reset") {
     encoderValue = 0;
