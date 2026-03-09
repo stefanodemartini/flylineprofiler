@@ -8,7 +8,7 @@
 // ===============================
 // FW
 // ===============================
-#define FIRMWARE_VERSION "0.2.4"
+#define FIRMWARE_VERSION "0.2.3"
 #define FIRMWARE_DATE "2026-03-09"
 #define FIRMWARE_FEATURES "WiFi Manager + EMA + 0.01mm + UART Motor + Scan timer + Autostop + RicezioneON/OFF"
 
