@@ -1423,9 +1423,10 @@ float readCaliperAverage(int samples) {
 }
 
 void readCaliper() {
-  // FW-01: add timeouts to prevent infinite spin if caliper is off/disconnected
-  const unsigned long BIT_TIMEOUT_US  = 500;       // max single clock phase (one bit ~160µs)
-  const unsigned long PKT_TIMEOUT_US  = 300000UL;  // max inter-packet HIGH gap (~150ms typical)
+  // FW-01: timeouts prevent infinite spin if caliper is off/disconnected.
+  // 10 ms covers any caliper clock down to 50 Hz; 500 ms covers worst-case inter-packet gap.
+  const unsigned long BIT_TIMEOUT_US = 10000UL;   // 10 ms — one clock half-period max
+  const unsigned long PKT_TIMEOUT_US = 500000UL;  // 500 ms — inter-packet HIGH gap max
   unsigned long t0 = micros();
   while (digitalRead(CALIPER_CLOCK_PIN) == LOW) {
     if (micros() - t0 > BIT_TIMEOUT_US) return;  // stuck LOW → caliper absent
@@ -1439,8 +1440,8 @@ void readCaliper() {
 }
 
 void decodeCaliperReadings() {
-  // FW-01: timeouts on each bit loop prevent hanging if signal is lost mid-frame
-  const unsigned long BIT_TIMEOUT_US = 500;
+  // FW-01: 10 ms per clock phase handles any caliper faster than 50 Hz
+  const unsigned long BIT_TIMEOUT_US = 10000UL;
   long value = 0;
   int sign = 1;
   for (int i = 0; i < 24; i++) {
