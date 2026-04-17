@@ -27,6 +27,7 @@ HardwareSerial SerialMaster(2);
 const uint32_t SCAN_HZ = 1500;
 const uint32_t FAST_HZ = 12000;
 const uint32_t ACCEL = 1500;
+const uint32_t FAST_STOP_DECEL = 24000;  // ~1m stop distance from FAST_HZ (vs 16m at ACCEL)
 const uint32_t MIN_SPEED_HZ = 300;      // Velocità minima in prossimità del target
 const uint32_t DISTANCE_THRESHOLD = 500; // Passi a cui iniziare a ridurre velocità
 
@@ -128,7 +129,12 @@ void startMotion(bool forward, uint32_t speedHz, Mode newMode) {
 
 void stopMotion() {
   if (stepper) {
+    // Use higher deceleration when stopping from FAST modes to avoid 16m+ coast
+    if (mode == FAST_S || mode == FAST_O) {
+      stepper->setAcceleration(FAST_STOP_DECEL);
+    }
     stepper->stopMove();
+    stepper->setAcceleration(ACCEL);  // restore normal accel for next move
   }
   mode = STOPPED;
   posActive = false;
