@@ -60,6 +60,7 @@ const uint32_t MOTOR_FAST_HZ = 12000;
 bool isGoToActive = false;
 float goToTargetCm = 0;
 unsigned long lastGoToStatusCheck = 0;
+bool goToEncoderReached = false;  // set when encoder reaches target; used to send completed:true
 
 struct DataPoint {
   int cm;
@@ -294,8 +295,11 @@ void motorHandleStatusLine(const char* line) {
       // FW-13: broadcast restored scan state
       String scanJson = "{\"type\":\"scan_enabled\",\"value\":" + String(scanEnabled ? "true" : "false") + "}";
       webSocket.broadcastTXT(scanJson);
-      String json = "{\"type\":\"goto_status\",\"active\":false,\"completed\":false,\"reason\":\"stopped\"}";
+      // Use goToEncoderReached so encoder-based stops report completed:true
+      String json = "{\"type\":\"goto_status\",\"active\":false,\"completed\":" +
+                    String(goToEncoderReached ? "true" : "false") + ",\"reason\":\"stopped\"}";
       webSocket.broadcastTXT(json);
+      goToEncoderReached = false;
     }
   }
   
@@ -365,6 +369,14 @@ void goToPosition(float targetCm) {
   // Determina la direzione
   bool direction = (targetCm > currentCm);
   
+  // Sync slave step counter to encoder before sending GOTOPOS.
+  // This ensures slave absolute position matches encoder regardless of
+  // any prior drift, reset, or slippage.
+  noInterrupts();
+  long encSnap0 = encoderValue;
+  interrupts();
+  motorQueueTx("SYNCPOS:" + String(encSnap0));
+
   // FW-07: slave step counter starts at 0 at boot; master's cm = (encoder/30)-2,
   // so to reach master-coordinate X the slave must move to (X+2)*30 steps → send X+2.
   String cmd = "GOTOPOS:" + String(targetCm + 2.0f, 2) + ":" + String(MOTOR_FAST_HZ) + ":" + (direction ? "F" : "B");
@@ -372,6 +384,7 @@ void goToPosition(float targetCm) {
   
   goToTargetCm = targetCm;
   isGoToActive = true;
+  goToEncoderReached = false;
   lastGoToStatusCheck = 0;
   
   Serial.print("GOTOPOS avviato verso ");
@@ -1437,11 +1450,19 @@ void loop() {
     Serial.print(compensatedDiameter, 2);
     Serial.print(",");
     Serial.println(displayValue, 2);
-  } else if (isGoToActive && currentCm != lastCm) {
+  } else if (isGoToActive) {
+    // Encoder-based GOTOPOS tracking — authoritative stop trigger
+    float floatCm = (float)encSnap / PULSES_PER_CM - 2.0f;
+    if (!goToEncoderReached && abs(floatCm - goToTargetCm) <= 0.5f) {
+      goToEncoderReached = true;
+      motorQueueTx("STOP");  // encoder says we're there — stop the motor
+    }
     // Aggiorna solo la posizione durante GOTOPOS
-    lastCm = currentCm;
-    String json = "{\"cm\":" + String(currentCm) + "}";
-    webSocket.broadcastTXT(json);
+    if (currentCm != lastCm) {
+      lastCm = currentCm;
+      String json = "{\"cm\":" + String(currentCm) + "}";
+      webSocket.broadcastTXT(json);
+    }
   }
 
   if (Serial.available()) {

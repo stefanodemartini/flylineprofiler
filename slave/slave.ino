@@ -252,8 +252,17 @@ void processCommand(const char* command) {
     sendStatus();
     return;
   }
-  
-  // Comando GOTOPOS: GOTOPOS:target_cm:velocita_max:direction
+
+  // SYNCPOS: sync step counter to encoder value sent by master before GOTOPOS
+  if (strncmp(command, "SYNCPOS:", 8) == 0) {
+    int32_t pos = (int32_t)atol(command + 8);
+    stepper->setCurrentPosition(pos);
+    Serial.print("Posizione sincronizzata: ");
+    Serial.println(pos);
+    return;
+  }
+
+  // Comando GOTOPOS:GOTOPOS:target_cm:velocita_max:direction
   // Esempio: GOTOPOS:150:12000:F
   if (strncmp(command, "GOTOPOS:", 8) == 0) {
     char* ptr = (char*)command + 8;
