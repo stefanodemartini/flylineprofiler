@@ -331,9 +331,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     // Export segments as CSV
     private void ExportSegmentsCsv_Click(object sender, RoutedEventArgs e)
     {
-        if (_segmentNodes.Count < 2)
+        if (_segmentNodes.Count == 0)
         {
-            MessageBox.Show("Servono almeno 2 nodi per esportare i segmenti.",
+            MessageBox.Show("Nessun nodo da esportare.",
                             "Attenzione", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
@@ -347,18 +347,15 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         if (dlg.ShowDialog() != true) return;
 
         var sorted = _segmentNodes.OrderBy(n => n.X).ToList();
-        int minCm  = (int)Math.Round(sorted.First().X);
-        int maxCm  = (int)Math.Round(sorted.Last().X);
 
         var sb = new StringBuilder();
-        sb.AppendLine("Lunghezza cm,Segmento mm");
-        for (int cm = minCm; cm <= maxCm; cm++)
-            sb.AppendLine($"{cm},{InterpolateSegment(sorted, cm):0.000}");
+        sb.AppendLine("Lunghezza cm,Diametro mm");
+        foreach (var node in sorted)
+            sb.AppendLine($"{node.X:0},{node.Y:0.000}");
 
         File.WriteAllText(dlg.FileName, sb.ToString(), Encoding.UTF8);
         UiStatus = "Segmenti esportati";
-        MessageBox.Show($"Esportati {maxCm - minCm + 1} punti  ({_segmentNodes.Count} nodi).\n{dlg.FileName}",
-                        "Export segmenti");
+        MessageBox.Show($"Esportati {sorted.Count} nodi.\n{dlg.FileName}", "Export segmenti");
     }
 
     // Returns the node closest to a screen pixel position, or null if none within DragHitRadiusPx
