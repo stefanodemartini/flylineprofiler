@@ -27,6 +27,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private readonly Stack<double> _segmentUndoStack = new();
     private bool _segmentDrawMode = false;
 
+    // Drag state — null when not dragging
+    private double? _draggingNodeX = null;   // original X of the node being dragged
+    private const double DragHitRadiusPx = 12.0;
+
     public event PropertyChangedEventHandler? PropertyChanged;
 
     public string UiStatus
@@ -92,6 +96,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         PlotControl.PreviewMouseLeftButtonDown  += PlotControl_PreviewMouseLeftButtonDown;
         PlotControl.PreviewMouseRightButtonDown += PlotControl_PreviewMouseRightButtonDown;
+        PlotControl.PreviewMouseMove            += PlotControl_PreviewMouseMove;
+        PlotControl.PreviewMouseLeftButtonUp    += PlotControl_PreviewMouseLeftButtonUp;
 
         _plotInitialized = true;
         PlotControl.Refresh();
@@ -186,6 +192,18 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         var pos    = e.GetPosition(PlotControl);
         var coords = PlotControl.Plot.GetCoordinates(new Pixel((float)pos.X, (float)pos.Y));
 
+        // Check if click is within DragHitRadiusPx of an existing node → start drag
+        var hit = FindNearestNode(pos);
+        if (hit.HasValue)
+        {
+            _draggingNodeX = hit.Value.X;
+            PlotControl.CaptureMouse();
+            UiStatus = $"Trascina nodo {hit.Value.X:0} cm";
+            e.Handled = true;
+            return;
+        }
+
+        // No nearby node → add new node
         double snappedX = Math.Round(coords.X);
         double y        = Math.Round(coords.Y, 3);
 
@@ -195,6 +213,37 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         RefreshPlot();
         UiStatus = $"Nodo aggiunto: {snappedX:0} cm = {y:0.000} mm  (totale {_segmentNodes.Count})";
+        e.Handled = true;
+    }
+
+    private void PlotControl_PreviewMouseMove(object sender, MouseEventArgs e)
+    {
+        if (!_segmentDrawMode || _draggingNodeX == null) return;
+
+        var pos    = e.GetPosition(PlotControl);
+        var coords = PlotControl.Plot.GetCoordinates(new Pixel((float)pos.X, (float)pos.Y));
+
+        double newX = Math.Round(coords.X);
+        double newY = Math.Round(coords.Y, 3);
+
+        // Update the dragged node in-place
+        _segmentNodes.RemoveAll(n => n.X == _draggingNodeX.Value);
+        // If there's already a node at newX (different from the one being dragged), remove it
+        _segmentNodes.RemoveAll(n => n.X == newX);
+        _segmentNodes.Add((newX, newY));
+        _draggingNodeX = newX;  // track new X in case it snapped
+
+        RefreshPlot();
+        UiStatus = $"Nodo: {newX:0} cm = {newY:0.000} mm";
+        e.Handled = true;
+    }
+
+    private void PlotControl_PreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (_draggingNodeX == null) return;
+        PlotControl.ReleaseMouseCapture();
+        UiStatus = $"Nodo posizionato: {_draggingNodeX.Value:0} cm  (totale {_segmentNodes.Count})";
+        _draggingNodeX = null;
         e.Handled = true;
     }
 
@@ -273,6 +322,27 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         UiStatus = "Segmenti esportati";
         MessageBox.Show($"Esportati {maxCm - minCm + 1} punti  ({_segmentNodes.Count} nodi).\n{dlg.FileName}",
                         "Export segmenti");
+    }
+
+    // Returns the node closest to a screen pixel position, or null if none within DragHitRadiusPx
+    private (double X, double Y)? FindNearestNode(System.Windows.Point screenPos)
+    {
+        (double X, double Y)? best = null;
+        double bestDist = DragHitRadiusPx;
+
+        foreach (var node in _segmentNodes)
+        {
+            Pixel nodePx = PlotControl.Plot.GetPixel(new Coordinates(node.X, node.Y));
+            double dx = nodePx.X - screenPos.X;
+            double dy = nodePx.Y - screenPos.Y;
+            double dist = Math.Sqrt(dx * dx + dy * dy);
+            if (dist < bestDist)
+            {
+                bestDist = dist;
+                best = node;
+            }
+        }
+        return best;
     }
 
     private static double InterpolateSegment(List<(double X, double Y)> nodes, double x)
