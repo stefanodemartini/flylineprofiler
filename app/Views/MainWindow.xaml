@@ -78,6 +78,10 @@
             <StatusBarItem>
                 <TextBlock Text="{Binding ElementName=MainWin, Path=SegmentNodesStatus}"/>
             </StatusBarItem>
+            <Separator/>
+            <StatusBarItem HorizontalAlignment="Right">
+                <TextBlock Text="{Binding ElementName=MainWin, Path=HoverCoordsStatus}" FontFamily="Consolas" Foreground="#1a6e2e"/>
+            </StatusBarItem>
         </StatusBar>
 
         <Grid Margin="12">

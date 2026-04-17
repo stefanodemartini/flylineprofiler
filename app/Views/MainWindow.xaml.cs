@@ -45,6 +45,13 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     public string DrawModeStatus         => _segmentDrawMode ? "DISEGNO SEGMENTI ATTIVO" : string.Empty;
     public string SegmentNodesStatus     => _segmentNodes.Count > 0 ? $"Nodi: {_segmentNodes.Count}" : string.Empty;
 
+    private string _hoverCoordsStatus = string.Empty;
+    public  string HoverCoordsStatus
+    {
+        get => _hoverCoordsStatus;
+        set { _hoverCoordsStatus = value; OnPropertyChanged(nameof(HoverCoordsStatus)); }
+    }
+
     public MainWindow()
     {
         InitializeComponent();
@@ -98,6 +105,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         PlotControl.PreviewMouseRightButtonDown += PlotControl_PreviewMouseRightButtonDown;
         PlotControl.PreviewMouseMove            += PlotControl_PreviewMouseMove;
         PlotControl.PreviewMouseLeftButtonUp    += PlotControl_PreviewMouseLeftButtonUp;
+        PlotControl.MouseLeave                  += (_, _) => HoverCoordsStatus = string.Empty;
 
         _plotInitialized = true;
         PlotControl.Refresh();
@@ -230,10 +238,13 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private void PlotControl_PreviewMouseMove(object sender, MouseEventArgs e)
     {
-        if (!_segmentDrawMode || _draggingNodeX == null) return;
-
         var pos    = e.GetPosition(PlotControl);
         var coords = PlotControl.Plot.GetCoordinates(new Pixel((float)pos.X, (float)pos.Y));
+
+        // Always update hover readout from nearest raw data point
+        UpdateHoverCoords(coords.X);
+
+        if (!_segmentDrawMode || _draggingNodeX == null) return;
 
         double newX = Math.Round(coords.X);
         double newY = Math.Round(coords.Y, 3);
@@ -243,11 +254,20 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         // If there's already a node at newX (different from the one being dragged), remove it
         _segmentNodes.RemoveAll(n => n.X == newX);
         _segmentNodes.Add((newX, newY));
-        _draggingNodeX = newX;  // track new X in case it snapped
+        _draggingNodeX = newX;
 
         RefreshPlot();
         UiStatus = $"Nodo: {newX:0} cm = {newY:0.000} mm";
         e.Handled = true;
+    }
+
+    private void UpdateHoverCoords(double plotX)
+    {
+        var pts = _vm.Points;
+        if (pts.Count == 0) { HoverCoordsStatus = string.Empty; return; }
+
+        var nearest = pts.OrderBy(p => Math.Abs(p.X - plotX)).First();
+        HoverCoordsStatus = $"↖  {nearest.X:0} cm  |  {nearest.FilteredY:0.000} mm";
     }
 
     private void PlotControl_PreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
