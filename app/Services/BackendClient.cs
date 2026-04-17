@@ -1,3 +1,4 @@
+using System.IO;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
@@ -67,15 +68,24 @@ public class BackendClient
     private async Task ReceiveLoopAsync(ClientWebSocket ws, CancellationToken ct)
     {
         var buffer = new byte[8192];
-        while (ws.State == WebSocketState.Open && !ct.IsCancellationRequested)
+        try
         {
-            var segment = new ArraySegment<byte>(buffer);
-            var result = await ws.ReceiveAsync(segment, ct);
-            if (result.MessageType == WebSocketMessageType.Close) break;
-            var message = Encoding.UTF8.GetString(buffer, 0, result.Count);
-            RawMessageReceived?.Invoke(message);
+            while (ws.State == WebSocketState.Open && !ct.IsCancellationRequested)
+            {
+                var segment = new ArraySegment<byte>(buffer);
+                var result = await ws.ReceiveAsync(segment, ct);
+                if (result.MessageType == WebSocketMessageType.Close) break;
+                var message = Encoding.UTF8.GetString(buffer, 0, result.Count);
+                RawMessageReceived?.Invoke(message);
+            }
         }
-        Disconnected?.Invoke();
+        catch (WebSocketException) { /* remote closed without handshake — normal for ESP32 */ }
+        catch (OperationCanceledException) { /* disconnect requested */ }
+        catch (IOException) { /* network reset */ }
+        finally
+        {
+            Disconnected?.Invoke();
+        }
     }
 
     public static JsonDocument? TryParseJson(string text)
