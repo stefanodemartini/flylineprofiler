@@ -105,6 +105,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         PlotControl.PreviewMouseRightButtonDown += PlotControl_PreviewMouseRightButtonDown;
         PlotControl.PreviewMouseMove            += PlotControl_PreviewMouseMove;
         PlotControl.PreviewMouseLeftButtonUp    += PlotControl_PreviewMouseLeftButtonUp;
+        PlotControl.PreviewMouseDoubleClick     += PlotControl_PreviewMouseDoubleClick;
         PlotControl.MouseLeave                  += (_, _) => HoverCoordsStatus = string.Empty;
 
         _plotInitialized = true;
@@ -379,6 +380,125 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             }
         }
         return best;
+    }
+
+    // Double-click a node to edit its coordinates directly
+    private void PlotControl_PreviewMouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton != MouseButton.Left) return;
+
+        var pos = e.GetPosition(PlotControl);
+        var hit = FindNearestNode(pos);
+        if (!hit.HasValue) return;
+
+        // Cancel any drag that started on the first click of the double-click
+        if (_draggingNodeX != null)
+        {
+            PlotControl.ReleaseMouseCapture();
+            _draggingNodeX = null;
+        }
+
+        var result = ShowNodeEditDialog(hit.Value.X, hit.Value.Y);
+        if (result == null) { e.Handled = true; return; }
+
+        _segmentNodes.RemoveAll(n => n.X == hit.Value.X);
+        // If another node already occupies the new X, remove it first
+        _segmentNodes.RemoveAll(n => n.X == result.Value.cm);
+        _segmentNodes.Add((result.Value.cm, result.Value.mm));
+
+        RefreshPlot();
+        UiStatus = $"Nodo modificato: {result.Value.cm:0} cm = {result.Value.mm:0.000} mm  (totale {_segmentNodes.Count})";
+        e.Handled = true;
+    }
+
+    // Small modal dialog for editing a node's coordinates
+    private (double cm, double mm)? ShowNodeEditDialog(double currentCm, double currentMm)
+    {
+        var win = new Window
+        {
+            Title  = "Modifica nodo",
+            Width  = 260,
+            Height = 145,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Owner       = this,
+            ResizeMode  = ResizeMode.NoResize,
+            ShowInTaskbar = false
+        };
+
+        var grid = new Grid { Margin = new Thickness(12, 10, 12, 10) };
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(8) });
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.ColumnDefinitions.Add(new ColumnDefinition());
+
+        var addLabel = (string text, int row) =>
+        {
+            var lbl = new System.Windows.Controls.Label
+            {
+                Content = text,
+                VerticalAlignment = System.Windows.VerticalAlignment.Center,
+                Padding = new Thickness(0, 2, 8, 2)
+            };
+            Grid.SetRow(lbl, row); Grid.SetColumn(lbl, 0);
+            grid.Children.Add(lbl);
+        };
+        var addBox = (string text, int row) =>
+        {
+            var tb = new TextBox
+            {
+                Text = text,
+                Margin = new Thickness(0, 2, 0, 2),
+                VerticalContentAlignment = System.Windows.VerticalAlignment.Center
+            };
+            Grid.SetRow(tb, row); Grid.SetColumn(tb, 1);
+            grid.Children.Add(tb);
+            return tb;
+        };
+
+        addLabel("Lunghezza (cm):", 0);
+        var txtCm = addBox(currentCm.ToString("0"), 0);
+
+        addLabel("Diametro (mm):", 1);
+        var txtMm = addBox(currentMm.ToString("0.000"), 1);
+
+        var btnPanel = new StackPanel
+        {
+            Orientation = System.Windows.Controls.Orientation.Horizontal,
+            HorizontalAlignment = System.Windows.HorizontalAlignment.Right
+        };
+        var btnOk     = new Button { Content = "OK",      Width = 64, IsDefault = true,
+                                     Margin = new Thickness(0, 0, 6, 0) };
+        var btnCancel = new Button { Content = "Annulla", Width = 64, IsCancel = true };
+        btnPanel.Children.Add(btnOk);
+        btnPanel.Children.Add(btnCancel);
+        Grid.SetRow(btnPanel, 3); Grid.SetColumnSpan(btnPanel, 2);
+        grid.Children.Add(btnPanel);
+
+        win.Content = grid;
+
+        bool confirmed = false;
+        btnOk.Click     += (_, _) => { confirmed = true; win.Close(); };
+        btnCancel.Click += (_, _) => win.Close();
+
+        win.Loaded += (_, _) => { txtCm.Focus(); txtCm.SelectAll(); };
+        win.ShowDialog();
+
+        if (!confirmed) return null;
+
+        var sep = System.Globalization.CultureInfo.CurrentCulture.NumberFormat.NumberDecimalSeparator;
+        var txtMmNorm = txtMm.Text.Replace(".", sep).Replace(",", sep);
+        var txtCmNorm = txtCm.Text.Replace(".", sep).Replace(",", sep);
+
+        if (!double.TryParse(txtCmNorm, out double cm) ||
+            !double.TryParse(txtMmNorm, out double mm))
+        {
+            MessageBox.Show("Valori non validi.", "Errore", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return null;
+        }
+
+        return (Math.Round(cm), Math.Round(mm, 3));
     }
 
     private static double InterpolateSegment(List<(double X, double Y)> nodes, double x)
