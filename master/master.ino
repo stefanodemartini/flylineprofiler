@@ -1423,36 +1423,18 @@ float readCaliperAverage(int samples) {
 }
 
 void readCaliper() {
-  // FW-01: timeouts prevent infinite spin if caliper is off/disconnected.
-  // 10 ms covers any caliper clock down to 50 Hz; 500 ms covers worst-case inter-packet gap.
-  const unsigned long BIT_TIMEOUT_US = 10000UL;   // 10 ms — one clock half-period max
-  const unsigned long PKT_TIMEOUT_US = 500000UL;  // 500 ms — inter-packet HIGH gap max
-  unsigned long t0 = micros();
-  while (digitalRead(CALIPER_CLOCK_PIN) == LOW) {
-    if (micros() - t0 > BIT_TIMEOUT_US) return;  // stuck LOW → caliper absent
-  }
+  while (digitalRead(CALIPER_CLOCK_PIN) == LOW) {}
   long tmpMicros = micros();
-  t0 = micros();
-  while (digitalRead(CALIPER_CLOCK_PIN) == HIGH) {
-    if (micros() - t0 > PKT_TIMEOUT_US) return;  // stuck HIGH → caliper absent
-  }
+  while (digitalRead(CALIPER_CLOCK_PIN) == HIGH) {}
   if ((micros() - tmpMicros) > 500) decodeCaliperReadings();
 }
 
 void decodeCaliperReadings() {
-  // FW-01: 10 ms per clock phase handles any caliper faster than 50 Hz
-  const unsigned long BIT_TIMEOUT_US = 10000UL;
   long value = 0;
   int sign = 1;
   for (int i = 0; i < 24; i++) {
-    unsigned long t0 = micros();
-    while (digitalRead(CALIPER_CLOCK_PIN) == LOW) {
-      if (micros() - t0 > BIT_TIMEOUT_US) return;  // bail — leave lineDiameter at last good value
-    }
-    t0 = micros();
-    while (digitalRead(CALIPER_CLOCK_PIN) == HIGH) {
-      if (micros() - t0 > BIT_TIMEOUT_US) return;
-    }
+    while (digitalRead(CALIPER_CLOCK_PIN) == LOW) {}
+    while (digitalRead(CALIPER_CLOCK_PIN) == HIGH) {}
     if (digitalRead(CALIPER_DATA_PIN)) {
       if (i < 20) value |= (1 << i);
       if (i == 20) sign = -1;
