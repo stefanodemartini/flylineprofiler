@@ -10,6 +10,7 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
+    <PackageReference Include="Fluent.Ribbon" Version="10.0.3" />
     <PackageReference Include="ScottPlot.WPF" Version="5.0.52" />
   </ItemGroup>
   <ItemGroup>

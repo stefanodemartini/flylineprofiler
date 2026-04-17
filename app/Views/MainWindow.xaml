@@ -1,61 +1,101 @@
-<Window x:Class="DiametroLineaDesktop.Views.MainWindow"
+<Fluent:RibbonWindow
+        x:Class="DiametroLineaDesktop.Views.MainWindow"
         x:Name="MainWin"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:Fluent="urn:fluent-ribbon"
         xmlns:ScottPlot="clr-namespace:ScottPlot.WPF;assembly=ScottPlot.WPF"
         mc:Ignorable="d"
         Title="Diametro Linea Desktop" Height="920" Width="1450">
+
     <DockPanel>
-        <Menu DockPanel.Dock="Top">
-            <MenuItem Header="File">
-                <MenuItem Header="Importa CSV confronto" Click="ImportCsv_Click"/>
-                <MenuItem Header="Esporta CSV" Click="ExportCsv_Click"/>
-                <MenuItem Header="Esporta PNG grafico" Click="ExportPng_Click"/>
-                <Separator/>
-                <MenuItem Header="Esporta segmenti CSV" Click="ExportSegmentsCsv_Click"/>
-                <MenuItem Header="Salva nodi..."        Click="SaveNodes_Click"/>
-                <MenuItem Header="Carica nodi..."       Click="LoadNodes_Click"/>
-                <Separator/>
-                <MenuItem Header="Esci" Click="Exit_Click"/>
-            </MenuItem>
 
-            <MenuItem Header="Connessione">
-                <MenuItem Header="Connetti" Click="Connect_Click"/>
-                <MenuItem Header="Disconnetti" Click="Disconnect_Click"/>
-            </MenuItem>
+        <!-- ═══════════════════════════════════════════════════════ RIBBON -->
+        <Fluent:Ribbon DockPanel.Dock="Top" AutomaticStateManagement="False">
 
-            <MenuItem Header="Strumenti">
-                <MenuItem Header="Reset dati" Click="Reset_Click"/>
-                <MenuItem Header="Lettura raw" Click="ReadRaw_Click"/>
-                <MenuItem Header="Zero display" Click="SetDisplayZero_Click"/>
-                <MenuItem Header="Reset offset" Click="ResetOffset_Click"/>
-                <MenuItem Header="Imposta Offset…" Click="SetOffset_Click"/>
-            </MenuItem>
+            <!-- File backstage -->
+            <Fluent:Ribbon.Menu>
+                <Fluent:Backstage>
+                    <Fluent:BackstageTabControl>
+                        <Fluent:Button Header="Importa CSV confronto" Click="ImportCsv_Click"/>
+                        <Fluent:Button Header="Esporta CSV"           Click="ExportCsv_Click"/>
+                        <Fluent:Button Header="Esporta PNG grafico"   Click="ExportPng_Click"/>
+                        <Fluent:SeparatorTabItem/>
+                        <Fluent:Button Header="Esporta segmenti CSV"  Click="ExportSegmentsCsv_Click"/>
+                        <Fluent:Button Header="Salva nodi..."         Click="SaveNodes_Click"/>
+                        <Fluent:Button Header="Carica nodi..."        Click="LoadNodes_Click"/>
+                        <Fluent:SeparatorTabItem/>
+                        <Fluent:Button Header="Impostazioni"          Click="Settings_Click"/>
+                        <Fluent:Button Header="Esci"                  Click="Exit_Click"/>
+                    </Fluent:BackstageTabControl>
+                </Fluent:Backstage>
+            </Fluent:Ribbon.Menu>
 
-            <MenuItem Header="Grafico">
-                <MenuItem Header="Adatta assi" Click="FitPlot_Click"/>
-                <MenuItem Header="Cancella serie importate" Click="ClearImported_Click"/>
-                <Separator/>
-                <MenuItem Header="Auto-fit"
-                          IsCheckable="True"
-                          IsChecked="True"
-                          Click="AutoFitToggle_Click"/>
-                <Separator/>
-                <MenuItem Header="Disegna segmenti"
-                          IsCheckable="True"
-                          x:Name="MenuDrawSegments"
-                          Click="ToggleDrawMode_Click"/>
-                <MenuItem Header="Annulla ultimo nodo" Click="UndoLastNode_Click"/>
-                <MenuItem Header="Cancella segmenti"   Click="ClearSegments_Click"/>
-            </MenuItem>
+            <!-- ── Tab: CONNESSIONE ── -->
+            <Fluent:RibbonTabItem Header="Connessione">
+                <Fluent:RibbonGroupBox Header="Rete">
+                    <Fluent:Button Header="Connetti"     Size="Large" Click="Connect_Click"/>
+                    <Fluent:Button Header="Disconnetti"  Size="Large" Click="Disconnect_Click"/>
+                </Fluent:RibbonGroupBox>
+                <Fluent:RibbonGroupBox Header="Scansione">
+                    <Fluent:Button Header="START SCAN"   Size="Large" Click="StartScan_Click"  IsEnabled="{Binding CanControl}"/>
+                    <Fluent:Button Header="STOP"         Size="Large" Click="Stop_Click"/>
+                    <Fluent:Button Header="Ricezione ON"  Click="ScanOn_Click"  IsEnabled="{Binding CanEnableScan}"/>
+                    <Fluent:Button Header="Ricezione OFF" Click="ScanOff_Click" IsEnabled="{Binding ScanReceiving}"/>
+                </Fluent:RibbonGroupBox>
+            </Fluent:RibbonTabItem>
 
-            <MenuItem Header="Impostazioni">
-                <MenuItem Header="Backend" Click="Settings_Click"/>
-            </MenuItem>
-        </Menu>
+            <!-- ── Tab: MOTORE ── -->
+            <Fluent:RibbonTabItem Header="Motore">
+                <Fluent:RibbonGroupBox Header="Movimento">
+                    <Fluent:Button Header="FAST stessa dir"  Click="FastS_Click"       IsEnabled="{Binding CanControl}"/>
+                    <Fluent:Button Header="FAST opposta dir" Click="FastO_Click"        IsEnabled="{Binding CanControl}"/>
+                    <Fluent:Button Header="Vai a posizione"  Click="Goto_Click"         IsEnabled="{Binding CanControl}"/>
+                    <Fluent:Button Header="Aggiorna stato"   Click="MotorStatus_Click"/>
+                </Fluent:RibbonGroupBox>
+                <Fluent:RibbonGroupBox Header="Calibrazione">
+                    <Fluent:Button Header="Zero display"   Click="SetDisplayZero_Click"/>
+                    <Fluent:Button Header="Reset offset"   Click="ResetOffset_Click"/>
+                    <Fluent:Button Header="Imposta Offset…" Click="SetOffset_Click"/>
+                    <Fluent:Button Header="Reset dati"     Click="Reset_Click"/>
+                    <Fluent:Button Header="Lettura raw"    Click="ReadRaw_Click"/>
+                </Fluent:RibbonGroupBox>
+            </Fluent:RibbonTabItem>
 
+            <!-- ── Tab: GRAFICO ── -->
+            <Fluent:RibbonTabItem Header="Grafico">
+                <Fluent:RibbonGroupBox Header="Vista">
+                    <Fluent:Button      Header="Adatta assi"  Size="Large" Click="FitPlot_Click"/>
+                    <Fluent:ToggleButton Header="Auto-fit"    Size="Large" IsChecked="True" Click="AutoFitToggle_Click"/>
+                </Fluent:RibbonGroupBox>
+                <Fluent:RibbonGroupBox Header="Serie">
+                    <Fluent:Button Header="Importa CSV confronto"   Click="ImportCsv_Click"/>
+                    <Fluent:Button Header="Cancella serie importate" Click="ClearImported_Click"/>
+                </Fluent:RibbonGroupBox>
+            </Fluent:RibbonTabItem>
+
+            <!-- ── Tab: SEGMENTI ── -->
+            <Fluent:RibbonTabItem Header="Segmenti">
+                <Fluent:RibbonGroupBox Header="Disegno">
+                    <Fluent:ToggleButton x:Name="MenuDrawSegments"
+                                         Header="Disegna segmenti"
+                                         Size="Large"
+                                         Click="ToggleDrawMode_Click"/>
+                    <Fluent:Button Header="Annulla nodo" Click="UndoLastNode_Click"/>
+                    <Fluent:Button Header="Cancella tutti" Click="ClearSegments_Click"/>
+                </Fluent:RibbonGroupBox>
+                <Fluent:RibbonGroupBox Header="File nodi">
+                    <Fluent:Button Header="Salva nodi..."          Click="SaveNodes_Click"/>
+                    <Fluent:Button Header="Carica nodi..."         Click="LoadNodes_Click"/>
+                    <Fluent:Button Header="Esporta segmenti CSV"   Click="ExportSegmentsCsv_Click"/>
+                </Fluent:RibbonGroupBox>
+            </Fluent:RibbonTabItem>
+
+        </Fluent:Ribbon>
+
+        <!-- ═══════════════════════════════════════════════════════ STATUS BAR -->
         <StatusBar DockPanel.Dock="Bottom">
             <StatusBarItem>
                 <TextBlock Text="{Binding ElementName=MainWin, Path=AutoFitStatus}"/>
@@ -66,11 +106,7 @@
             </StatusBarItem>
             <Separator/>
             <StatusBarItem>
-               <TextBlock Text="{Binding ElementName=MainWin, Path=LastImportedFileStatus}"/>
-            </StatusBarItem>
-            <Separator/>
-            <StatusBarItem>
-                <TextBlock Text="{Binding ElementName=MainWin, Path=AutoFitStatus}"/>
+                <TextBlock Text="{Binding ElementName=MainWin, Path=LastImportedFileStatus}"/>
             </StatusBarItem>
             <Separator/>
             <StatusBarItem>
@@ -86,89 +122,71 @@
             </StatusBarItem>
         </StatusBar>
 
-        <Grid Margin="12">
+        <!-- ═══════════════════════════════════════════════════════ CONTENT -->
+        <Grid Margin="8">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
                 <RowDefinition Height="*"/>
-                <RowDefinition Height="180"/>
+                <RowDefinition Height="160"/>
             </Grid.RowDefinitions>
 
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="2*"/>
-                <ColumnDefinition Width="2*"/>
-                <ColumnDefinition Width="1.4*"/>
-            </Grid.ColumnDefinitions>
+            <!-- Row 0: Stato + GOTOPOS -->
+            <Grid Grid.Row="0" Margin="0,0,0,6">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="200"/>
+                </Grid.ColumnDefinitions>
 
-            <GroupBox Header="Stato" Grid.Row="0" Grid.ColumnSpan="3" Margin="0,0,0,8">
-                <UniformGrid Rows="1" Columns="9">
-                    <StackPanel Margin="8"><TextBlock Text="Connessione" FontWeight="Bold"/><TextBlock Text="{Binding ConnectionStatus}"/></StackPanel>
-                    <StackPanel Margin="8"><TextBlock Text="Motore" FontWeight="Bold"/><TextBlock Text="{Binding MotorState}"/></StackPanel>
-                    <StackPanel Margin="8"><TextBlock Text="Lunghezza" FontWeight="Bold"/><TextBlock Text="{Binding CurrentLength}"/></StackPanel>
-                    <StackPanel Margin="8"><TextBlock Text="Diametro" FontWeight="Bold"/><TextBlock Text="{Binding CurrentDiameter}"/></StackPanel>
-                    <StackPanel Margin="8"><TextBlock Text="Display" FontWeight="Bold"/><TextBlock Text="{Binding CurrentDisplay}"/></StackPanel>
-                    <StackPanel Margin="8">
-                        <TextBlock Text="Velocità" FontWeight="Bold"/>
-                        <TextBlock Text="{Binding Speed}"/>
-                        <TextBlock Text="{Binding SpeedStatus}" FontSize="10" Foreground="Gray"/>
+                <GroupBox Header="Stato" Grid.Column="0" Margin="0,0,6,0">
+                    <UniformGrid Rows="1" Columns="9">
+                        <StackPanel Margin="6,4"><TextBlock Text="Connessione" FontWeight="Bold" FontSize="10"/><TextBlock Text="{Binding ConnectionStatus}"/></StackPanel>
+                        <StackPanel Margin="6,4"><TextBlock Text="Motore"      FontWeight="Bold" FontSize="10"/><TextBlock Text="{Binding MotorState}"/></StackPanel>
+                        <StackPanel Margin="6,4"><TextBlock Text="Lunghezza"   FontWeight="Bold" FontSize="10"/><TextBlock Text="{Binding CurrentLength}"/></StackPanel>
+                        <StackPanel Margin="6,4"><TextBlock Text="Diametro"    FontWeight="Bold" FontSize="10"/><TextBlock Text="{Binding CurrentDiameter}"/></StackPanel>
+                        <StackPanel Margin="6,4"><TextBlock Text="Display"     FontWeight="Bold" FontSize="10"/><TextBlock Text="{Binding CurrentDisplay}"/></StackPanel>
+                        <StackPanel Margin="6,4">
+                            <TextBlock Text="Velocità" FontWeight="Bold" FontSize="10"/>
+                            <TextBlock Text="{Binding Speed}"/>
+                            <TextBlock Text="{Binding SpeedStatus}" FontSize="10" Foreground="Gray"/>
+                        </StackPanel>
+                        <StackPanel Margin="6,4"><TextBlock Text="Punti"       FontWeight="Bold" FontSize="10"/><TextBlock Text="{Binding PointsCount}"/></StackPanel>
+                        <StackPanel Margin="6,4"><TextBlock Text="Zero Display" FontWeight="Bold" FontSize="10"/><TextBlock Text="{Binding DisplayZeroText}"/></StackPanel>
+                        <StackPanel Margin="6,4"><TextBlock Text="Offset"      FontWeight="Bold" FontSize="10"/><TextBlock Text="{Binding OffsetText}"/></StackPanel>
+                    </UniformGrid>
+                </GroupBox>
+
+                <GroupBox Header="GOTOPOS" Grid.Column="1">
+                    <StackPanel Margin="6">
+                        <TextBlock Text="{Binding GotoStatus}" FontSize="13" FontWeight="SemiBold" TextWrapping="Wrap"/>
+                        <TextBlock Text="{Binding LastUpdate}" FontSize="10" Foreground="Gray" Margin="0,4,0,0"/>
                     </StackPanel>
-                    <StackPanel Margin="8"><TextBlock Text="Punti" FontWeight="Bold"/><TextBlock Text="{Binding PointsCount}"/></StackPanel>
-                    <StackPanel Margin="8"><TextBlock Text="Zero Display" FontWeight="Bold"/><TextBlock Text="{Binding DisplayZeroText}"/></StackPanel>
-                    <StackPanel Margin="8"><TextBlock Text="Offset" FontWeight="Bold"/><TextBlock Text="{Binding OffsetText}"/></StackPanel>
-                </UniformGrid>
+                </GroupBox>
+            </Grid>
+
+            <!-- Row 1: Chart -->
+            <GroupBox Header="Grafico" Grid.Row="1" Margin="0,0,0,6">
+                <ScottPlot:WpfPlot x:Name="PlotControl" Margin="4"/>
             </GroupBox>
 
-            <GroupBox Header="Comandi" Grid.Row="1" Grid.ColumnSpan="2" Margin="0,0,8,8">
-                <WrapPanel Margin="8">
-                    <Button Content="START SCAN"    Margin="4" Padding="14,8" Click="StartScan_Click"   IsEnabled="{Binding CanControl}"/>
-                    <Button Content="STOP"          Margin="4" Padding="14,8" Click="Stop_Click"/>
-                    <Button Content="Ricezione ON"  Margin="4" Padding="14,8" Click="ScanOn_Click"      IsEnabled="{Binding CanEnableScan}"/>
-                    <Button Content="Ricezione OFF" Margin="4" Padding="14,8" Click="ScanOff_Click"     IsEnabled="{Binding ScanReceiving}"/>
-                    <Button Content="FAST stessa dir"  Margin="4" Padding="14,8" Click="FastS_Click"   IsEnabled="{Binding CanControl}"/>
-                    <Button Content="FAST opposta dir" Margin="4" Padding="14,8" Click="FastO_Click"   IsEnabled="{Binding CanControl}"/>
-                    <Button Content="Aggiorna stato"   Margin="4" Padding="14,8" Click="MotorStatus_Click"/>
-                    <Button Content="Vai a posizione"  Margin="4" Padding="14,8" Click="Goto_Click"    IsEnabled="{Binding CanControl}"/>
-                </WrapPanel>
+            <!-- Row 2: Log -->
+            <GroupBox Grid.Row="2">
+                <GroupBox.Header>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="Log diagnostico" VerticalAlignment="Center"/>
+                        <CheckBox x:Name="ChkAutoScroll" Content="Auto-scroll" IsChecked="True"
+                                  Margin="12,0,0,0" VerticalAlignment="Center"/>
+                        <Button Content="Pulisci" Margin="8,0,0,0" Padding="6,1" FontSize="11" Click="ClearLog_Click"/>
+                    </StackPanel>
+                </GroupBox.Header>
+                <TextBox x:Name="TxtLog"
+                         Text="{Binding LogText}"
+                         IsReadOnly="True"
+                         AcceptsReturn="True"
+                         VerticalScrollBarVisibility="Auto"
+                         HorizontalScrollBarVisibility="Auto"
+                         TextChanged="TxtLog_TextChanged"/>
             </GroupBox>
-
-            <GroupBox Header="Stato GOTOPOS" Grid.Row="1" Grid.Column="2" Margin="0,0,0,8">
-                <StackPanel Margin="8">
-                    <TextBlock Text="{Binding GotoStatus}" FontSize="16" FontWeight="SemiBold" TextWrapping="Wrap"/>
-                    <TextBlock Text="Ultimo aggiornamento:" Margin="0,12,0,0"/>
-                    <TextBlock Text="{Binding LastUpdate}"/>
-                </StackPanel>
-            </GroupBox>
-
-            <GroupBox Header="Grafico" Grid.Row="2" Grid.ColumnSpan="3" Margin="0,0,0,8">
-                <Grid>
-                    <ScottPlot:WpfPlot x:Name="PlotControl" Margin="8"/>
-                </Grid>
-            </GroupBox>
-
-            <GroupBox Grid.Row="3" Grid.ColumnSpan="3">
-    <GroupBox.Header>
-        <StackPanel Orientation="Horizontal">
-            <TextBlock Text="Log diagnostico" VerticalAlignment="Center"/>
-            <CheckBox x:Name="ChkAutoScroll"
-                      Content="Auto-scroll"
-                      IsChecked="True"
-                      Margin="12,0,0,0"
-                      VerticalAlignment="Center"/>
-            <Button Content="Pulisci"
-                    Margin="8,0,0,0"
-                    Padding="6,1"
-                    FontSize="11"
-                    Click="ClearLog_Click"/>
-        </StackPanel>
-    </GroupBox.Header>
-    <TextBox x:Name="TxtLog"
-             Text="{Binding LogText}"
-             IsReadOnly="True"
-             AcceptsReturn="True"
-             VerticalScrollBarVisibility="Auto"
-             HorizontalScrollBarVisibility="Auto"
-             TextChanged="TxtLog_TextChanged"/>
-</GroupBox>
         </Grid>
+
     </DockPanel>
-</Window>
+</Fluent:RibbonWindow>

@@ -13,7 +13,7 @@ using ScottPlot;
 
 namespace DiametroLineaDesktop.Views;
 
-public partial class MainWindow : Window, INotifyPropertyChanged
+public partial class MainWindow : Fluent.RibbonWindow, INotifyPropertyChanged
 {
     private readonly MainViewModel _vm = new();
     private bool _plotInitialized = false;
@@ -318,7 +318,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     // Segment menu handlers
     private void ToggleDrawMode_Click(object sender, RoutedEventArgs e)
     {
-        _segmentDrawMode = MenuDrawSegments.IsChecked;
+        _segmentDrawMode = MenuDrawSegments.IsChecked ?? false;
         PlotControl.Cursor = _segmentDrawMode ? Cursors.Cross : Cursors.Arrow;
         UiStatus = _segmentDrawMode
             ? "Modalita disegno ON  —  clic sx = aggiungi nodo, clic dx = rimuovi nodo"
@@ -815,14 +815,15 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private void AutoFitToggle_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is MenuItem mi)
-        {
-            _autoFitEnabled = mi.IsChecked;
-            _vm.Settings.Chart.AutoFit = _autoFitEnabled;
-            _vm.SaveSettings();
-            RefreshPlot();
-            UiStatus = _autoFitEnabled ? "Auto-fit ON" : "Auto-fit OFF";
-        }
+        bool? isChecked = sender is Fluent.ToggleButton ftb ? ftb.IsChecked
+                        : sender is MenuItem mi             ? mi.IsChecked
+                        : null;
+        if (isChecked == null) return;
+        _autoFitEnabled = isChecked.Value;
+        _vm.Settings.Chart.AutoFit = _autoFitEnabled;
+        _vm.SaveSettings();
+        RefreshPlot();
+        UiStatus = _autoFitEnabled ? "Auto-fit ON" : "Auto-fit OFF";
     }
 
     // Impostazioni
