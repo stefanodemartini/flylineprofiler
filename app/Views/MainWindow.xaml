@@ -60,8 +60,7 @@
                     <Fluent:Button Header="Zero display"    Click="SetDisplayZero_Click"/>
                     <Fluent:Button Header="Reset offset"    Click="ResetOffset_Click"/>
                     <Fluent:Button Header="Imposta Offset…" Click="SetOffset_Click"/>
-                    <Fluent:Button Header="Reset lunghezza" Click="ResetPos_Click"/>
-                    <Fluent:Button Header="Reset dati"      Click="Reset_Click"/>
+                    <Fluent:Button Header="Azzera tutto"    Click="Reset_Click" ToolTip="Azzera posizione e cancella grafico"/>
                     <Fluent:Button Header="Lettura raw"     Click="ReadRaw_Click"/>
                 </Fluent:RibbonGroupBox>
             </Fluent:RibbonTabItem>
@@ -69,9 +68,8 @@
             <!-- ── Tab: GRAFICO ── -->
             <Fluent:RibbonTabItem Header="Grafico">
                 <Fluent:RibbonGroupBox Header="Vista">
-                    <Fluent:Button      Header="Adatta assi"    Size="Large" Click="FitPlot_Click"/>
-                    <Fluent:ToggleButton Header="Auto-fit"      Size="Large" IsChecked="True" Click="AutoFitToggle_Click"/>
-                    <Fluent:Button      Header="Cancella grafico" Click="ClearGraph_Click"/>
+                    <Fluent:Button      Header="Adatta assi"  Size="Large" Click="FitPlot_Click"/>
+                    <Fluent:ToggleButton Header="Auto-fit"    Size="Large" IsChecked="True" Click="AutoFitToggle_Click"/>
                 </Fluent:RibbonGroupBox>
                 <Fluent:RibbonGroupBox Header="Serie">
                     <Fluent:Button Header="Importa CSV confronto"   Click="ImportCsv_Click"/>

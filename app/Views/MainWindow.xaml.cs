@@ -677,19 +677,7 @@ public partial class MainWindow : Fluent.RibbonWindow, INotifyPropertyChanged
     {
         await Send("reset");
         _vm.ClearAllData();
-        UiStatus = "Dati resettati";
-    }
-
-    private async void ResetPos_Click(object sender, RoutedEventArgs e)
-    {
-        await Send("resetpos");
-        UiStatus = "Lunghezza azzerata (dati conservati)";
-    }
-
-    private void ClearGraph_Click(object sender, RoutedEventArgs e)
-    {
-        _vm.ClearAllData();
-        UiStatus = "Grafico cancellato";
+        UiStatus = "Posizione azzerata e grafico cancellato";
     }
 
     private async void ReadRaw_Click(object sender, RoutedEventArgs e)
