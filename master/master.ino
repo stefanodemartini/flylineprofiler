@@ -316,6 +316,8 @@ void goToPosition(float targetCm) {
   // Salva stato scansione e sospendi
   oldScanState = scanEnabled;
   scanEnabled = false;
+  // Notify all clients that scan is suspended (symmetric with restore broadcast on completion)
+  webSocket.broadcastTXT("{\"type\":\"scan_enabled\",\"value\":false}");
   
   // Determina la direzione
   bool direction = (targetCm > currentCm);
