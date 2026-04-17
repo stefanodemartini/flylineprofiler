@@ -280,7 +280,7 @@ void motorHandleStatusLine(const char* line) {
         webSocket.broadcastTXT(json);
       } else {
         // Invia stato di avanzamento al client
-        int currentCm = (encoderValue / PULSES_PER_CM);
+        int currentCm = (encoderValue / PULSES_PER_CM) - 2;
         int remainingCm = remaining / PULSES_PER_CM;
         String json = "{\"type\":\"goto_progress\",\"remaining_cm\":" + String(remainingCm) + 
                      ",\"current_cm\":" + String(currentCm) + ",\"target_cm\":" + String(goToTargetCm) + "}";
@@ -352,7 +352,7 @@ void goToPosition(float targetCm) {
     return;
   }
 
-  float currentCm = (encoderValue / (float)PULSES_PER_CM);
+  float currentCm = (encoderValue / (float)PULSES_PER_CM) - 2;
   
   // Se già a target
   if (abs(targetCm - currentCm) < 0.1) {
@@ -377,8 +377,9 @@ void goToPosition(float targetCm) {
   interrupts();
   motorQueueTx("SYNCPOS:" + String(encSnap0));
 
-  // Slave position is synced to encoder via SYNCPOS; target is sent as-is in encoder-cm coordinates.
-  String cmd = "GOTOPOS:" + String(targetCm, 2) + ":" + String(MOTOR_FAST_HZ) + ":" + (direction ? "F" : "B");
+  // Slave position is synced to encoder via SYNCPOS; add 2cm offset because
+  // encoder wheel is 20mm behind caliper — slave must target (X+2)*PULSES_PER_CM.
+  String cmd = "GOTOPOS:" + String(targetCm + 2.0f, 2) + ":" + String(MOTOR_FAST_HZ) + ":" + (direction ? "F" : "B");
   motorQueueTx(cmd);
   
   goToTargetCm = targetCm;
@@ -1428,7 +1429,7 @@ void loop() {
     }
   }
 
-  int currentCm = (encSnap / PULSES_PER_CM);
+  int currentCm = (encSnap / PULSES_PER_CM) - 2;
 
   // Acquisizione dati solo se scansione abilitata e NON in GOTOPOS
   if (!isGoToActive && currentCm != lastCm && currentCm >= 0 && scanEnabled) {
@@ -1451,7 +1452,7 @@ void loop() {
     Serial.println(displayValue, 2);
   } else if (isGoToActive) {
     // Encoder-based GOTOPOS tracking — authoritative stop trigger
-    float floatCm = (float)encSnap / PULSES_PER_CM;
+    float floatCm = (float)encSnap / PULSES_PER_CM - 2.0f;
     if (!goToEncoderReached && abs(floatCm - goToTargetCm) <= 0.5f) {
       goToEncoderReached = true;
       motorQueueTx("STOP");  // encoder says we're there — stop the motor
@@ -1575,7 +1576,9 @@ void handleCommand(String cmd) {
   }
 
   if (cmd == "reset") {
-    encoderValue = 0;
+    // Set encoder so caliper position reads 0: caliper = encoder/PULSES_PER_CM - 2 = 0
+    // → encoder must be 2 * PULSES_PER_CM (encoder wheel is 20mm behind caliper)
+    encoderValue = 2 * PULSES_PER_CM;
     lastCm = -1;
     clearAllData();
     Serial.println("Lunghezza azzerata e dati resettati.");
