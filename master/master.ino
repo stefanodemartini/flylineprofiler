@@ -11,7 +11,7 @@ include <WiFi.h>
 // ===============================
 #define FIRMWARE_VERSION "0.4.0"
 #define FIRMWARE_DATE "2026-04-17"
-#define FIRMWARE_FEATURES "WiFi Manager + EMA + 0.01mm + UART Motor + Scan timer + Autostop + RicezioneON/OFF + GOTOPOS"
+#define FIRMWARE_FEATURES "WiFi Manager + EMA + 0.01mm + UART Motor + Scan timer + Autostop + RicezioneON/OFF + GOTOPOS + Caliper timeout + Atomic encoder + Watchdog fixes"
 
 // -----------------------------
 #define ENCODER_DATA_PIN 12

@@ -5,7 +5,7 @@
 // ===============================
 #define FIRMWARE_VERSION "0.4.0"
 #define FIRMWARE_DATE "2026-04-17"
-#define FIRMWARE_FEATURES "UART Control + GOTOPOS + Dynamic Speed + Buttons"
+#define FIRMWARE_FEATURES "UART Control + GOTOPOS + Dynamic Speed + Buttons + Position fix + Completion signal"
 
 // -----------------------------
 // Pin definitions
