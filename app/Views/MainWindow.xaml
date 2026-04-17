@@ -13,7 +13,8 @@
     <DockPanel>
 
         <!-- ═══════════════════════════════════════════════════════ RIBBON -->
-        <Fluent:Ribbon DockPanel.Dock="Top" AutomaticStateManagement="False">
+        <Fluent:Ribbon DockPanel.Dock="Top" AutomaticStateManagement="False"
+                       CanCustomizeQuickAccessToolBar="False">
 
             <!-- File backstage -->
             <Fluent:Ribbon.Menu>

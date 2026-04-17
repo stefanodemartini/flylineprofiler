@@ -4,6 +4,7 @@ using System.Text;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Threading;
+using ControlzEx.Theming;
 
 namespace DiametroLineaDesktop;
 
@@ -11,6 +12,8 @@ public partial class App : Application
 {
     public App()
     {
+        // Apply Office-style blue ribbon theme
+        ThemeManager.Current.ChangeTheme(this, "Light.Blue");
         SetupGlobalExceptionHandling();
     }
 
