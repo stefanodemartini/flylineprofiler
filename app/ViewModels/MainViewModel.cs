@@ -36,6 +36,7 @@ public class MainViewModel : ObservableObject
     private string _offsetText = "0.00 mm";
     private bool _scanReceiving;
     private bool _isGoToActive;
+    private bool _smoothingEnabled = true;
 
     public ObservableCollection<MeasurementPoint> Points { get; } = new();
     public AppSettings Settings => _settings;
@@ -53,6 +54,16 @@ public class MainViewModel : ObservableObject
     public string LogText          { get => _logText;          set => SetProperty(ref _logText, value); }
     public string DisplayZeroText  { get => _displayZeroText;  set => SetProperty(ref _displayZeroText, value); }
     public string OffsetText       { get => _offsetText;       set => SetProperty(ref _offsetText, value); }
+
+    public bool SmoothingEnabled
+    {
+        get => _smoothingEnabled;
+        set
+        {
+            if (SetProperty(ref _smoothingEnabled, value))
+                _ema = null; // reset EMA state when toggled
+        }
+    }
 
     public bool ScanReceiving
     {
@@ -395,9 +406,18 @@ public class MainViewModel : ObservableObject
 
     private void AddLivePoint(double x, double rawY, double firmwareY)
     {
-        var alpha = _settings.Chart.SmoothingAlpha;
-        _ema = _ema is null ? firmwareY : alpha * firmwareY + (1 - alpha) * _ema.Value;
-        var filtered = Math.Round(_ema.Value, 3);
+        double filtered;
+        if (_smoothingEnabled)
+        {
+            var alpha = _settings.Chart.SmoothingAlpha;
+            _ema = _ema is null ? firmwareY : alpha * firmwareY + (1 - alpha) * _ema.Value;
+            filtered = Math.Round(_ema.Value, 3);
+        }
+        else
+        {
+            _ema = null;
+            filtered = Math.Round(firmwareY, 3);
+        }
 
         // Remove existing point at same cm to trigger CollectionChanged (→ plot refresh)
         var existing = Points.FirstOrDefault(p => Math.Abs(p.X - x) < 0.0001);

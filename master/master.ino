@@ -31,8 +31,7 @@ bool oldScanState = false;  // Per salvare stato scansione durante GOTOPOS
 
 float smoothedDiameter = 0.0;
 bool filterInitialized = false;
-float emaStore = 0.0f;
-bool emaStoreInit = false;
+// EMA smoothing removed from firmware — app handles smoothing client-side
 
 static const int MOTOR_UART_RX_PIN = 16;
 static const int MOTOR_UART_TX_PIN = 17;
@@ -121,15 +120,7 @@ void addDataPoint(int cm, float diameter, float rawDisplay) {
   DataPoint* newPoint = new DataPoint();
   if (!newPoint) { Serial.println("[OOM] DataPoint alloc failed"); return; }  // FW-11
   newPoint->cm = cm;
-  
-  // Applica EMA smoothing
-  if (!emaStoreInit) {
-    emaStore = diameter;
-    emaStoreInit = true;
-  } else {
-    emaStore = 0.1f * diameter + 0.9f * emaStore;
-  }
-  newPoint->diameter = round(emaStore * 1000.0) / 1000.0;
+  newPoint->diameter = round(diameter * 1000.0) / 1000.0;  // raw compensated, no EMA
   newPoint->rawDisplay = rawDisplay;
   newPoint->next = nullptr;
 
@@ -174,8 +165,6 @@ void clearAllData() {
   totalDataPoints = 0;
   filterInitialized = false;
   smoothedDiameter = 0.0;
-  emaStoreInit = false;
-  emaStore = 0.0f;
 }
 
 int getTotalDataPoints() {

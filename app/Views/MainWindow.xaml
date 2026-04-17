@@ -67,9 +67,13 @@
             <!-- ── Tab: GRAFICO ── -->
             <Fluent:RibbonTabItem Header="Grafico">
                 <Fluent:RibbonGroupBox Header="Vista">
-                    <Fluent:Button      Header="Adatta assi"  Size="Large" Click="FitPlot_Click"/>
-                    <Fluent:ToggleButton Header="Auto-fit"    Size="Large" IsChecked="True" Click="AutoFitToggle_Click"/>
-                    <Fluent:Button      Header="Azzera tutto" Click="Reset_Click" ToolTip="Azzera posizione e cancella grafico"/>
+                    <Fluent:Button       Header="Adatta assi"   Size="Large" Click="FitPlot_Click"/>
+                    <Fluent:ToggleButton Header="Auto-fit"      Size="Large" IsChecked="True" Click="AutoFitToggle_Click"/>
+                    <Fluent:Button       Header="Azzera tutto"  Click="Reset_Click" ToolTip="Azzera posizione e cancella grafico"/>
+                    <Fluent:ToggleButton x:Name="SmoothingToggle"
+                                         Header="Smoothing EMA" IsChecked="True"
+                                         Click="SmoothingToggle_Click"
+                                         ToolTip="Applica filtro EMA ai dati ricevuti"/>
                 </Fluent:RibbonGroupBox>
                 <Fluent:RibbonGroupBox Header="Serie">
                     <Fluent:Button Header="Importa CSV confronto"   Click="ImportCsv_Click"/>

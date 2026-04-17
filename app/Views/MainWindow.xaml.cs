@@ -826,6 +826,13 @@ public partial class MainWindow : Fluent.RibbonWindow, INotifyPropertyChanged
         UiStatus = _autoFitEnabled ? "Auto-fit ON" : "Auto-fit OFF";
     }
 
+    private void SmoothingToggle_Click(object sender, RoutedEventArgs e)
+    {
+        bool enabled = SmoothingToggle.IsChecked ?? true;
+        _vm.SmoothingEnabled = enabled;
+        UiStatus = enabled ? "Smoothing EMA ON" : "Smoothing EMA OFF — dati grezzi";
+    }
+
     // Impostazioni
     private void Settings_Click(object sender, RoutedEventArgs e)
     {
