@@ -169,13 +169,9 @@ void updateDynamicSpeed() {
   if (newSpeed != currentDynamicSpeed && distanceToGo > 0) {
     currentDynamicSpeed = newSpeed;
     stepper->setSpeedInHz(currentDynamicSpeed);
-    
-    // Mantieni la direzione corretta
-    if (fwd) {
-      stepper->runForward();
-    } else {
-      stepper->runBackward();
-    }
+    // FW-02: re-issue moveTo with updated speed instead of runForward/runBackward
+    // which would cancel the position target and cause unbounded overshoot.
+    stepper->moveTo(targetPos);
     
     Serial.print("Velocità aggiornata: ");
     Serial.print(currentDynamicSpeed);
@@ -191,8 +187,12 @@ void checkPositionReached() {
   
   // Se la distanza è 0 o molto piccola, considera raggiunto
   if (distanceToGo <= 5) {  // Margine di 5 passi per evitare overshoot
+    // FW-03: set targetPos = currentPos so sendStatus() reports remaining = 0,
+    // then send BEFORE stopMotion() changes mode to STOPPED.
+    // Master checks remaining == 0 to trigger goto_status:completed:true.
+    targetPos = stepper->getCurrentPosition();
+    sendStatus();  // sends STATUS:GOTOPOS:DIR:0
     stopMotion();
-    sendStatus();
     Serial.println("✓ Target raggiunto!");
   }
 }
@@ -316,12 +316,8 @@ void processCommand(const char* command) {
     stepper->setSpeedInHz(currentDynamicSpeed);
     stepper->setAcceleration(ACCEL);
     
-    // Avvia il movimento
-    if (fwd) {
-      stepper->moveTo(targetPos);
-    } else {
-      stepper->moveTo(targetPos);
-    }
+    // FW-06: both branches were identical (dead code). moveTo() handles direction internally.
+    stepper->moveTo(targetPos);
     
     sendStatus();
     return;
@@ -359,6 +355,7 @@ void receiveData() {
 // -----------------------------
 // Button handling
 void handleButtons() {
+  if (mode == GOTOPOS) return;  // FW-05: ignore buttons during GOTOPOS to prevent isGoToActive lock
   unsigned long now = millis();
   
   // Pulsante SCAN

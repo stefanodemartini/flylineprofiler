@@ -27,7 +27,7 @@ float lineDiameter = 0.0;
 bool scanEnabled = false;
 bool oldScanState = false;  // Per salvare stato scansione durante GOTOPOS
 
-#define ALPHA 0.05
+// FW-14: removed dead #define ALPHA 0.05 (actual EMA uses hardcoded 0.1f)
 
 float smoothedDiameter = 0.0;
 bool filterInitialized = false;
@@ -110,6 +110,7 @@ void checkGoToStatus();
 // -----------------------------
 void addDataPoint(int cm, float diameter, float rawDisplay) {
   DataPoint* newPoint = new DataPoint();
+  if (!newPoint) { Serial.println("[OOM] DataPoint alloc failed"); return; }  // FW-11
   newPoint->cm = cm;
   
   // Applica EMA smoothing
@@ -131,7 +132,7 @@ void addDataPoint(int cm, float diameter, float rawDisplay) {
     DataPoint* prev = nullptr;
     while (current != nullptr) {
       if (current->cm == cm) {
-        current->diameter = diameter;
+        current->diameter = newPoint->diameter;  // FW-04: use EMA-smoothed value, not raw
         current->rawDisplay = rawDisplay;
         delete newPoint;
         return;
@@ -206,28 +207,33 @@ void motorHandleStatusLine(const char* line) {
   if (!colon) return;
   
   String newMode = String(p).substring(0, colon - p);
-  motorDir = String(colon + 1);
   motorMode = newMode;
-  
+
+  // FW-12: parse direction field only (stop before the next colon that carries remaining steps)
+  const char* dirStart = colon + 1;
+  const char* colon2 = strchr(dirStart, ':');
+  if (colon2) {
+    motorDir = String(dirStart).substring(0, colon2 - dirStart);
+  } else {
+    motorDir = String(dirStart);
+  }
+
   // Gestione GOTOPOS
   if (motorMode == "GOTOPOS") {
     isGoToActive = true;
-    const char* colon2 = strchr(colon + 1, ':');
     if (colon2) {
       int remaining = atoi(colon2 + 1);
       if (remaining == 0) {
-        // GOTOPOS completato!
+        // FW-03: slave sent STATUS:GOTOPOS:DIR:0 before calling stopMotion() → confirmed arrival
         isGoToActive = false;
-        // Ripristina lo stato di scansione precedente
-        if (oldScanState) {
-          scanEnabled = true;
-          oldScanState = false;
-          Serial.println("GOTOPOS completato! Scansione riattivata.");
-          
-          // Notifica il client
-          String json = "{\"type\":\"goto_status\",\"active\":false,\"completed\":true}";
-          webSocket.broadcastTXT(json);
-        }
+        scanEnabled = oldScanState;
+        oldScanState = false;
+        Serial.println("GOTOPOS completato!");
+        // FW-13: broadcast restored scan state so clients stay in sync
+        String scanJson = "{\"type\":\"scan_enabled\",\"value\":" + String(scanEnabled ? "true" : "false") + "}";
+        webSocket.broadcastTXT(scanJson);
+        String json = "{\"type\":\"goto_status\",\"active\":false,\"completed\":true}";
+        webSocket.broadcastTXT(json);
       } else {
         // Invia stato di avanzamento al client
         int currentCm = (encoderValue / PULSES_PER_CM) - 2;
@@ -240,11 +246,11 @@ void motorHandleStatusLine(const char* line) {
   } else if (motorMode == "STOP") {
     if (isGoToActive) {
       isGoToActive = false;
-      // Ripristina scansione se era attiva
-      if (oldScanState) {
-        scanEnabled = true;
-        oldScanState = false;
-      }
+      scanEnabled = oldScanState;
+      oldScanState = false;
+      // FW-13: broadcast restored scan state
+      String scanJson = "{\"type\":\"scan_enabled\",\"value\":" + String(scanEnabled ? "true" : "false") + "}";
+      webSocket.broadcastTXT(scanJson);
       String json = "{\"type\":\"goto_status\",\"active\":false,\"completed\":false,\"reason\":\"stopped\"}";
       webSocket.broadcastTXT(json);
     }
@@ -293,6 +299,7 @@ void checkGoToStatus() {
 
 // ----------------------------- GOTOPOS Function -----------------------------
 void goToPosition(float targetCm) {
+  if (isGoToActive) return;  // FW-08: prevent re-entrant call from WebSocket corrupting oldScanState
   if (targetCm < 0) {
     Serial.println("ERRORE: Target non valido");
     return;
@@ -313,8 +320,9 @@ void goToPosition(float targetCm) {
   // Determina la direzione
   bool direction = (targetCm > currentCm);
   
-  // Invia comando allo slave (target in cm, verrà convertito in passi dallo slave)
-  String cmd = "GOTOPOS:" + String(targetCm, 2) + ":" + String(MOTOR_FAST_HZ) + ":" + (direction ? "F" : "B");
+  // FW-07: slave step counter starts at 0 at boot; master's cm = (encoder/30)-2,
+  // so to reach master-coordinate X the slave must move to (X+2)*30 steps → send X+2.
+  String cmd = "GOTOPOS:" + String(targetCm + 2.0f, 2) + ":" + String(MOTOR_FAST_HZ) + ":" + (direction ? "F" : "B");
   motorQueueTx(cmd);
   
   goToTargetCm = targetCm;
@@ -1346,22 +1354,27 @@ void loop() {
 
   calculateSpeed();
 
+  // FW-09: single atomic snapshot of volatile encoderValue for consistent use this iteration
+  noInterrupts();
+  long encSnap = encoderValue;
+  interrupts();
+
   // Watchdog encoder: auto-stop motore dopo 5s fermo
   {
     unsigned long now = millis();
-    long encNow = encoderValue;
-    if (encNow != encoderLastValueForWatchdog) {
-      encoderLastValueForWatchdog = encNow;
+    if (encSnap != encoderLastValueForWatchdog) {
+      encoderLastValueForWatchdog = encSnap;
       encoderLastMoveMs = now;
       encoderWatchdogStopSent = false;
-    } else if (!encoderWatchdogStopSent && encoderLastMoveMs > 0 && (now - encoderLastMoveMs >= 5000)) {
+    } else if (!isGoToActive && !encoderWatchdogStopSent && encoderLastMoveMs > 0 && (now - encoderLastMoveMs >= 5000)) {
+      // FW-10: watchdog suppressed during GOTOPOS (slow final approach looks like no movement)
       motorQueueTx("STOP");
       encoderWatchdogStopSent = true;
       Serial.println("Watchdog: encoder fermo da 5s, motore STOP");
     }
   }
 
-  int currentCm = (encoderValue / PULSES_PER_CM) - 2;
+  int currentCm = (encSnap / PULSES_PER_CM) - 2;
 
   // Acquisizione dati solo se scansione abilitata e NON in GOTOPOS
   if (!isGoToActive && currentCm != lastCm && currentCm >= 0 && scanEnabled) {
@@ -1408,18 +1421,35 @@ float readCaliperAverage(int samples) {
 }
 
 void readCaliper() {
-  while (digitalRead(CALIPER_CLOCK_PIN) == LOW) {}
+  // FW-01: add timeouts to prevent infinite spin if caliper is off/disconnected
+  const unsigned long BIT_TIMEOUT_US  = 500;       // max single clock phase (one bit ~160µs)
+  const unsigned long PKT_TIMEOUT_US  = 300000UL;  // max inter-packet HIGH gap (~150ms typical)
+  unsigned long t0 = micros();
+  while (digitalRead(CALIPER_CLOCK_PIN) == LOW) {
+    if (micros() - t0 > BIT_TIMEOUT_US) return;  // stuck LOW → caliper absent
+  }
   long tmpMicros = micros();
-  while (digitalRead(CALIPER_CLOCK_PIN) == HIGH) {}
+  t0 = micros();
+  while (digitalRead(CALIPER_CLOCK_PIN) == HIGH) {
+    if (micros() - t0 > PKT_TIMEOUT_US) return;  // stuck HIGH → caliper absent
+  }
   if ((micros() - tmpMicros) > 500) decodeCaliperReadings();
 }
 
 void decodeCaliperReadings() {
+  // FW-01: timeouts on each bit loop prevent hanging if signal is lost mid-frame
+  const unsigned long BIT_TIMEOUT_US = 500;
   long value = 0;
   int sign = 1;
   for (int i = 0; i < 24; i++) {
-    while (digitalRead(CALIPER_CLOCK_PIN) == LOW) {}
-    while (digitalRead(CALIPER_CLOCK_PIN) == HIGH) {}
+    unsigned long t0 = micros();
+    while (digitalRead(CALIPER_CLOCK_PIN) == LOW) {
+      if (micros() - t0 > BIT_TIMEOUT_US) return;  // bail — leave lineDiameter at last good value
+    }
+    t0 = micros();
+    while (digitalRead(CALIPER_CLOCK_PIN) == HIGH) {
+      if (micros() - t0 > BIT_TIMEOUT_US) return;
+    }
     if (digitalRead(CALIPER_DATA_PIN)) {
       if (i < 20) value |= (1 << i);
       if (i == 20) sign = -1;
