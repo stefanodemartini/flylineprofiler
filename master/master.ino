@@ -1585,6 +1585,15 @@ void handleCommand(String cmd) {
     return;
   }
 
+  if (cmd == "resetpos") {
+    // Reset only the encoder position (display → 0); does NOT clear measurement data.
+    encoderValue = 2 * PULSES_PER_CM;
+    lastCm = -1;
+    Serial.println("Posizione azzerata.");
+    sendParamsToClients();
+    return;
+  }
+
   if (cmd == "readraw") {
     float display = readCaliperDisplay();
     Serial.print("Display calibro: ");
