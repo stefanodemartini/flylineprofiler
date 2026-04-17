@@ -26,32 +26,40 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     public string UiStatus
     {
         get => _uiStatus;
-        set
-        {
-            _uiStatus = value;
-            OnPropertyChanged(nameof(UiStatus));
-        }
+        set { _uiStatus = value; OnPropertyChanged(nameof(UiStatus)); }
     }
 
-    public string ImportedSeriesStatus => $"Serie importate: {_importedSeries.Count}";
+    public string ImportedSeriesStatus   => $"Serie importate: {_importedSeries.Count}";
     public string LastImportedFileStatus => $"Ultimo CSV: {_lastImportedFile}";
-    public string AutoFitStatus => $"Auto-fit: {(_autoFitEnabled ? "ON" : "OFF")}";
+    public string AutoFitStatus          => $"Auto-fit: {(_autoFitEnabled ? "ON" : "OFF")}";
 
     public MainWindow()
     {
         InitializeComponent();
         DataContext = _vm;
 
-        Loaded += async (_, __) =>
-   {
-       SetupPlot();
-       await _vm.InitializeAsync();
-       _autoFitEnabled = _vm.Settings.Chart.AutoFit;
-       _vm.Points.CollectionChanged += Points_CollectionChanged;
-       _vm.PropertyChanged += (s, e) => RefreshStatusBar();  // ← aggiungi questa
-       RefreshPlot();
-       RefreshStatusBar();
-   };
+        // Load chart history when WebSocket connects, without triggering per-point plot redraws
+        _vm.OnConnected += async () =>
+        {
+            _vm.Points.CollectionChanged -= Points_CollectionChanged;
+            await _vm.LoadHistoryAsync();
+            _vm.Points.CollectionChanged += Points_CollectionChanged;
+            Dispatcher.Invoke(RefreshPlot);
+        };
+
+        // Redraw when live data resets
+        _vm.OnDataCleared += () => Dispatcher.Invoke(RefreshPlot);
+
+        Loaded += async (_, _) =>
+        {
+            SetupPlot();
+            _autoFitEnabled = _vm.Settings.Chart.AutoFit;
+            _vm.Points.CollectionChanged += Points_CollectionChanged;
+            _vm.PropertyChanged += (_, _) => RefreshStatusBar();
+            await _vm.InitializeAsync();
+            RefreshPlot();
+            RefreshStatusBar();
+        };
     }
 
     private void OnPropertyChanged(string propertyName)
@@ -66,37 +74,28 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private void SetupPlot()
     {
-        if (_plotInitialized)
-            return;
-
+        if (_plotInitialized) return;
         var plot = PlotControl.Plot;
         plot.Clear();
-
         plot.Title("Profilo diametro linea");
         plot.XLabel("Lunghezza (cm)");
         plot.YLabel("Diametro (mm)");
         plot.ShowLegend();
-
         _plotInitialized = true;
         PlotControl.Refresh();
     }
 
     private void Points_CollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
-    {
-        Dispatcher.Invoke(RefreshPlot);
-    }
+        => Dispatcher.Invoke(RefreshPlot);
 
     private void RefreshPlot()
     {
-        if (!_plotInitialized)
-            return;
+        if (!_plotInitialized) return;
 
         var plot = PlotControl.Plot;
         plot.Clear();
 
-        var pts = _vm.Points
-            .OrderBy(p => p.X)
-            .ToList();
+        var pts = _vm.Points.OrderBy(p => p.X).ToList();
 
         if (pts.Count > 0)
         {
@@ -104,32 +103,30 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
             if (_vm.Settings.Chart.ShowFilteredSeries)
             {
-                double[] ysFiltered = pts.Select(p => p.FilteredY).ToArray();
-                var filtered = plot.Add.Scatter(xs, ysFiltered);
+                var filtered = plot.Add.Scatter(xs, pts.Select(p => p.FilteredY).ToArray());
                 filtered.LegendText = "Filtered";
-                filtered.LineWidth = _vm.Settings.Chart.LineWidth;
+                filtered.LineWidth  = _vm.Settings.Chart.LineWidth;
                 filtered.MarkerSize = 0;
-                filtered.Color = Colors.Blue;
+                filtered.Color      = Colors.Blue;
             }
 
             if (_vm.Settings.Chart.ShowRawSeries)
             {
-                double[] ysRaw = pts.Select(p => p.RawY).ToArray();
-                var raw = plot.Add.Scatter(xs, ysRaw);
+                var raw = plot.Add.Scatter(xs, pts.Select(p => p.RawY).ToArray());
                 raw.LegendText = "Raw";
-                raw.LineWidth = 1;
+                raw.LineWidth  = 1;
                 raw.MarkerSize = 0;
-                raw.Color = Colors.Orange;
+                raw.Color      = Colors.Orange;
             }
         }
 
         foreach (var series in _importedSeries)
         {
-            var imported = plot.Add.Scatter(series.Xs, series.Ys);
-            imported.LegendText = series.Name;
-            imported.LineWidth = 2;
-            imported.MarkerSize = 0;
-            imported.Color = series.Color;
+            var imp = plot.Add.Scatter(series.Xs, series.Ys);
+            imp.LegendText = series.Name;
+            imp.LineWidth  = 2;
+            imp.MarkerSize = 0;
+            imp.Color      = series.Color;
         }
 
         plot.Title("Profilo diametro linea");
@@ -137,19 +134,18 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         plot.YLabel("Diametro (mm)");
         plot.ShowLegend();
 
-        if (_autoFitEnabled)
-            plot.Axes.AutoScale();
-
+        if (_autoFitEnabled) plot.Axes.AutoScale();
         PlotControl.Refresh();
         RefreshStatusBar();
     }
 
     private async Task Send(string cmd) => await _vm.SendCommandAsync(cmd);
 
+    // ── Connessione ──────────────────────────────────────────────────────────
     private async void Connect_Click(object sender, RoutedEventArgs e)
     {
-        UiStatus = "Connessione in corso...";
-        await _vm.ConnectAsync();
+        UiStatus = "Connessione in corso…";
+        await _vm.ConnectAsync(initiatedByUser: true);
         UiStatus = "Connessione richiesta";
     }
 
@@ -159,60 +155,63 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         UiStatus = "Disconnesso";
     }
 
+    // ── Comandi motore / scan ────────────────────────────────────────────────
     private async void StartScan_Click(object sender, RoutedEventArgs e)
     {
-            await Send("motor scan");
-    await Send("scanon");        // ← aggiungi questa riga
-    UiStatus = "SCAN inviato";
+        await Send("motor scan");
+        await Send("scan_on");          // ← fixed (was "scanon")
+        UiStatus = "SCAN inviato";
     }
 
     private async void Stop_Click(object sender, RoutedEventArgs e)
     {
         await Send("motor stop");
-        await Send("scanoff"); 
-        UiStatus = "Comando STOP inviato";
+        await Send("scan_off");         // ← fixed (was "scanoff")
+        UiStatus = "STOP inviato";
     }
 
     private async void ScanOn_Click(object sender, RoutedEventArgs e)
     {
-        await Send("scanon");
+        await Send("scan_on");          // ← fixed
         UiStatus = "Ricezione ON";
     }
 
     private async void ScanOff_Click(object sender, RoutedEventArgs e)
     {
-        await Send("scanoff");
+        await Send("scan_off");         // ← fixed
         UiStatus = "Ricezione OFF";
     }
 
- private async void FastS_Click(object sender, RoutedEventArgs e)
-{
-    await Send("motor fast_s");
-    UiStatus = "FAST stessa direzione inviato";
-}
+    private async void FastS_Click(object sender, RoutedEventArgs e)
+    {
+        await Send("motor fast_s");
+        UiStatus = "FAST stessa direzione";
+    }
+
     private async void FastO_Click(object sender, RoutedEventArgs e)
     {
         await Send("motor fast_o");
-        UiStatus = "FAST direzione opposta inviato";
+        UiStatus = "FAST direzione opposta";
     }
 
     private async void MotorStatus_Click(object sender, RoutedEventArgs e)
     {
         await Send("motor status");
-        UiStatus = "Richiesta stato motore inviata";
+        UiStatus = "Stato motore richiesto";
     }
 
+    // ── Strumenti ────────────────────────────────────────────────────────────
     private async void Reset_Click(object sender, RoutedEventArgs e)
     {
         await Send("reset");
-        _vm.Points.Clear();
-        RefreshPlot();
-        UiStatus = "Dati live resettati";
+        _vm.ClearAllData();
+        UiStatus = "Dati resettati";
     }
 
     private async void ReadRaw_Click(object sender, RoutedEventArgs e)
     {
         await Send("readraw");
+        _vm.AppendLog("Nota: la risposta readraw appare sulla console seriale del dispositivo");
         UiStatus = "Lettura raw richiesta";
     }
 
@@ -228,57 +227,56 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         UiStatus = "Offset resettato";
     }
 
-    private void Exit_Click(object sender, RoutedEventArgs e) => Close();
-
-    private void Settings_Click(object sender, RoutedEventArgs e)
+    private async void SetOffset_Click(object sender, RoutedEventArgs e)
     {
-        AppSettings copy = _vm.CloneSettings();
+        var input = Microsoft.VisualBasic.Interaction.InputBox(
+            "Inserisci valore offset in mm (usa punto come separatore decimale):",
+            "Imposta Offset",
+            "0.00");
 
-        var win = new SettingsWindow(copy)
+        if (string.IsNullOrWhiteSpace(input)) return;
+
+        if (TryParseDouble(input, out var offset))
         {
-            Owner = this
-        };
-
-        bool? result = win.ShowDialog();
-
-        if (result == true)
+            await Send($"setoffset {offset.ToString("0.000", CultureInfo.InvariantCulture)}");
+            UiStatus = $"Offset impostato: {offset:0.000} mm";
+        }
+        else
         {
-            _vm.ApplySettings(win.EditableSettings);
-            _autoFitEnabled = _vm.Settings.Chart.AutoFit;
-            RefreshPlot();
-            UiStatus = "Impostazioni salvate";
-            MessageBox.Show("Impostazioni salvate.", "Settings");
+            MessageBox.Show("Valore non valido. Usa il punto come separatore decimale (es. 0.25).",
+                            "Errore", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
     }
 
+    // ── GOTOPOS ──────────────────────────────────────────────────────────────
     private async void Goto_Click(object sender, RoutedEventArgs e)
     {
-        var input = Microsoft.VisualBasic.Interaction.InputBox("Inserisci target in cm", "GOTOPOS", "150");
+        var input = Microsoft.VisualBasic.Interaction.InputBox(
+            "Inserisci la posizione target in cm:",
+            "Vai a posizione",
+            "150");
 
-        if (double.TryParse(input, NumberStyles.Float, CultureInfo.InvariantCulture, out var cm) ||
-            double.TryParse(input, NumberStyles.Float, CultureInfo.GetCultureInfo("it-IT"), out cm))
+        if (TryParseDouble(input, out var cm) && cm >= 0)
         {
             await Send($"goto {cm.ToString("0.0", CultureInfo.InvariantCulture)}");
             UiStatus = $"Goto richiesto a {cm:0.0} cm";
         }
     }
 
+    // ── CSV import / export ──────────────────────────────────────────────────
     private void ExportCsv_Click(object sender, RoutedEventArgs e)
     {
         var dlg = new SaveFileDialog
         {
-            Filter = "CSV files (*.csv)|*.csv",
-            DefaultExt = ".csv",
-            FileName = "diametrolinea_export.csv"
+            Filter      = "CSV files (*.csv)|*.csv",
+            DefaultExt  = ".csv",
+            FileName    = "diametrolinea_export.csv"
         };
-
-        if (dlg.ShowDialog() != true)
-            return;
+        if (dlg.ShowDialog() != true) return;
 
         var sb = new StringBuilder();
         sb.AppendLine("Lunghezza cm,Raw mm,Filtered mm");
-
-        foreach (MeasurementPoint p in _vm.Points.OrderBy(p => p.X))
+        foreach (var p in _vm.Points.OrderBy(p => p.X))
             sb.AppendLine($"{p.X:0.0},{p.RawY:0.000},{p.FilteredY:0.000}");
 
         File.WriteAllText(dlg.FileName, sb.ToString());
@@ -290,16 +288,14 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     {
         var dlg = new SaveFileDialog
         {
-            Filter = "PNG files (*.png)|*.png",
+            Filter     = "PNG files (*.png)|*.png",
             DefaultExt = ".png",
-            FileName = "diametrolinea_plot.png"
+            FileName   = "diametrolinea_plot.png"
         };
-
-        if (dlg.ShowDialog() != true)
-            return;
+        if (dlg.ShowDialog() != true) return;
 
         PlotControl.Plot.SavePng(dlg.FileName, 1400, 800);
-        UiStatus = "PNG grafico esportato";
+        UiStatus = "PNG esportato";
         MessageBox.Show($"PNG esportato in:\n{dlg.FileName}");
     }
 
@@ -307,17 +303,15 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     {
         var dlg = new OpenFileDialog
         {
-            Filter = "CSV files (*.csv)|*.csv|Text files (*.txt)|*.txt|All files (*.*)|*.*",
+            Filter    = "CSV files (*.csv)|*.csv|Text files (*.txt)|*.txt|All files (*.*)|*.*",
             Multiselect = false,
-            Title = "Importa CSV confronto"
+            Title     = "Importa CSV confronto"
         };
-
-        if (dlg.ShowDialog() != true)
-            return;
+        if (dlg.ShowDialog() != true) return;
 
         try
         {
-            ImportedSeries series = LoadImportedSeries(dlg.FileName);
+            var series = LoadImportedSeries(dlg.FileName);
             _importedSeries.Add(series);
             _lastImportedFile = Path.GetFileName(dlg.FileName);
             UiStatus = $"CSV importato: {series.Name}";
@@ -331,11 +325,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
     }
 
+    // ── Grafico ──────────────────────────────────────────────────────────────
     private void FitPlot_Click(object sender, RoutedEventArgs e)
     {
         PlotControl.Plot.Axes.AutoScale();
         PlotControl.Refresh();
-        UiStatus = "Assi adattati ai dati";
+        UiStatus = "Assi adattati";
     }
 
     private void ClearImported_Click(object sender, RoutedEventArgs e)
@@ -354,9 +349,28 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             _vm.Settings.Chart.AutoFit = _autoFitEnabled;
             _vm.SaveSettings();
             RefreshPlot();
-            UiStatus = _autoFitEnabled ? "Auto-fit attivato" : "Auto-fit disattivato";
+            UiStatus = _autoFitEnabled ? "Auto-fit ON" : "Auto-fit OFF";
         }
     }
+
+    // ── Impostazioni ─────────────────────────────────────────────────────────
+    private void Settings_Click(object sender, RoutedEventArgs e)
+    {
+        var copy = _vm.CloneSettings();
+        var win  = new SettingsWindow(copy) { Owner = this };
+        if (win.ShowDialog() == true)
+        {
+            _vm.ApplySettings(win.EditableSettings);
+            _autoFitEnabled = _vm.Settings.Chart.AutoFit;
+            RefreshPlot();
+            UiStatus = "Impostazioni salvate";
+            MessageBox.Show("Impostazioni salvate.", "Settings");
+        }
+    }
+
+    private void Exit_Click(object sender, RoutedEventArgs e) => Close();
+
+    // ── Log ──────────────────────────────────────────────────────────────────
     private void TxtLog_TextChanged(object sender, TextChangedEventArgs e)
     {
         if (ChkAutoScroll.IsChecked == true)
@@ -365,49 +379,35 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private void ClearLog_Click(object sender, RoutedEventArgs e)
     {
-        // Se LogText è una proprietà del ViewModel
         if (DataContext is MainViewModel vm)
             vm.LogText = string.Empty;
     }
+
+    // ── CSV helpers ──────────────────────────────────────────────────────────
     private ImportedSeries LoadImportedSeries(string fileName)
     {
         var xs = new List<double>();
         var ys = new List<double>();
 
         string[] lines = File.ReadAllLines(fileName);
-
-        foreach (string rawLine in lines)
+        foreach (var rawLine in lines)
         {
-            if (string.IsNullOrWhiteSpace(rawLine))
-                continue;
+            if (string.IsNullOrWhiteSpace(rawLine)) continue;
+            var line = rawLine.Trim();
+            if (char.IsLetter(line[0])) continue;
 
-            string line = rawLine.Trim();
-
-            if (char.IsLetter(line[0]))
-                continue;
-
-            string[] parts = line.Split(new[] { ';', ',', '\t' }, StringSplitOptions.None)
-                                 .Select(p => p.Trim())
-                                 .ToArray();
-
-            if (parts.Length < 2)
-                continue;
+            var parts = line.Split(new[] { ';', ',', '\t' }, StringSplitOptions.None)
+                            .Select(p => p.Trim()).ToArray();
+            if (parts.Length < 2) continue;
 
             bool okX = TryParseDouble(parts[0], out double x);
             bool okY = false;
             double y = 0;
 
-            if (parts.Length >= 3)
-                okY = TryParseDouble(parts[2], out y);
+            if (parts.Length >= 3) okY = TryParseDouble(parts[2], out y);
+            if (!okY) okY = TryParseDouble(parts[1], out y);
 
-            if (!okY)
-                okY = TryParseDouble(parts[1], out y);
-
-            if (okX && okY)
-            {
-                xs.Add(x);
-                ys.Add(y);
-            }
+            if (okX && okY) { xs.Add(x); ys.Add(y); }
         }
 
         if (xs.Count == 0)
@@ -415,39 +415,28 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         return new ImportedSeries
         {
-            Name = Path.GetFileNameWithoutExtension(fileName),
-            Xs = xs.ToArray(),
-            Ys = ys.ToArray(),
+            Name  = Path.GetFileNameWithoutExtension(fileName),
+            Xs    = xs.ToArray(),
+            Ys    = ys.ToArray(),
             Color = PickImportColor(_importedSeries.Count)
         };
     }
 
-    private static bool TryParseDouble(string text, out double value)
-    {
-        return double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out value) ||
-               double.TryParse(text, NumberStyles.Float, CultureInfo.GetCultureInfo("it-IT"), out value);
-    }
+    private static bool TryParseDouble(string text, out double value) =>
+        double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out value) ||
+        double.TryParse(text, NumberStyles.Float, CultureInfo.GetCultureInfo("it-IT"), out value);
 
     private static Color PickImportColor(int index)
     {
-        Color[] palette =
-        {
-            Colors.Green,
-            Colors.Red,
-            Colors.Purple,
-            Colors.Brown,
-            Colors.Cyan,
-            Colors.Magenta
-        };
-
+        Color[] palette = { Colors.Green, Colors.Red, Colors.Purple, Colors.Brown, Colors.Cyan, Colors.Magenta };
         return palette[index % palette.Length];
     }
 
     private class ImportedSeries
     {
-        public string Name { get; set; } = "";
-        public double[] Xs { get; set; } = Array.Empty<double>();
-        public double[] Ys { get; set; } = Array.Empty<double>();
-        public Color Color { get; set; } = Colors.Green;
+        public string   Name  { get; set; } = "";
+        public double[] Xs    { get; set; } = Array.Empty<double>();
+        public double[] Ys    { get; set; } = Array.Empty<double>();
+        public Color    Color { get; set; } = Colors.Green;
     }
 }

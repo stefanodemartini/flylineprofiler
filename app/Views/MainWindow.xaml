@@ -27,6 +27,7 @@
                 <MenuItem Header="Lettura raw" Click="ReadRaw_Click"/>
                 <MenuItem Header="Zero display" Click="SetDisplayZero_Click"/>
                 <MenuItem Header="Reset offset" Click="ResetOffset_Click"/>
+                <MenuItem Header="Imposta Offset…" Click="SetOffset_Click"/>
             </MenuItem>
 
             <MenuItem Header="Grafico">
@@ -77,27 +78,33 @@
             </Grid.ColumnDefinitions>
 
             <GroupBox Header="Stato" Grid.Row="0" Grid.ColumnSpan="3" Margin="0,0,0,8">
-                <UniformGrid Rows="1" Columns="7">
+                <UniformGrid Rows="1" Columns="9">
                     <StackPanel Margin="8"><TextBlock Text="Connessione" FontWeight="Bold"/><TextBlock Text="{Binding ConnectionStatus}"/></StackPanel>
                     <StackPanel Margin="8"><TextBlock Text="Motore" FontWeight="Bold"/><TextBlock Text="{Binding MotorState}"/></StackPanel>
                     <StackPanel Margin="8"><TextBlock Text="Lunghezza" FontWeight="Bold"/><TextBlock Text="{Binding CurrentLength}"/></StackPanel>
                     <StackPanel Margin="8"><TextBlock Text="Diametro" FontWeight="Bold"/><TextBlock Text="{Binding CurrentDiameter}"/></StackPanel>
                     <StackPanel Margin="8"><TextBlock Text="Display" FontWeight="Bold"/><TextBlock Text="{Binding CurrentDisplay}"/></StackPanel>
-                    <StackPanel Margin="8"><TextBlock Text="Velocità" FontWeight="Bold"/><TextBlock Text="{Binding Speed}"/></StackPanel>
+                    <StackPanel Margin="8">
+                        <TextBlock Text="Velocità" FontWeight="Bold"/>
+                        <TextBlock Text="{Binding Speed}"/>
+                        <TextBlock Text="{Binding SpeedStatus}" FontSize="10" Foreground="Gray"/>
+                    </StackPanel>
                     <StackPanel Margin="8"><TextBlock Text="Punti" FontWeight="Bold"/><TextBlock Text="{Binding PointsCount}"/></StackPanel>
+                    <StackPanel Margin="8"><TextBlock Text="Zero Display" FontWeight="Bold"/><TextBlock Text="{Binding DisplayZeroText}"/></StackPanel>
+                    <StackPanel Margin="8"><TextBlock Text="Offset" FontWeight="Bold"/><TextBlock Text="{Binding OffsetText}"/></StackPanel>
                 </UniformGrid>
             </GroupBox>
 
             <GroupBox Header="Comandi" Grid.Row="1" Grid.ColumnSpan="2" Margin="0,0,8,8">
                 <WrapPanel Margin="8">
-                    <Button Content="START SCAN" Margin="4" Padding="14,8" Click="StartScan_Click"/>
-                    <Button Content="STOP" Margin="4" Padding="14,8" Click="Stop_Click"/>
-                    <Button Content="Ricezione ON" Margin="4" Padding="14,8" Click="ScanOn_Click"/>
-                    <Button Content="Ricezione OFF" Margin="4" Padding="14,8" Click="ScanOff_Click"/>
-                    <Button Content="FAST stessa dir" Margin="4" Padding="14,8" Click="FastS_Click"/>
-                    <Button Content="FAST opposta dir" Margin="4" Padding="14,8" Click="FastO_Click"/>
-                    <Button Content="Aggiorna stato" Margin="4" Padding="14,8" Click="MotorStatus_Click"/>
-                    <Button Content="Vai a posizione" Margin="4" Padding="14,8" Click="Goto_Click"/>
+                    <Button Content="START SCAN"    Margin="4" Padding="14,8" Click="StartScan_Click"   IsEnabled="{Binding CanControl}"/>
+                    <Button Content="STOP"          Margin="4" Padding="14,8" Click="Stop_Click"/>
+                    <Button Content="Ricezione ON"  Margin="4" Padding="14,8" Click="ScanOn_Click"      IsEnabled="{Binding CanEnableScan}"/>
+                    <Button Content="Ricezione OFF" Margin="4" Padding="14,8" Click="ScanOff_Click"     IsEnabled="{Binding ScanReceiving}"/>
+                    <Button Content="FAST stessa dir"  Margin="4" Padding="14,8" Click="FastS_Click"   IsEnabled="{Binding CanControl}"/>
+                    <Button Content="FAST opposta dir" Margin="4" Padding="14,8" Click="FastO_Click"   IsEnabled="{Binding CanControl}"/>
+                    <Button Content="Aggiorna stato"   Margin="4" Padding="14,8" Click="MotorStatus_Click"/>
+                    <Button Content="Vai a posizione"  Margin="4" Padding="14,8" Click="Goto_Click"    IsEnabled="{Binding CanControl}"/>
                 </WrapPanel>
             </GroupBox>
 

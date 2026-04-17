@@ -11,41 +11,59 @@ public class BackendClient
     public event Action? Connected;
     public event Action? Disconnected;
     public bool IsConnected => _ws?.State == WebSocketState.Open;
-public async Task ConnectAsync(BackendSettings settings)
-{
-    _cts?.Dispose();
-    _ws?.Dispose();
 
-    _cts = new CancellationTokenSource(TimeSpan.FromSeconds(settings.ConnectTimeoutSeconds));
-    _ws = new ClientWebSocket();
-
-    var uri = new Uri($"ws://{settings.Host}:{settings.WebSocketPort}/");
-
-    try
+    public async Task ConnectAsync(BackendSettings settings)
     {
-        await _ws.ConnectAsync(uri, _cts.Token);
-        Connected?.Invoke();
-        _ = ReceiveLoopAsync(_ws, CancellationToken.None);
+        _cts?.Dispose();
+        _ws?.Dispose();
+
+        _cts = new CancellationTokenSource(TimeSpan.FromSeconds(settings.ConnectTimeoutSeconds));
+        _ws = new ClientWebSocket();
+
+        var uri = new Uri($"ws://{settings.Host}:{settings.WebSocketPort}/");
+
+        try
+        {
+            await _ws.ConnectAsync(uri, _cts.Token);
+            Connected?.Invoke();
+            _ = ReceiveLoopAsync(_ws, CancellationToken.None);
+        }
+        catch
+        {
+            _ws.Dispose();
+            _ws = null;
+            throw;
+        }
     }
-    catch
-    {
-        _ws.Dispose();
-        _ws = null;
-        throw;
-    }
-}
+
     public async Task DisconnectAsync()
     {
         if (_ws is { State: WebSocketState.Open })
             await _ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "bye", CancellationToken.None);
         Disconnected?.Invoke();
     }
+
     public async Task SendAsync(string command)
     {
         if (_ws?.State != WebSocketState.Open) return;
         var bytes = Encoding.UTF8.GetBytes(command);
         await _ws.SendAsync(bytes, WebSocketMessageType.Text, true, CancellationToken.None);
     }
+
+    public async Task<string?> FetchExportCsvAsync(BackendSettings settings)
+    {
+        using var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+        var url = $"http://{settings.Host}:{settings.HttpPort}/export";
+        try
+        {
+            return await client.GetStringAsync(url);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     private async Task ReceiveLoopAsync(ClientWebSocket ws, CancellationToken ct)
     {
         var buffer = new byte[8192];
@@ -59,6 +77,7 @@ public async Task ConnectAsync(BackendSettings settings)
         }
         Disconnected?.Invoke();
     }
+
     public static JsonDocument? TryParseJson(string text)
     {
         try { return JsonDocument.Parse(text); } catch { return null; }
