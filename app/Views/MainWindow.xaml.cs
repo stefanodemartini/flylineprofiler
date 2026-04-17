@@ -230,14 +230,29 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         // No nearby node → add new node
         double snappedX = Math.Round(coords.X);
-        double y        = Math.Round(coords.Y, 3);
+
+        // Shift held: lock Y to the nearest preceding (or following) node's Y → horizontal segment
+        double y;
+        if (Keyboard.IsKeyDown(Key.LeftShift) || Keyboard.IsKeyDown(Key.RightShift))
+        {
+            var anchor = _segmentNodes
+                .OrderBy(n => Math.Abs(n.X - snappedX))
+                .FirstOrDefault();
+            y = anchor == default ? Math.Round(coords.Y, 3) : anchor.Y;
+        }
+        else
+        {
+            y = Math.Round(coords.Y, 3);
+        }
 
         _segmentNodes.RemoveAll(n => n.X == snappedX);
         _segmentNodes.Add((snappedX, y));
         _segmentUndoStack.Push(snappedX);
 
         RefreshPlot();
-        UiStatus = $"Nodo aggiunto: {snappedX:0} cm = {y:0.000} mm  (totale {_segmentNodes.Count})";
+        var hint = (Keyboard.IsKeyDown(Key.LeftShift) || Keyboard.IsKeyDown(Key.RightShift))
+                   ? "  [SHIFT — collimato]" : string.Empty;
+        UiStatus = $"Nodo aggiunto: {snappedX:0} cm = {y:0.000} mm  (totale {_segmentNodes.Count}){hint}";
         e.Handled = true;
     }
 
