@@ -9,8 +9,8 @@ include <WiFi.h>
 // ===============================
 // FW
 // ===============================
-#define FIRMWARE_VERSION "0.3.0"
-#define FIRMWARE_DATE "2026-03-27"
+#define FIRMWARE_VERSION "0.4.0"
+#define FIRMWARE_DATE "2026-04-17"
 #define FIRMWARE_FEATURES "WiFi Manager + EMA + 0.01mm + UART Motor + Scan timer + Autostop + RicezioneON/OFF + GOTOPOS"
 
 // -----------------------------

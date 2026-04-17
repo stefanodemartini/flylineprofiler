@@ -3,8 +3,8 @@
 // ===============================
 // FW SLAVE - Controllo Motore Passo-Passo
 // ===============================
-#define FIRMWARE_VERSION "0.3.0"
-#define FIRMWARE_DATE "2026-03-27"
+#define FIRMWARE_VERSION "0.4.0"
+#define FIRMWARE_DATE "2026-04-17"
 #define FIRMWARE_FEATURES "UART Control + GOTOPOS + Dynamic Speed + Buttons"
 
 // -----------------------------
