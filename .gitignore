@@ -1,0 +1,13 @@
+# .NET build output
+app/bin/
+app/obj/
+
+# Visual Studio / Rider
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Arduino IDE temp files
+*.bak

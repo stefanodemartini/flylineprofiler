@@ -1,0 +1,126 @@
+<Window x:Class="DiametroLineaDesktop.Views.SettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Impostazioni"
+        Height="520"
+        Width="520"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize">
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <TabControl Grid.Row="0">
+            <TabItem Header="Backend">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <Grid Margin="12">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="170"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Profilo" Margin="0,0,8,8" VerticalAlignment="Center"/>
+                        <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding Backend.ProfileName}" Margin="0,0,0,8"/>
+
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Host / IP" Margin="0,0,8,8" VerticalAlignment="Center"/>
+                        <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding Backend.Host}" Margin="0,0,0,8"/>
+
+                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Porta WebSocket" Margin="0,0,8,8" VerticalAlignment="Center"/>
+                        <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding Backend.WebSocketPort}" Margin="0,0,0,8"/>
+
+                        <TextBlock Grid.Row="3" Grid.Column="0" Text="Porta HTTP" Margin="0,0,8,8" VerticalAlignment="Center"/>
+                        <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding Backend.HttpPort}" Margin="0,0,0,8"/>
+
+                        <TextBlock Grid.Row="4" Grid.Column="0" Text="Timeout connessione (s)" Margin="0,0,8,8" VerticalAlignment="Center"/>
+                        <TextBox Grid.Row="4" Grid.Column="1" Text="{Binding Backend.ConnectTimeoutSeconds}" Margin="0,0,0,8"/>
+
+                        <TextBlock Grid.Row="5" Grid.Column="0" Text="Reconnect (s)" Margin="0,0,8,8" VerticalAlignment="Center"/>
+                        <TextBox Grid.Row="5" Grid.Column="1" Text="{Binding Backend.ReconnectSeconds}" Margin="0,0,0,8"/>
+
+                        <CheckBox Grid.Row="6" Grid.ColumnSpan="2"
+                                  Content="Auto-connect all'avvio"
+                                  IsChecked="{Binding Backend.AutoConnect}"
+                                  Margin="0,8,0,8"/>
+
+                        <StackPanel Grid.Row="7" Grid.ColumnSpan="2">
+                            <CheckBox Content="Invia getparams dopo connessione"
+                                      IsChecked="{Binding Backend.LoadParamsOnConnect}"
+                                      Margin="0,4,0,4"/>
+                            <CheckBox Content="Invia motor status dopo connessione"
+                                      IsChecked="{Binding Backend.LoadMotorStatusOnConnect}"
+                                      Margin="0,4,0,4"/>
+                        </StackPanel>
+                    </Grid>
+                </ScrollViewer>
+            </TabItem>
+
+            <TabItem Header="Grafico">
+                <Grid Margin="12">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="170"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+
+                    <CheckBox Grid.Row="0" Grid.ColumnSpan="2"
+                              Content="Mostra serie filtrata"
+                              IsChecked="{Binding Chart.ShowFilteredSeries}"
+                              Margin="0,0,0,8"/>
+
+                    <CheckBox Grid.Row="1" Grid.ColumnSpan="2"
+                              Content="Mostra serie raw"
+                              IsChecked="{Binding Chart.ShowRawSeries}"
+                              Margin="0,0,0,8"/>
+
+                    <CheckBox Grid.Row="2" Grid.ColumnSpan="2"
+                              Content="Auto-fit grafico"
+                              IsChecked="{Binding Chart.AutoFit}"
+                              Margin="0,0,0,8"/>
+
+                    <TextBlock Grid.Row="3" Grid.Column="0" Text="Tema" Margin="0,0,8,8" VerticalAlignment="Center"/>
+                    <ComboBox Grid.Row="3" Grid.Column="1" SelectedValue="{Binding Chart.Theme}" Margin="0,0,0,8">
+                        <ComboBoxItem Content="Light"/>
+                        <ComboBoxItem Content="Dark"/>
+                    </ComboBox>
+
+                    <TextBlock Grid.Row="4" Grid.Column="0" Text="Unità asse X" Margin="0,0,8,8" VerticalAlignment="Center"/>
+                    <ComboBox Grid.Row="4" Grid.Column="1" SelectedValue="{Binding Chart.XAxisUnit}" Margin="0,0,0,8">
+                        <ComboBoxItem Content="cm"/>
+                        <ComboBoxItem Content="m"/>
+                    </ComboBox>
+
+                    <TextBlock Grid.Row="5" Grid.Column="0" Text="Smoothing alpha" Margin="0,0,8,8" VerticalAlignment="Center"/>
+                    <TextBox Grid.Row="5" Grid.Column="1" Text="{Binding Chart.SmoothingAlpha}" Margin="0,0,0,8"/>
+
+                    <TextBlock Grid.Row="6" Grid.Column="0" Text="Spessore linea" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                    <TextBox Grid.Row="6" Grid.Column="1" Text="{Binding Chart.LineWidth}" />
+                </Grid>
+            </TabItem>
+        </TabControl>
+
+        <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+            <Button Content="Annulla" Width="100" Margin="0,0,8,0" Click="Cancel_Click"/>
+            <Button Content="Salva" Width="100" Click="Save_Click"/>
+        </StackPanel>
+    </Grid>
+</Window>

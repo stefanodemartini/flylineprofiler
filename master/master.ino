@@ -1,4 +1,5 @@
-#include <WiFi.h>
+
+include <WiFi.h>
 #include <WebServer.h>
 #include <WebSocketsServer.h>
 #include <EEPROM.h>
@@ -8,9 +9,9 @@
 // ===============================
 // FW
 // ===============================
-#define FIRMWARE_VERSION "0.2.3"
-#define FIRMWARE_DATE "2026-03-09"
-#define FIRMWARE_FEATURES "WiFi Manager + EMA + 0.01mm + UART Motor + Scan timer + Autostop + RicezioneON/OFF"
+#define FIRMWARE_VERSION "0.3.0"
+#define FIRMWARE_DATE "2026-03-27"
+#define FIRMWARE_FEATURES "WiFi Manager + EMA + 0.01mm + UART Motor + Scan timer + Autostop + RicezioneON/OFF + GOTOPOS"
 
 // -----------------------------
 #define ENCODER_DATA_PIN 12
@@ -24,10 +25,14 @@
 
 float lineDiameter = 0.0;
 bool scanEnabled = false;
+bool oldScanState = false;  // Per salvare stato scansione durante GOTOPOS
 
 #define ALPHA 0.05
+
 float smoothedDiameter = 0.0;
 bool filterInitialized = false;
+float emaStore = 0.0f;
+bool emaStoreInit = false;
 
 static const int MOTOR_UART_RX_PIN = 16;
 static const int MOTOR_UART_TX_PIN = 17;
@@ -49,6 +54,12 @@ static bool encoderWatchdogStopSent = false;
 static unsigned long lastMotorPollMs = 0;
 static const unsigned long MOTOR_POLL_INTERVAL_MS = 2000;
 static const unsigned long MOTOR_STALE_MS = 4000;
+
+// Parametri per GOTOPOS
+const uint32_t MOTOR_FAST_HZ = 12000;
+bool isGoToActive = false;
+float goToTargetCm = 0;
+unsigned long lastGoToStatusCheck = 0;
 
 struct DataPoint {
   int cm;
@@ -93,12 +104,22 @@ void motorPumpTx();
 void motorPumpRx();
 void motorPollIfNeeded();
 void motorHandleStatusLine(const char* line);
+void goToPosition(float targetCm);
+void checkGoToStatus();
 
 // -----------------------------
 void addDataPoint(int cm, float diameter, float rawDisplay) {
   DataPoint* newPoint = new DataPoint();
   newPoint->cm = cm;
-  newPoint->diameter = diameter;
+  
+  // Applica EMA smoothing
+  if (!emaStoreInit) {
+    emaStore = diameter;
+    emaStoreInit = true;
+  } else {
+    emaStore = 0.1f * diameter + 0.9f * emaStore;
+  }
+  newPoint->diameter = round(emaStore * 1000.0) / 1000.0;
   newPoint->rawDisplay = rawDisplay;
   newPoint->next = nullptr;
 
@@ -143,9 +164,13 @@ void clearAllData() {
   totalDataPoints = 0;
   filterInitialized = false;
   smoothedDiameter = 0.0;
+  emaStoreInit = false;
+  emaStore = 0.0f;
 }
 
-int getTotalDataPoints() { return totalDataPoints; }
+int getTotalDataPoints() {
+  return totalDataPoints;
+}
 
 void IRAM_ATTR updateEncoder() {
   int MSB = digitalRead(ENCODER_DATA_PIN);
@@ -158,8 +183,10 @@ void IRAM_ATTR updateEncoder() {
 }
 
 void motorQueueTx(const String& lineNoNewline) {
-  motorTxPending = lineNoNewline + "\n";
-  motorTxHasPending = true;
+    // Non sovrascrivere un comando utente con un semplice poll
+    if (motorTxHasPending && lineNoNewline == "STATUS?") return;
+    motorTxPending = lineNoNewline + "\n";
+    motorTxHasPending = true;
 }
 
 void motorPumpTx() {
@@ -173,11 +200,56 @@ void motorPumpTx() {
 
 void motorHandleStatusLine(const char* line) {
   if (strncmp(line, "STATUS:", 7) != 0) return;
+  
   const char* p = line + 7;
   const char* colon = strchr(p, ':');
   if (!colon) return;
-  motorMode = String(p).substring(0, colon - p);
+  
+  String newMode = String(p).substring(0, colon - p);
   motorDir = String(colon + 1);
+  motorMode = newMode;
+  
+  // Gestione GOTOPOS
+  if (motorMode == "GOTOPOS") {
+    isGoToActive = true;
+    const char* colon2 = strchr(colon + 1, ':');
+    if (colon2) {
+      int remaining = atoi(colon2 + 1);
+      if (remaining == 0) {
+        // GOTOPOS completato!
+        isGoToActive = false;
+        // Ripristina lo stato di scansione precedente
+        if (oldScanState) {
+          scanEnabled = true;
+          oldScanState = false;
+          Serial.println("GOTOPOS completato! Scansione riattivata.");
+          
+          // Notifica il client
+          String json = "{\"type\":\"goto_status\",\"active\":false,\"completed\":true}";
+          webSocket.broadcastTXT(json);
+        }
+      } else {
+        // Invia stato di avanzamento al client
+        int currentCm = (encoderValue / PULSES_PER_CM) - 2;
+        int remainingCm = remaining / PULSES_PER_CM;
+        String json = "{\"type\":\"goto_progress\",\"remaining_cm\":" + String(remainingCm) + 
+                     ",\"current_cm\":" + String(currentCm) + ",\"target_cm\":" + String(goToTargetCm) + "}";
+        webSocket.broadcastTXT(json);
+      }
+    }
+  } else if (motorMode == "STOP") {
+    if (isGoToActive) {
+      isGoToActive = false;
+      // Ripristina scansione se era attiva
+      if (oldScanState) {
+        scanEnabled = true;
+        oldScanState = false;
+      }
+      String json = "{\"type\":\"goto_status\",\"active\":false,\"completed\":false,\"reason\":\"stopped\"}";
+      webSocket.broadcastTXT(json);
+    }
+  }
+  
   motorLastSeenMs = millis();
   String json = "{\"type\":\"motor\",\"mode\":\"" + motorMode + "\",\"dir\":\"" + motorDir + "\"}";
   webSocket.broadcastTXT(json);
@@ -207,6 +279,58 @@ void motorPollIfNeeded() {
     String json = "{\"type\":\"motor\",\"mode\":\"OFFLINE\",\"dir\":\"--\"}";
     webSocket.broadcastTXT(json);
   }
+}
+
+void checkGoToStatus() {
+  if (!isGoToActive) return;
+  
+  unsigned long now = millis();
+  if (now - lastGoToStatusCheck > 500) {  // Ogni 500ms
+    lastGoToStatusCheck = now;
+    motorQueueTx("STATUS?");
+  }
+}
+
+// ----------------------------- GOTOPOS Function -----------------------------
+void goToPosition(float targetCm) {
+  if (targetCm < 0) {
+    Serial.println("ERRORE: Target non valido");
+    return;
+  }
+
+  float currentCm = (encoderValue / (float)PULSES_PER_CM) - 2;
+  
+  // Se già a target
+  if (abs(targetCm - currentCm) < 0.1) {
+    Serial.println("Già alla posizione target");
+    return;
+  }
+
+  // Salva stato scansione e sospendi
+  oldScanState = scanEnabled;
+  scanEnabled = false;
+  
+  // Determina la direzione
+  bool direction = (targetCm > currentCm);
+  
+  // Invia comando allo slave (target in cm, verrà convertito in passi dallo slave)
+  String cmd = "GOTOPOS:" + String(targetCm, 2) + ":" + String(MOTOR_FAST_HZ) + ":" + (direction ? "F" : "B");
+  motorQueueTx(cmd);
+  
+  goToTargetCm = targetCm;
+  isGoToActive = true;
+  lastGoToStatusCheck = 0;
+  
+  Serial.print("GOTOPOS avviato verso ");
+  Serial.print(targetCm, 2);
+  Serial.print(" cm (posizione attuale: ");
+  Serial.print(currentCm, 2);
+  Serial.println(" cm)");
+  
+  // Notifica il client web
+  String json = "{\"type\":\"goto_status\",\"active\":true,\"target\":" + String(targetCm, 2) + 
+                ",\"current\":" + String(currentCm, 2) + "}";
+  webSocket.broadcastTXT(json);
 }
 
 // -----------------------------
@@ -312,6 +436,42 @@ void setup() {
         .calib-col { flex: 1; min-width: 200px; }
         .calib-col h4 { margin: 0 0 10px; color: #555; font-size: 0.9em; text-transform: uppercase; letter-spacing: 0.04em; }
         .footer-info { margin-top: 20px; text-align: center; color: #666; }
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.5);
+        }
+        .modal-content {
+            background-color: white;
+            margin: 15% auto;
+            padding: 20px;
+            border-radius: 8px;
+            width: 300px;
+            text-align: center;
+        }
+        .modal-content input {
+            padding: 8px;
+            margin: 10px 0;
+            width: 90%;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .modal-buttons {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+        }
+        .goto-progress {
+            background: #e3f2fd;
+            padding: 5px 10px;
+            border-radius: 4px;
+            font-size: 0.85em;
+        }
     </style>
 </head>
 <body>
@@ -358,6 +518,7 @@ void setup() {
         <strong>Offset:</strong> <span id="currentOffset">0.00</span> mm |
         <strong>Motore:</strong> <span id="motorState">--</span> |
         <strong>Timer:</strong> <span class="scan-timer" id="scanTimer">00:00</span>
+        <span id="gotoProgress" class="goto-progress" style="display:none;"></span>
     </div>
 
     <div class="motor-bar">
@@ -368,6 +529,7 @@ void setup() {
         <button class="warning" onclick="sendCommand('motor fast_s')">FAST stessa dir</button>
         <button class="warning" onclick="sendCommand('motor fast_o')">FAST opposta dir</button>
         <button onclick="sendCommand('motor status')">Aggiorna Stato</button>
+        <button onclick="showGoToDialog()" style="background: #6c757d;">🎯 Vai a posizione</button>
     </div>
 
     <div class="chart-wrapper">
@@ -389,6 +551,11 @@ void setup() {
             &#x1F4CA; Grafico &amp; Dati <span class="accordion-arrow">&#x25BC;</span>
         </button>
         <div class="accordion-body acc-open">
+            <label>Smooth Alpha:
+            <input type="range" id="smoothAlpha" min="0.01" max="0.5" step="0.01" value="0.1"
+                oninput="document.getElementById('alphaVal').textContent=this.value">
+            <span id="alphaVal">0.1</span>
+            </label>
             <button onclick="resetChart()">Reset Grafico</button>
             <button onclick="exportAllData()">Esporta Tutti i Dati CSV</button>
             <button onclick="toggleAutoScale()">Auto-Fit: <span id="autoScaleStatus">ON</span></button>
@@ -458,12 +625,23 @@ void setup() {
         <p style="font-size:0.85em;color:#999;">
             <strong>Sistema Monitoraggio Diametro Linea</strong><br>
             Versione <strong>)rawliteral"
-      + String(FIRMWARE_VERSION) + R"rawliteral(</strong> |
+                  + String(FIRMWARE_VERSION) + R"rawliteral(</strong> |
             Build <strong>)rawliteral"
-      + String(FIRMWARE_DATE) + R"rawliteral(</strong> |
+                  + String(FIRMWARE_DATE) + R"rawliteral(</strong> |
             <strong>)rawliteral"
-      + String(FIRMWARE_FEATURES) + R"rawliteral(</strong>
+                  + String(FIRMWARE_FEATURES) + R"rawliteral(</strong>
         </p>
+    </div>
+</div>
+
+<div id="gotoModal" class="modal">
+    <div class="modal-content">
+        <h3>Vai a posizione (cm)</h3>
+        <input type="number" id="targetCm" placeholder="Inserisci lunghezza in cm" step="0.1">
+        <div class="modal-buttons">
+            <button onclick="executeGoTo()" class="success">Avvia</button>
+            <button onclick="closeModal()">Annulla</button>
+        </div>
     </div>
 </div>
 
@@ -478,6 +656,7 @@ void setup() {
     let currentOffset = 0.0;
     let uploadedDatasets = [];
     let nextDatasetId = 1;
+    let isGoToActive = false;
     const colorPalette = [
         '#FF6384','#36A2EB','#FFCE56','#4BC0C0','#9966FF',
         '#FF9F40','#FF6384','#C9CBCF','#7CFFB2','#F465D4',
@@ -489,6 +668,17 @@ void setup() {
     let scanStartMs = 0;
     let scanInterval = null;
     let scanReceiving = false;
+
+    function smoothEMA(data, alpha) {
+        let result = [{x: data[0].x, y: data[0].y}];
+        for (let i = 1; i < data.length; i++) {
+            result.push({
+                x: data[i].x,
+                y: alpha * data[i].y + (1 - alpha) * result[i-1].y
+            });
+        }
+        return result;
+    }
 
     function formatMMSS(totalSeconds) {
         const m = Math.floor(totalSeconds / 60);
@@ -515,6 +705,10 @@ void setup() {
     }
 
     function startScan() {
+        if (isGoToActive) {
+            showCommandStatus('Attendi completamento GOTOPOS', true);
+            return;
+        }
         stopTimer();
         document.getElementById('scanTimer').textContent = "00:00";
         startTimerIfNeeded();
@@ -527,6 +721,10 @@ void setup() {
     }
 
     function toggleScanEnable() {
+        if (isGoToActive) {
+            showCommandStatus('Impossibile modificare durante GOTOPOS', true);
+            return;
+        }
         scanReceiving = !scanReceiving;
         const btn = document.getElementById('btnScanEnable');
         if (scanReceiving) {
@@ -705,9 +903,10 @@ void setup() {
     }
 
     function addDatasetToChart(dataset) {
+        const smoothed = smoothEMA(dataset.data, 0.1);
         chart.data.datasets.push({
             label: dataset.name,
-            data: dataset.data,
+            data: smoothed,
             borderColor: dataset.color,
             backgroundColor: dataset.color + '1A',
             borderWidth: 3,
@@ -837,7 +1036,27 @@ void setup() {
                     updateSpeedDisplay(msg.speed);
                 } else if (msg.type === 'motor') {
                     document.getElementById('motorState').textContent = msg.mode + ' ' + msg.dir;
-                    // NON stoppiamo il timer qui
+                } else if (msg.type === 'goto_status') {
+                    isGoToActive = msg.active;
+                    const gotoBtn = document.querySelector('button[onclick="executeGoTo()"]');
+                    if (gotoBtn) gotoBtn.disabled = msg.active;
+                    const scanBtn = document.querySelector('button[onclick="startScan()"]');
+                    if (scanBtn) scanBtn.disabled = msg.active;
+                    const toggleBtn = document.getElementById('btnScanEnable');
+                    if (toggleBtn) toggleBtn.disabled = msg.active;
+                    
+                    if (!msg.active && msg.completed) {
+                        showCommandStatus('Posizione raggiunta!');
+                        const progressSpan = document.getElementById('gotoProgress');
+                        progressSpan.style.display = 'none';
+                        progressSpan.textContent = '';
+                    } else if (!msg.active && !msg.completed) {
+                        showCommandStatus('Movimento interrotto', true);
+                    }
+                } else if (msg.type === 'goto_progress') {
+                    const progressSpan = document.getElementById('gotoProgress');
+                    progressSpan.style.display = 'inline-block';
+                    progressSpan.textContent = `📍 GOTOPOS: ${msg.remaining_cm.toFixed(1)} cm rimanenti (${msg.current_cm.toFixed(1)}/${msg.target_cm.toFixed(1)} cm)`;
                 } else if (msg.type === 'scan_enabled') {
                     scanReceiving = msg.value;
                     const btn = document.getElementById('btnScanEnable');
@@ -849,8 +1068,12 @@ void setup() {
                         btn.className = 'danger';
                     }
                 } else if (msg.cm !== undefined) {
-                    startTimerIfNeeded();
-                    updateDisplay(msg);
+                    if (!isGoToActive) {
+                        startTimerIfNeeded();
+                        updateDisplay(msg);
+                    } else {
+                        document.getElementById('currentLength').textContent = msg.cm + ' cm';
+                    }
                 }
             } catch(e) {
                 console.error('Errore parsing JSON:', e);
@@ -882,12 +1105,18 @@ void setup() {
         if (!hasZeroPoint) dataPoints.unshift(zeroPoint);
     }
 
+    let emaLive = null;
     function addDataPoint(x, y) {
-        const point = {x: x, y: y};
+        if (emaLive === null) emaLive = y;
+        emaLive = 0.1 * y + 0.9 * emaLive;
+        const point = {x: x, y: Math.round(emaLive * 1000) / 1000};
         ensureZeroPoint();
         const existingIndex = dataPoints.findIndex(p => p.x === x);
-        if (existingIndex !== -1) dataPoints[existingIndex] = point;
-        else dataPoints.push(point);
+        if (existingIndex !== -1) {
+            dataPoints[existingIndex] = point;
+        } else {
+            dataPoints.push(point);
+        }
         dataPoints.sort((a, b) => a.x - b.x);
         chart.data.datasets[0].data = dataPoints;
         document.getElementById('dataPointsCount').textContent = dataPoints.length;
@@ -929,6 +1158,7 @@ void setup() {
 
     function resetChart() {
         dataPoints = [];
+        emaLive = null;
         chart.data.datasets[0].data = dataPoints;
         ensureZeroPoint();
         if (autoScaleEnabled) fitToData(); else chart.update();
@@ -936,7 +1166,21 @@ void setup() {
         showCommandStatus('Grafico resettato');
     }
 
-    function exportAllData() { window.location.href = '/export'; }
+    function exportAllData() {
+        let csv = "Lunghezza cm,Diametro mm (grafico)\n";
+        dataPoints.forEach(point => {
+            csv += point.x.toFixed(1) + "," + point.y.toFixed(3) + "\n";
+        });
+        const blob = new Blob([csv], { type: 'text/csv' });
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'diametrolinea_grafico.csv';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+    }
 
     function toggleAutoScale() {
         autoScaleEnabled = !autoScaleEnabled;
@@ -985,6 +1229,37 @@ void setup() {
         btn.nextElementSibling.classList.toggle('acc-open');
     }
 
+    function showGoToDialog() {
+        if (isGoToActive) {
+            showCommandStatus('GOTOPOS già in corso', true);
+            return;
+        }
+        document.getElementById('gotoModal').style.display = 'block';
+        document.getElementById('targetCm').focus();
+    }
+
+    function closeModal() {
+        document.getElementById('gotoModal').style.display = 'none';
+        document.getElementById('targetCm').value = '';
+    }
+
+    function executeGoTo() {
+        const target = document.getElementById('targetCm').value;
+        if (target && !isNaN(target) && parseFloat(target) >= 0) {
+            sendCommand('goto ' + target);
+            closeModal();
+        } else {
+            showCommandStatus('Inserire una lunghezza valida (>= 0)', true);
+        }
+    }
+
+    window.onclick = function(event) {
+        const modal = document.getElementById('gotoModal');
+        if (event.target == modal) {
+            closeModal();
+        }
+    }
+
     document.addEventListener('DOMContentLoaded', async function () {
         initializeChart();
         await loadHistoryFromExport();
@@ -1009,7 +1284,8 @@ void setup() {
     for (DataPoint* cur = firstDataPoint; cur != nullptr; cur = cur->next) {
       snprintf(line, sizeof(line), "%d,%.2f\r\n", cur->cm, cur->diameter);
       server.sendContent(line);
-      if ((++n % 50) == 0) delay(1); else delay(0);
+      if ((++n % 50) == 0) delay(1);
+      else delay(0);
     }
   });
 
@@ -1066,6 +1342,7 @@ void loop() {
   motorPumpRx();
   motorPollIfNeeded();
   motorPumpTx();
+  checkGoToStatus();
 
   calculateSpeed();
 
@@ -1086,25 +1363,18 @@ void loop() {
 
   int currentCm = (encoderValue / PULSES_PER_CM) - 2;
 
-  if (currentCm != lastCm && currentCm >= 0 && scanEnabled) {
+  // Acquisizione dati solo se scansione abilitata e NON in GOTOPOS
+  if (!isGoToActive && currentCm != lastCm && currentCm >= 0 && scanEnabled) {
     lastCm = currentCm;
 
     float displayValue = readCaliperDisplay();
 
-    if (!filterInitialized) {
-      smoothedDiameter = displayValue;
-      filterInitialized = true;
-    } else {
-      smoothedDiameter = (ALPHA * displayValue) + ((1.0 - ALPHA) * smoothedDiameter);
-    }
-    displayValue = smoothedDiameter;
-
-    float compensatedDiameter = smoothedDiameter - displayZeroValue - caliperZeroOffset;
+    float compensatedDiameter = displayValue - displayZeroValue - caliperZeroOffset;
     compensatedDiameter = round(compensatedDiameter * 1000.0) / 1000.0;
-
     addDataPoint(currentCm, compensatedDiameter, displayValue);
 
-    String json = "{\"cm\":" + String(currentCm) + ",\"diameter\":" + String(compensatedDiameter, 2) + ",\"rawDisplay\":" + String(displayValue, 2) + ",\"totalPoints\":" + String(getTotalDataPoints()) + "}";
+    String json = "{\"cm\":" + String(currentCm) + ",\"diameter\":" + String(compensatedDiameter, 2) + 
+                  ",\"rawDisplay\":" + String(displayValue, 2) + ",\"totalPoints\":" + String(getTotalDataPoints()) + "}";
     webSocket.broadcastTXT(json);
 
     Serial.print(currentCm);
@@ -1112,6 +1382,11 @@ void loop() {
     Serial.print(compensatedDiameter, 2);
     Serial.print(",");
     Serial.println(displayValue, 2);
+  } else if (isGoToActive && currentCm != lastCm) {
+    // Aggiorna solo la posizione durante GOTOPOS
+    lastCm = currentCm;
+    String json = "{\"cm\":" + String(currentCm) + "}";
+    webSocket.broadcastTXT(json);
   }
 
   if (Serial.available()) {
@@ -1155,6 +1430,12 @@ void decodeCaliperReadings() {
 
 // -----------------------------
 void handleCommand(String cmd) {
+  if (cmd.startsWith("goto ")) {
+    float target = cmd.substring(5).toFloat();
+    goToPosition(target);
+    return;
+  }
+
   if (cmd.startsWith("motor")) {
     String arg = cmd;
     arg.replace("motor", "");
@@ -1171,6 +1452,7 @@ void handleCommand(String cmd) {
   if (cmd == "help") {
     Serial.println("Comandi disponibili:");
     Serial.println("  reset               - Azzera lunghezza encoder e dati");
+    Serial.println("  goto <cm>           - Vai alla posizione specificata in cm");
     Serial.println("  setoffset <val>     - Imposta offset di compensazione");
     Serial.println("  setdisplayzero      - Imposta display corrente come zero");
     Serial.println("  readraw             - Mostra lettura grezza del calibro");
@@ -1199,10 +1481,14 @@ void handleCommand(String cmd) {
   }
 
   if (cmd == "scan_on") {
-    scanEnabled = true;
-    String json = "{\"type\":\"scan_enabled\",\"value\":true}";
-    webSocket.broadcastTXT(json);
-    Serial.println("Scansione ABILITATA");
+    if (!isGoToActive) {
+      scanEnabled = true;
+      String json = "{\"type\":\"scan_enabled\",\"value\":true}";
+      webSocket.broadcastTXT(json);
+      Serial.println("Scansione ABILITATA");
+    } else {
+      Serial.println("Impossibile abilitare scansione durante GOTOPOS");
+    }
     return;
   }
 
