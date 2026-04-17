@@ -182,6 +182,18 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         markers.Color      = Colors.Red;
         markers.LineWidth  = 0;
         markers.MarkerSize = 8;
+
+        // Label each node with its absolute position
+        foreach (var node in sorted)
+        {
+            var lbl = plot.Add.Text($"{node.X:0} cm\n{node.Y:0.000} mm", node.X, node.Y);
+            lbl.LabelFontSize        = 9;
+            lbl.LabelFontColor       = Colors.DarkRed;
+            lbl.LabelAlignment       = Alignment.LowerLeft;
+            lbl.LabelBackgroundColor = Colors.White.WithAlpha(0.75f);
+            lbl.LabelBorderColor     = Colors.Transparent;
+            lbl.LabelBorderWidth     = 0;
+        }
     }
 
     // Segment drawing mouse handlers
