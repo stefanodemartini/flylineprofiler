@@ -358,7 +358,90 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         MessageBox.Show($"Esportati {sorted.Count} nodi.\n{dlg.FileName}", "Export segmenti");
     }
 
-    // Returns the node closest to a screen pixel position, or null if none within DragHitRadiusPx
+    private void SaveNodes_Click(object sender, RoutedEventArgs e)
+    {
+        if (_segmentNodes.Count == 0)
+        {
+            MessageBox.Show("Nessun nodo da salvare.", "Attenzione",
+                            MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        var dlg = new SaveFileDialog
+        {
+            Filter     = "Nodi segmenti (*.nodes.csv)|*.nodes.csv|CSV files (*.csv)|*.csv",
+            DefaultExt = ".nodes.csv",
+            FileName   = "sessione_nodi.nodes.csv"
+        };
+        if (dlg.ShowDialog() != true) return;
+
+        var sorted = _segmentNodes.OrderBy(n => n.X).ToList();
+        var sb = new StringBuilder();
+        sb.AppendLine("Lunghezza cm,Diametro mm");
+        foreach (var node in sorted)
+            sb.AppendLine($"{node.X:0},{node.Y:0.000}");
+
+        File.WriteAllText(dlg.FileName, sb.ToString(), Encoding.UTF8);
+        UiStatus = $"Nodi salvati ({sorted.Count})";
+    }
+
+    private void LoadNodes_Click(object sender, RoutedEventArgs e)
+    {
+        var dlg = new OpenFileDialog
+        {
+            Filter = "Nodi segmenti (*.nodes.csv;*.csv)|*.nodes.csv;*.csv",
+            Title  = "Carica nodi segmenti"
+        };
+        if (dlg.ShowDialog() != true) return;
+
+        try
+        {
+            var lines = File.ReadAllLines(dlg.FileName, Encoding.UTF8)
+                            .Where(l => !string.IsNullOrWhiteSpace(l))
+                            .Skip(1)  // header
+                            .ToList();
+
+            var sep = System.Globalization.CultureInfo.CurrentCulture.NumberFormat.NumberDecimalSeparator;
+            var loaded = new List<(double X, double Y)>();
+
+            foreach (var line in lines)
+            {
+                var parts = line.Split(',');
+                if (parts.Length < 2) continue;
+                var xStr = parts[0].Trim().Replace(".", sep).Replace(",", sep);
+                var yStr = parts[1].Trim().Replace(".", sep).Replace(",", sep);
+                if (double.TryParse(xStr, out double x) && double.TryParse(yStr, out double y))
+                    loaded.Add((x, y));
+            }
+
+            if (loaded.Count == 0)
+            {
+                MessageBox.Show("Nessun nodo valido trovato nel file.", "Attenzione",
+                                MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            if (_segmentNodes.Count > 0)
+            {
+                var res = MessageBox.Show(
+                    $"Sostituire i {_segmentNodes.Count} nodi esistenti con i {loaded.Count} nodi caricati?",
+                    "Carica nodi", MessageBoxButton.YesNo, MessageBoxImage.Question);
+                if (res != MessageBoxResult.Yes) return;
+            }
+
+            _segmentNodes.Clear();
+            _segmentUndoStack.Clear();
+            _segmentNodes.AddRange(loaded);
+
+            RefreshPlot();
+            UiStatus = $"Nodi caricati: {loaded.Count}  da {Path.GetFileName(dlg.FileName)}";
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Errore lettura file:\n{ex.Message}", "Errore",
+                            MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
     private (double X, double Y)? FindNearestNode(System.Windows.Point screenPos)
     {
         (double X, double Y)? best = null;

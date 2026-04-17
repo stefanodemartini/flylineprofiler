@@ -15,6 +15,8 @@
                 <MenuItem Header="Esporta PNG grafico" Click="ExportPng_Click"/>
                 <Separator/>
                 <MenuItem Header="Esporta segmenti CSV" Click="ExportSegmentsCsv_Click"/>
+                <MenuItem Header="Salva nodi..."        Click="SaveNodes_Click"/>
+                <MenuItem Header="Carica nodi..."       Click="LoadNodes_Click"/>
                 <Separator/>
                 <MenuItem Header="Esci" Click="Exit_Click"/>
             </MenuItem>
