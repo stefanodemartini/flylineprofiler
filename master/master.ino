@@ -75,6 +75,15 @@ int totalDataPoints = 0;
 volatile long encoderValue = 0;
 volatile int lastEncoded = 0;
 
+// Caliper ISR state — written only in onCaliperChange(), read under noInterrupts()
+volatile long  calBitAccum   = 0;
+volatile int   calSignAccum  = 1;
+volatile int   calBitCount   = 0;
+volatile long  calRawValue   = 0;
+volatile int   calSign       = 1;
+volatile bool  calDataReady  = false;
+volatile unsigned long calRiseUs = 0;
+
 float caliperZeroOffset = 0.0;
 float displayZeroValue = 0.0;
 int lastCm = -1;
@@ -89,7 +98,6 @@ WebSocketsServer webSocket(81);
 
 // Forward declarations
 void readCaliper();
-void decodeCaliperReadings();
 float readCaliperAverage(int samples = 3);
 float readCaliperDisplay();
 void handleCommand(String cmd);
@@ -181,6 +189,41 @@ void IRAM_ATTR updateEncoder() {
   if (sum == 0b1000) encoderValue++;
   if (sum == 0b0010) encoderValue--;
   lastEncoded = encoded;
+}
+
+// Caliper ISR — mirrors the original blocking logic but fully non-blocking.
+// Triggers on every CHANGE of CALIPER_CLOCK_PIN:
+//   Rising edge  → record timestamp.
+//   Falling edge → measure HIGH duration; if >500 µs it was the inter-packet gap,
+//                  commit the completed 24-bit word, then read the new data bit.
+void IRAM_ATTR onCaliperChange() {
+  unsigned long now = micros();
+  if (digitalRead(CALIPER_CLOCK_PIN)) {
+    // Rising edge
+    calRiseUs = now;
+  } else {
+    // Falling edge
+    unsigned long highDur = now - calRiseUs;
+    if (highDur > 500) {
+      // Inter-packet gap detected — commit if we collected exactly 24 bits
+      if (calBitCount == 24) {
+        calRawValue  = calBitAccum;
+        calSign      = calSignAccum;
+        calDataReady = true;
+      }
+      calBitAccum  = 0;
+      calSignAccum = 1;
+      calBitCount  = 0;
+    }
+    // Read data bit at falling edge (same timing as original blocking code)
+    if (calBitCount < 24) {
+      if (digitalRead(CALIPER_DATA_PIN)) {
+        if      (calBitCount < 20)  calBitAccum |= (1L << calBitCount);
+        else if (calBitCount == 20) calSignAccum = -1;
+      }
+      calBitCount++;
+    }
+  }
 }
 
 void motorQueueTx(const String& lineNoNewline) {
@@ -358,6 +401,7 @@ void setup() {
 
   attachInterrupt(digitalPinToInterrupt(ENCODER_DATA_PIN), updateEncoder, CHANGE);
   attachInterrupt(digitalPinToInterrupt(ENCODER_CLOCK_PIN), updateEncoder, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(CALIPER_CLOCK_PIN), onCaliperChange, CHANGE);
 
   EEPROM.get(0, caliperZeroOffset);
   if (isnan(caliperZeroOffset)) caliperZeroOffset = 0.0;
@@ -1412,35 +1456,34 @@ void loop() {
 }
 
 // -----------------------------
+// readCaliper() is now non-blocking: it just copies the latest ISR-decoded
+// value into lineDiameter. If no fresh packet has arrived since the last
+// call, lineDiameter keeps its previous value (correct — caliper unchanged).
 float readCaliperAverage(int samples) {
   float sum = 0;
-  for (int i = 0; i < samples; i++) {
-    readCaliper();
-    sum += lineDiameter;
-    delay(10);
+  int got = 0;
+  unsigned long deadline = millis() + 2000;
+  while (got < samples && millis() < deadline) {
+    noInterrupts();
+    bool rdy = calDataReady;
+    interrupts();
+    if (rdy) {
+      readCaliper();
+      sum += lineDiameter;
+      got++;
+    }
+    delay(1);
   }
-  return sum / samples;
+  return got > 0 ? sum / got : lineDiameter;
 }
 
 void readCaliper() {
-  while (digitalRead(CALIPER_CLOCK_PIN) == LOW) {}
-  long tmpMicros = micros();
-  while (digitalRead(CALIPER_CLOCK_PIN) == HIGH) {}
-  if ((micros() - tmpMicros) > 500) decodeCaliperReadings();
-}
-
-void decodeCaliperReadings() {
-  long value = 0;
-  int sign = 1;
-  for (int i = 0; i < 24; i++) {
-    while (digitalRead(CALIPER_CLOCK_PIN) == LOW) {}
-    while (digitalRead(CALIPER_CLOCK_PIN) == HIGH) {}
-    if (digitalRead(CALIPER_DATA_PIN)) {
-      if (i < 20) value |= (1 << i);
-      if (i == 20) sign = -1;
-    }
+  noInterrupts();
+  if (calDataReady) {
+    lineDiameter = (float)(calRawValue * calSign) / 100.0f;
+    calDataReady = false;
   }
-  lineDiameter = (value * sign) / 100.0;
+  interrupts();
 }
 
 // -----------------------------
