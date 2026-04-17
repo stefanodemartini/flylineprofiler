@@ -14,6 +14,8 @@
                 <MenuItem Header="Esporta CSV" Click="ExportCsv_Click"/>
                 <MenuItem Header="Esporta PNG grafico" Click="ExportPng_Click"/>
                 <Separator/>
+                <MenuItem Header="Esporta segmenti CSV" Click="ExportSegmentsCsv_Click"/>
+                <Separator/>
                 <MenuItem Header="Esci" Click="Exit_Click"/>
             </MenuItem>
 
@@ -38,6 +40,13 @@
                           IsCheckable="True"
                           IsChecked="True"
                           Click="AutoFitToggle_Click"/>
+                <Separator/>
+                <MenuItem Header="Disegna segmenti"
+                          IsCheckable="True"
+                          x:Name="MenuDrawSegments"
+                          Click="ToggleDrawMode_Click"/>
+                <MenuItem Header="Annulla ultimo nodo" Click="UndoLastNode_Click"/>
+                <MenuItem Header="Cancella segmenti"   Click="ClearSegments_Click"/>
             </MenuItem>
 
             <MenuItem Header="Impostazioni">
@@ -60,6 +69,14 @@
             <Separator/>
             <StatusBarItem>
                 <TextBlock Text="{Binding ElementName=MainWin, Path=AutoFitStatus}"/>
+            </StatusBarItem>
+            <Separator/>
+            <StatusBarItem>
+                <TextBlock Text="{Binding ElementName=MainWin, Path=DrawModeStatus}" Foreground="Red" FontWeight="SemiBold"/>
+            </StatusBarItem>
+            <Separator/>
+            <StatusBarItem>
+                <TextBlock Text="{Binding ElementName=MainWin, Path=SegmentNodesStatus}"/>
             </StatusBarItem>
         </StatusBar>
 
