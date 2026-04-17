@@ -195,12 +195,16 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         foreach (var node in sorted)
         {
             var lbl = plot.Add.Text($"{node.X:0} cm\n{node.Y:0.000} mm", node.X, node.Y);
-            lbl.LabelFontSize        = 9;
+            lbl.LabelFontSize        = 11;
+            lbl.LabelBold            = true;
             lbl.LabelFontColor       = Colors.DarkRed;
             lbl.LabelAlignment       = Alignment.LowerLeft;
-            lbl.LabelBackgroundColor = Colors.White.WithAlpha(0.75f);
-            lbl.LabelBorderColor     = Colors.Transparent;
-            lbl.LabelBorderWidth     = 0;
+            lbl.LabelBackgroundColor = Colors.White.WithAlpha(0.93f);
+            lbl.LabelBorderColor     = Colors.DarkRed;
+            lbl.LabelBorderWidth     = 1.5f;
+            lbl.LabelPadding         = 4;
+            lbl.OffsetX              = 8;
+            lbl.OffsetY              = -8;
         }
     }
 
