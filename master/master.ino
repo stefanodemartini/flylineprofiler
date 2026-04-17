@@ -1480,7 +1480,7 @@ float readCaliperAverage(int samples) {
 void readCaliper() {
   noInterrupts();
   if (calDataReady) {
-    lineDiameter = (float)(calRawValue * calSign) / 100.0f;
+    lineDiameter = (float)(calRawValue * calSign) / 200.0f;  // protocol LSB = 0.005 mm
     calDataReady = false;
   }
   interrupts();
