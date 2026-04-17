@@ -1159,11 +1159,8 @@ void setup() {
         if (!hasZeroPoint) dataPoints.unshift(zeroPoint);
     }
 
-    let emaLive = null;
     function addDataPoint(x, y) {
-        if (emaLive === null) emaLive = y;
-        emaLive = 0.1 * y + 0.9 * emaLive;
-        const point = {x: x, y: Math.round(emaLive * 1000) / 1000};
+        const point = {x: x, y: Math.round(y * 1000) / 1000};
         ensureZeroPoint();
         const existingIndex = dataPoints.findIndex(p => p.x === x);
         if (existingIndex !== -1) {
@@ -1212,7 +1209,6 @@ void setup() {
 
     function resetChart() {
         dataPoints = [];
-        emaLive = null;
         chart.data.datasets[0].data = dataPoints;
         ensureZeroPoint();
         if (autoScaleEnabled) fitToData(); else chart.update();
