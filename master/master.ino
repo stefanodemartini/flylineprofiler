@@ -718,9 +718,7 @@ void setup() {
 
     <div class="motor-bar">
         <span class="motor-bar-title">&#x1F527; Motore</span>
-        <button class="success" onclick="startScan()">START SCAN</button>
         <button class="danger" onclick="stopScan()">STOP</button>
-        <button id="btnScanEnable" class="danger" onclick="toggleScanEnable()">&#9208; Ricezione OFF</button>
         <button class="warning" onclick="sendCommand('motor fast_s')">FAST stessa dir</button>
         <button class="warning" onclick="sendCommand('motor fast_o')">FAST opposta dir</button>
         <button onclick="sendCommand('motor status')">Aggiorna Stato</button>
