@@ -96,8 +96,9 @@ bool          stepScanActive       = false;
 StepScanState stepScanState        = SS_IDLE;
 int           stepScanTargetCm     = 0;
 int           stepScanSamples      = 10;     // caliper samples per stop
-unsigned long stepScanSettleMs     = 150;    // ms to wait after motor stops before sampling
+unsigned long stepScanSettleMs     = 300;    // ms encoder must be stable before sampling
 unsigned long stepScanSettleStart  = 0;
+long          stepScanSettleLastEnc = 0;     // encoder snapshot for stability detection
 float         stepScanMeasSum      = 0.0f;
 int           stepScanMeasGot      = 0;
 unsigned long stepScanMeasDeadline = 0;
@@ -389,24 +390,36 @@ void runStepScan(long encSnap) {
         lastCm = curCm;
         webSocket.broadcastTXT("{\"cm\":" + String(curCm) + "}");
       }
-      // Stop slightly before target to account for motor braking lag
-      if (floatCm >= (float)stepScanTargetCm - 0.3f) {
+      // Stop slightly before target to give the motor room to decelerate
+      if (floatCm >= (float)stepScanTargetCm - 0.8f) {
         motorQueueTx("STOP");
-        stepScanState       = SS_SETTLING;
-        stepScanSettleStart = millis();
+        stepScanState        = SS_SETTLING;
+        stepScanSettleStart  = millis();
+        noInterrupts();
+        stepScanSettleLastEnc = encoderValue;
+        interrupts();
         webSocket.broadcastTXT("{\"type\":\"step_scan_settling\",\"cm\":" + String(stepScanTargetCm) + "}");
       }
       break;
 
-    case SS_SETTLING:
-      if (millis() - stepScanSettleStart >= stepScanSettleMs) {
-        noInterrupts(); calDataReady = false; interrupts();  // discard stale reading
+    case SS_SETTLING: {
+      // Wait until encoder has been STABLE for settleMs — motor truly stopped
+      noInterrupts();
+      long curEnc = encoderValue;
+      interrupts();
+      if (curEnc != stepScanSettleLastEnc) {
+        stepScanSettleLastEnc = curEnc;   // still moving — reset stability timer
+        stepScanSettleStart   = millis();
+      } else if (millis() - stepScanSettleStart >= stepScanSettleMs) {
+        // Stable for settleMs → discard stale caliper reading, begin sampling
+        noInterrupts(); calDataReady = false; interrupts();
         stepScanMeasSum      = 0.0f;
         stepScanMeasGot      = 0;
         stepScanMeasDeadline = millis() + 3000;
         stepScanState        = SS_MEASURING;
       }
       break;
+    }
 
     case SS_MEASURING: {
       noInterrupts();
@@ -722,7 +735,7 @@ void setup() {
             <input type="number" id="ssInputSamples" value="10" min="1" max="50" style="width:50px;padding:3px;border:1px solid #aaa;border-radius:4px;">
         </label>
         <label style="font-size:0.9em;">Attesa (ms):
-            <input type="number" id="ssInputSettle" value="150" min="50" max="2000" style="width:65px;padding:3px;border:1px solid #aaa;border-radius:4px;">
+            <input type="number" id="ssInputSettle" value="300" min="50" max="2000" style="width:65px;padding:3px;border:1px solid #aaa;border-radius:4px;">
         </label>
         <button onclick="applyStepScanConfig()" style="padding:4px 10px;font-size:0.85em;background:#17a2b8;">Applica</button>
         <button onclick="stopStepScanUI()" class="danger" style="padding:4px 10px;font-size:0.85em;">⏹ Stop</button>
@@ -1522,6 +1535,7 @@ void setup() {
 </body>
 </html>
 )rawliteral";
+    server.sendHeader("Cache-Control", "no-store");
     server.send(200, "text/html", html);
   });
 
