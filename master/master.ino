@@ -718,12 +718,12 @@ void setup() {
 
     <div class="motor-bar">
         <span class="motor-bar-title">&#x1F527; Motore</span>
-        <button class="danger" onclick="stopScan()">STOP</button>
+        <button class="danger" onclick="stopScan()" style="font-size:1.1em;padding:10px 24px;font-weight:bold;">⏹ STOP</button>
         <button class="warning" onclick="sendCommand('motor fast_s')">FAST stessa dir</button>
         <button class="warning" onclick="sendCommand('motor fast_o')">FAST opposta dir</button>
         <button onclick="sendCommand('motor status')">Aggiorna Stato</button>
         <button onclick="showGoToDialog()" style="background: #6c757d;">🎯 Vai a posizione</button>
-        <button id="btnStepScan" style="background:#17a2b8;color:white;" onclick="startStepScanUI()">📏 Step Scan</button>
+        <button id="btnStepScan" style="background:#17a2b8;color:white;font-size:1.1em;padding:10px 24px;font-weight:bold;" onclick="startStepScanUI()">📏 STEP SCAN</button>
     </div>
 
     <div id="stepScanBar" class="step-scan-bar" style="display:none;">
