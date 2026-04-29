@@ -9,9 +9,9 @@
 // ===============================
 // FW
 // ===============================
-#define FIRMWARE_VERSION "0.4.0"
-#define FIRMWARE_DATE "2026-04-17"
-#define FIRMWARE_FEATURES "WiFi Manager + EMA + 0.01mm + UART Motor + Scan timer + Autostop + RicezioneON/OFF + GOTOPOS + Caliper timeout + Atomic encoder + Watchdog fixes"
+#define FIRMWARE_VERSION "0.5.0"
+#define FIRMWARE_DATE "2026-04-29"
+#define FIRMWARE_FEATURES "WiFi Manager + EMA + 0.01mm + UART Motor + Scan timer + Autostop + RicezioneON/OFF + GOTOPOS + Caliper timeout + Atomic encoder + Watchdog fixes + Step scan"
 
 // -----------------------------
 #define ENCODER_DATA_PIN 12
@@ -88,6 +88,20 @@ float caliperZeroOffset = 0.0;
 float displayZeroValue = 0.0;
 int lastCm = -1;
 
+// ============================================================
+// STEP SCAN — stop-and-measure state machine
+// ============================================================
+enum StepScanState : uint8_t { SS_IDLE, SS_MOVING, SS_SETTLING, SS_MEASURING };
+bool          stepScanActive       = false;
+StepScanState stepScanState        = SS_IDLE;
+int           stepScanTargetCm     = 0;
+int           stepScanSamples      = 10;     // caliper samples per stop
+unsigned long stepScanSettleMs     = 150;    // ms to wait after motor stops before sampling
+unsigned long stepScanSettleStart  = 0;
+float         stepScanMeasSum      = 0.0f;
+int           stepScanMeasGot      = 0;
+unsigned long stepScanMeasDeadline = 0;
+
 unsigned long lastSpeedTime = 0;
 long lastSpeedEncoder = 0;
 float currentSpeed = 0.0;
@@ -114,6 +128,9 @@ void motorPollIfNeeded();
 void motorHandleStatusLine(const char* line);
 void goToPosition(float targetCm);
 void checkGoToStatus();
+void startStepScan();
+void stopStepScan();
+void runStepScan(long encSnap);
 
 // -----------------------------
 void addDataPoint(int cm, float diameter, float rawDisplay) {
@@ -333,6 +350,105 @@ void checkGoToStatus() {
   }
 }
 
+// ============================================================
+// STEP SCAN functions
+// ============================================================
+void startStepScan() {
+  if (stepScanActive || isGoToActive) return;
+  noInterrupts();
+  long enc = encoderValue;
+  interrupts();
+  stepScanTargetCm = (int)((enc / (float)PULSES_PER_CM) - 2.0f) + 1;
+  if (stepScanTargetCm < 0) stepScanTargetCm = 0;
+  stepScanActive = true;
+  stepScanState  = SS_MOVING;
+  scanEnabled    = false;
+  motorQueueTx("SCAN");
+  String json = "{\"type\":\"step_scan\",\"active\":true,\"samples\":" + String(stepScanSamples) +
+                ",\"settle\":" + String(stepScanSettleMs) + "}";
+  webSocket.broadcastTXT(json);
+  Serial.println("[StepScan] Avviato verso cm " + String(stepScanTargetCm));
+}
+
+void stopStepScan() {
+  if (!stepScanActive) return;
+  stepScanActive = false;
+  stepScanState  = SS_IDLE;
+  motorQueueTx("STOP");
+  webSocket.broadcastTXT("{\"type\":\"step_scan\",\"active\":false}");
+  Serial.println("[StepScan] Fermato");
+}
+
+void runStepScan(long encSnap) {
+  float floatCm = (float)encSnap / PULSES_PER_CM - 2.0f;
+  int   curCm   = (int)floatCm;
+
+  switch (stepScanState) {
+    case SS_MOVING:
+      if (curCm != lastCm && curCm >= 0) {
+        lastCm = curCm;
+        webSocket.broadcastTXT("{\"cm\":" + String(curCm) + "}");
+      }
+      // Stop slightly before target to account for motor braking lag
+      if (floatCm >= (float)stepScanTargetCm - 0.3f) {
+        motorQueueTx("STOP");
+        stepScanState       = SS_SETTLING;
+        stepScanSettleStart = millis();
+        webSocket.broadcastTXT("{\"type\":\"step_scan_settling\",\"cm\":" + String(stepScanTargetCm) + "}");
+      }
+      break;
+
+    case SS_SETTLING:
+      if (millis() - stepScanSettleStart >= stepScanSettleMs) {
+        noInterrupts(); calDataReady = false; interrupts();  // discard stale reading
+        stepScanMeasSum      = 0.0f;
+        stepScanMeasGot      = 0;
+        stepScanMeasDeadline = millis() + 3000;
+        stepScanState        = SS_MEASURING;
+      }
+      break;
+
+    case SS_MEASURING: {
+      noInterrupts();
+      bool rdy = calDataReady;
+      interrupts();
+      if (rdy) {
+        readCaliper();
+        stepScanMeasSum += lineDiameter;
+        stepScanMeasGot++;
+      }
+      bool done    = (stepScanMeasGot >= stepScanSamples);
+      bool timeout = (!done && millis() >= stepScanMeasDeadline);
+      if (done || (timeout && stepScanMeasGot > 0)) {
+        float avg         = stepScanMeasSum / stepScanMeasGot;
+        float compensated = avg - displayZeroValue - caliperZeroOffset;
+        compensated       = round(compensated * 1000.0f) / 1000.0f;
+        addDataPoint(stepScanTargetCm, compensated, avg);
+        String json = "{\"cm\":" + String(stepScanTargetCm) +
+                      ",\"diameter\":" + String(compensated, 2) +
+                      ",\"rawDisplay\":" + String(avg, 2) +
+                      ",\"totalPoints\":" + String(getTotalDataPoints()) + "}";
+        webSocket.broadcastTXT(json);
+        Serial.print(stepScanTargetCm); Serial.print(",");
+        Serial.print(compensated, 2);   Serial.print(",");
+        Serial.println(avg, 2);
+        stepScanTargetCm++;
+        stepScanState = SS_MOVING;
+        motorQueueTx("SCAN");
+      } else if (timeout) {
+        Serial.println("[StepScan] Caliper timeout a cm " + String(stepScanTargetCm) + ", salto");
+        stepScanTargetCm++;
+        stepScanState = SS_MOVING;
+        motorQueueTx("SCAN");
+      }
+      break;
+    }
+
+    case SS_IDLE:
+      break;
+  }
+}
+
 // ----------------------------- GOTOPOS Function -----------------------------
 void goToPosition(float targetCm) {
   if (isGoToActive) return;  // FW-08: prevent re-entrant call from WebSocket corrupting oldScanState
@@ -528,6 +644,12 @@ void setup() {
             border-radius: 4px;
             font-size: 0.85em;
         }
+        .step-scan-bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 8px 14px; background: #e8f4e8; border-radius: 8px; margin-bottom: 10px; border: 1px solid #c3e6cb; }
+        .ss-state { font-size: 0.85em; font-weight: bold; padding: 3px 8px; border-radius: 4px; }
+        .ss-idle     { background: #f8f9fa; color: #666; }
+        .ss-moving   { background: #fff3cd; color: #856404; }
+        .ss-settling { background: #cce5ff; color: #004085; }
+        .ss-measuring{ background: #d4edda; color: #155724; }
     </style>
 </head>
 <body>
@@ -563,6 +685,10 @@ void setup() {
             <div class="status-value" id="dataPointsCount">0</div>
         </div>
         <div class="status-item">
+            <div>Step Scan</div>
+            <div class="status-value" id="stepScanStatus">--</div>
+        </div>
+        <div class="status-item">
             <div>Stato Connessione</div>
             <div class="status-value" id="connectionStatus">Connesso</div>
         </div>
@@ -586,6 +712,20 @@ void setup() {
         <button class="warning" onclick="sendCommand('motor fast_o')">FAST opposta dir</button>
         <button onclick="sendCommand('motor status')">Aggiorna Stato</button>
         <button onclick="showGoToDialog()" style="background: #6c757d;">🎯 Vai a posizione</button>
+        <button id="btnStepScan" style="background:#17a2b8;color:white;" onclick="startStepScanUI()">📏 Step Scan</button>
+    </div>
+
+    <div id="stepScanBar" class="step-scan-bar" style="display:none;">
+        <span style="font-weight:bold;font-size:0.9em;color:#155724;">📏 Step Scan</span>
+        <span class="ss-state ss-idle" id="ssStateLabel">IDLE</span>
+        <label style="font-size:0.9em;">Campioni:
+            <input type="number" id="ssInputSamples" value="10" min="1" max="50" style="width:50px;padding:3px;border:1px solid #aaa;border-radius:4px;">
+        </label>
+        <label style="font-size:0.9em;">Attesa (ms):
+            <input type="number" id="ssInputSettle" value="150" min="50" max="2000" style="width:65px;padding:3px;border:1px solid #aaa;border-radius:4px;">
+        </label>
+        <button onclick="applyStepScanConfig()" style="padding:4px 10px;font-size:0.85em;background:#17a2b8;">Applica</button>
+        <button onclick="stopStepScanUI()" class="danger" style="padding:4px 10px;font-size:0.85em;">⏹ Stop</button>
     </div>
 
     <div class="chart-wrapper">
@@ -713,6 +853,52 @@ void setup() {
     let uploadedDatasets = [];
     let nextDatasetId = 1;
     let isGoToActive = false;
+    let isStepScanActive = false;
+
+    function startStepScanUI() {
+        if (isGoToActive)    { showCommandStatus('Attendi completamento GOTOPOS', true); return; }
+        if (isStepScanActive){ showCommandStatus('Step scan già in corso', true); return; }
+        const samples = parseInt(document.getElementById('ssInputSamples').value) || 10;
+        const settle  = parseInt(document.getElementById('ssInputSettle').value)  || 150;
+        stopTimer();
+        document.getElementById('scanTimer').textContent = '00:00';
+        startTimerIfNeeded();
+        sendCommand('step_scan_config:' + samples + ':' + settle);
+        sendCommand('step_scan_start');
+    }
+
+    function stopStepScanUI() {
+        sendCommand('step_scan_stop');
+    }
+
+    function applyStepScanConfig() {
+        const samples = parseInt(document.getElementById('ssInputSamples').value) || 10;
+        const settle  = parseInt(document.getElementById('ssInputSettle').value)  || 150;
+        sendCommand('step_scan_config:' + samples + ':' + settle);
+        showCommandStatus('Configurazione step scan applicata');
+    }
+
+    function updateStepScanUI(active, state, cm) {
+        isStepScanActive = active;
+        document.getElementById('stepScanBar').style.display = active ? 'flex' : 'none';
+        const btn = document.getElementById('btnStepScan');
+        if (btn) btn.disabled = active || isGoToActive;
+        const label    = document.getElementById('ssStateLabel');
+        const statusEl = document.getElementById('stepScanStatus');
+        const classes  = { idle:'ss-idle', moving:'ss-moving', settling:'ss-settling', measuring:'ss-measuring' };
+        const texts    = {
+            idle:      'IDLE',
+            moving:    '▶ ' + cm + ' cm',
+            settling:  '⏸ @ ' + cm + ' cm',
+            measuring: '🔬 @ ' + cm + ' cm'
+        };
+        if (label) {
+            label.className = 'ss-state ' + (classes[state] || 'ss-idle');
+            label.textContent = active ? (texts[state] || 'IDLE') : 'IDLE';
+        }
+        if (statusEl) statusEl.textContent = active ? (texts[state] || '--') : '--';
+        if (!active) stopTimer();
+    }
     const colorPalette = [
         '#FF6384','#36A2EB','#FFCE56','#4BC0C0','#9966FF',
         '#FF9F40','#FF6384','#C9CBCF','#7CFFB2','#F465D4',
@@ -1123,12 +1309,26 @@ void setup() {
                         btn.textContent = '\u23F8 Ricezione OFF';
                         btn.className = 'danger';
                     }
+                } else if (msg.type === 'step_scan') {
+                    updateStepScanUI(msg.active, msg.active ? 'moving' : 'idle', 0);
+                } else if (msg.type === 'step_scan_settling') {
+                    updateStepScanUI(true, 'settling', msg.cm);
+                } else if (msg.type === 'step_scan_config') {
+                    document.getElementById('ssInputSamples').value = msg.samples;
+                    document.getElementById('ssInputSettle').value  = msg.settle;
                 } else if (msg.cm !== undefined) {
-                    if (!isGoToActive) {
+                    if (msg.diameter !== undefined) {
+                        // Full measurement result (continuous scan or step scan)
+                        startTimerIfNeeded();
+                        if (isStepScanActive) updateStepScanUI(true, 'measuring', msg.cm);
+                        updateDisplay(msg);
+                    } else if (isGoToActive || isStepScanActive) {
+                        // Position-only update during GOTOPOS or step scan movement
+                        document.getElementById('currentLength').textContent = msg.cm + ' cm';
+                        if (isStepScanActive) updateStepScanUI(true, 'moving', msg.cm);
+                    } else {
                         startTimerIfNeeded();
                         updateDisplay(msg);
-                    } else {
-                        document.getElementById('currentLength').textContent = msg.cm + ' cm';
                     }
                 }
             } catch(e) {
@@ -1410,7 +1610,7 @@ void loop() {
       encoderLastValueForWatchdog = encSnap;
       encoderLastMoveMs = now;
       encoderWatchdogStopSent = false;
-    } else if (!isGoToActive && !encoderWatchdogStopSent && encoderLastMoveMs > 0 && (now - encoderLastMoveMs >= 5000)) {
+    } else if (!isGoToActive && !stepScanActive && !encoderWatchdogStopSent && encoderLastMoveMs > 0 && (now - encoderLastMoveMs >= 5000)) {
       // FW-10: watchdog suppressed during GOTOPOS (slow final approach looks like no movement)
       motorQueueTx("STOP");
       encoderWatchdogStopSent = true;
@@ -1421,7 +1621,9 @@ void loop() {
   int currentCm = (encSnap / PULSES_PER_CM) - 2;
 
   // Acquisizione dati solo se scansione abilitata e NON in GOTOPOS
-  if (!isGoToActive && currentCm != lastCm && currentCm >= 0 && scanEnabled) {
+  if (stepScanActive) {
+    runStepScan(encSnap);
+  } else if (!isGoToActive && currentCm != lastCm && currentCm >= 0 && scanEnabled) {
     lastCm = currentCm;
 
     float displayValue = readCaliperDisplay();
@@ -1561,6 +1763,31 @@ void handleCommand(String cmd) {
     String json = "{\"type\":\"scan_enabled\",\"value\":false}";
     webSocket.broadcastTXT(json);
     Serial.println("Scansione DISABILITATA");
+    return;
+  }
+
+  if (cmd == "step_scan_start") {
+    startStepScan();
+    return;
+  }
+
+  if (cmd == "step_scan_stop") {
+    stopStepScan();
+    return;
+  }
+
+  if (cmd.startsWith("step_scan_config:")) {
+    String params = cmd.substring(17);
+    int colon = params.indexOf(':');
+    if (colon > 0) {
+      int s = params.substring(0, colon).toInt();
+      int m = params.substring(colon + 1).toInt();
+      if (s >= 1 && s <= 50)    stepScanSamples  = s;
+      if (m >= 50 && m <= 2000) stepScanSettleMs = m;
+    }
+    String json = "{\"type\":\"step_scan_config\",\"samples\":" + String(stepScanSamples) +
+                  ",\"settle\":" + String(stepScanSettleMs) + "}";
+    webSocket.broadcastTXT(json);
     return;
   }
 
