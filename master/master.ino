@@ -102,6 +102,9 @@ long          stepScanSettleLastEnc = 0;     // encoder snapshot for stability d
 float         stepScanMeasSum      = 0.0f;
 int           stepScanMeasGot      = 0;
 unsigned long stepScanMeasDeadline = 0;
+bool          stepScanGotoSent     = false;  // GOTOPOS sent for current step
+long          stepScanGotoStartEnc = 0;      // encoder at moment GOTOPOS was sent
+unsigned long stepScanGotoSentMs   = 0;      // time GOTOPOS was sent (for no-move timeout)
 
 unsigned long lastSpeedTime = 0;
 long lastSpeedEncoder = 0;
@@ -271,31 +274,36 @@ void motorHandleStatusLine(const char* line) {
 
   // Gestione GOTOPOS
   if (motorMode == "GOTOPOS") {
-    isGoToActive = true;
-    if (colon2) {
-      int remaining = atoi(colon2 + 1);
-      if (remaining == 0) {
-        // FW-03: slave sent STATUS:GOTOPOS:DIR:0 before calling stopMotion() → confirmed arrival
-        isGoToActive = false;
-        scanEnabled = oldScanState;
-        oldScanState = false;
-        Serial.println("GOTOPOS completato!");
-        // FW-13: broadcast restored scan state so clients stay in sync
-        String scanJson = "{\"type\":\"scan_enabled\",\"value\":" + String(scanEnabled ? "true" : "false") + "}";
-        webSocket.broadcastTXT(scanJson);
-        String json = "{\"type\":\"goto_status\",\"active\":false,\"completed\":true}";
-        webSocket.broadcastTXT(json);
-      } else {
-        // Invia stato di avanzamento al client
-        int currentCm = (encoderValue / PULSES_PER_CM) - 2;
-        int remainingCm = remaining / PULSES_PER_CM;
-        String json = "{\"type\":\"goto_progress\",\"remaining_cm\":" + String(remainingCm) + 
-                     ",\"current_cm\":" + String(currentCm) + ",\"target_cm\":" + String(goToTargetCm) + "}";
-        webSocket.broadcastTXT(json);
+    if (stepScanActive) {
+      // During step scan the slave runs GOTOPOS per step; encoder stability
+      // is the authoritative arrival signal — ignore slave GOTOPOS status here.
+    } else {
+      isGoToActive = true;
+      if (colon2) {
+        int remaining = atoi(colon2 + 1);
+        if (remaining == 0) {
+          // FW-03: slave sent STATUS:GOTOPOS:DIR:0 before calling stopMotion() → confirmed arrival
+          isGoToActive = false;
+          scanEnabled = oldScanState;
+          oldScanState = false;
+          Serial.println("GOTOPOS completato!");
+          // FW-13: broadcast restored scan state so clients stay in sync
+          String scanJson = "{\"type\":\"scan_enabled\",\"value\":" + String(scanEnabled ? "true" : "false") + "}";
+          webSocket.broadcastTXT(scanJson);
+          String json = "{\"type\":\"goto_status\",\"active\":false,\"completed\":true}";
+          webSocket.broadcastTXT(json);
+        } else {
+          // Invia stato di avanzamento al client
+          int currentCm = (encoderValue / PULSES_PER_CM) - 2;
+          int remainingCm = remaining / PULSES_PER_CM;
+          String json = "{\"type\":\"goto_progress\",\"remaining_cm\":" + String(remainingCm) +
+                       ",\"current_cm\":" + String(currentCm) + ",\"target_cm\":" + String(goToTargetCm) + "}";
+          webSocket.broadcastTXT(json);
+        }
       }
     }
   } else if (motorMode == "STOP") {
-    if (isGoToActive) {
+    if (isGoToActive && !stepScanActive) {
       isGoToActive = false;
       scanEnabled = oldScanState;
       oldScanState = false;
@@ -359,12 +367,12 @@ void startStepScan() {
   noInterrupts();
   long enc = encoderValue;
   interrupts();
-  stepScanTargetCm = (int)((enc / (float)PULSES_PER_CM) - 2.0f) + 1;
+  stepScanTargetCm   = (int)((enc / (float)PULSES_PER_CM) - 2.0f) + 1;
   if (stepScanTargetCm < 0) stepScanTargetCm = 0;
-  stepScanActive = true;
-  stepScanState  = SS_MOVING;
-  scanEnabled    = false;
-  motorQueueTx("SCAN");
+  stepScanActive     = true;
+  stepScanState      = SS_MOVING;
+  stepScanGotoSent   = false;
+  scanEnabled        = false;
   String json = "{\"type\":\"step_scan\",\"active\":true,\"samples\":" + String(stepScanSamples) +
                 ",\"settle\":" + String(stepScanSettleMs) + "}";
   webSocket.broadcastTXT(json);
@@ -386,19 +394,33 @@ void runStepScan(long encSnap) {
 
   switch (stepScanState) {
     case SS_MOVING:
+      // Send GOTOPOS once per step
+      if (!stepScanGotoSent) {
+        noInterrupts(); stepScanGotoStartEnc = encoderValue; interrupts();
+        stepScanGotoSentMs = millis();
+        String cmd = "GOTOPOS:" + String((float)(stepScanTargetCm + 2), 2) +
+                     ":" + String(MOTOR_FAST_HZ) + ":F";
+        motorQueueTx(cmd);
+        stepScanGotoSent = true;
+        webSocket.broadcastTXT("{\"type\":\"step_scan_moving\",\"target\":" + String(stepScanTargetCm) + "}");
+        Serial.println("[StepScan] GOTOPOS -> cm " + String(stepScanTargetCm));
+      }
       if (curCm != lastCm && curCm >= 0) {
         lastCm = curCm;
         webSocket.broadcastTXT("{\"cm\":" + String(curCm) + "}");
       }
-      // Stop slightly before target to give the motor room to decelerate
-      if (floatCm >= (float)stepScanTargetCm - 0.8f) {
-        motorQueueTx("STOP");
-        stepScanState        = SS_SETTLING;
-        stepScanSettleStart  = millis();
-        noInterrupts();
-        stepScanSettleLastEnc = encoderValue;
-        interrupts();
-        webSocket.broadcastTXT("{\"type\":\"step_scan_settling\",\"cm\":" + String(stepScanTargetCm) + "}");
+      {
+        // Transition to SETTLING once encoder starts moving, or after 1.5 s timeout
+        // (timeout covers the case where slave was already at target)
+        noInterrupts(); long curEnc2 = encoderValue; interrupts();
+        bool motorStarted  = (abs(curEnc2 - stepScanGotoStartEnc) >= 5);
+        bool noMoveTimeout = (!motorStarted && (millis() - stepScanGotoSentMs > 1500));
+        if (motorStarted || noMoveTimeout) {
+          stepScanState        = SS_SETTLING;
+          stepScanSettleStart  = millis();
+          noInterrupts(); stepScanSettleLastEnc = encoderValue; interrupts();
+          webSocket.broadcastTXT("{\"type\":\"step_scan_settling\",\"cm\":" + String(stepScanTargetCm) + "}");
+        }
       }
       break;
 
@@ -446,13 +468,13 @@ void runStepScan(long encSnap) {
         Serial.print(compensated, 2);   Serial.print(",");
         Serial.println(avg, 2);
         stepScanTargetCm++;
+        stepScanGotoSent = false;
         stepScanState = SS_MOVING;
-        motorQueueTx("SCAN");
       } else if (timeout) {
         Serial.println("[StepScan] Caliper timeout a cm " + String(stepScanTargetCm) + ", salto");
         stepScanTargetCm++;
+        stepScanGotoSent = false;
         stepScanState = SS_MOVING;
-        motorQueueTx("SCAN");
       }
       break;
     }
