@@ -398,9 +398,9 @@ void runStepScan(long encSnap) {
       if (!stepScanGotoSent) {
         noInterrupts(); stepScanGotoStartEnc = encoderValue; interrupts();
         stepScanGotoSentMs = millis();
-        // Sync slave position counter to encoder before each step (same as regular GOTOPOS)
-        motorQueueTx("SYNCPOS:" + String(stepScanGotoStartEnc));
-        String cmd = "STEPPOS:" + String((float)(stepScanTargetCm + 2), 2);
+        // SYNCSTEP combines sync + move in one message (single-slot TX queue can't hold both)
+        String cmd = "SYNCSTEP:" + String(stepScanGotoStartEnc) +
+                     ":" + String((float)(stepScanTargetCm + 2), 2);
         motorQueueTx(cmd);
         stepScanGotoSent = true;
         webSocket.broadcastTXT("{\"type\":\"step_scan_moving\",\"target\":" + String(stepScanTargetCm) + "}");

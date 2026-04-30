@@ -346,6 +346,49 @@ void processCommand(const char* command) {
     return;
   }
 
+  // SYNCSTEP:<enc_pulses>:<target_cm> — atomic sync + constant-speed move for step-scan
+  // Combines SYNCPOS and STEPPOS in one message to fit the single-slot TX queue.
+  if (strncmp(command, "SYNCSTEP:", 9) == 0) {
+    char* ptr = (char*)command + 9;
+    int32_t syncPos = (int32_t)atol(ptr);
+    stepper->setCurrentPosition(syncPos);
+    Serial.print("SYNCSTEP: sincronizzato a ");
+    Serial.print(syncPos);
+
+    char* sep = strchr(ptr, ':');
+    if (!sep) { sendStatus(); return; }
+    float targetCm = atof(sep + 1);
+    targetPos = (int32_t)(targetCm * PULSES_PER_CM);
+
+    int32_t currentPos = stepper->getCurrentPosition();
+    int32_t distance = abs(targetPos - currentPos);
+    fwd = (targetPos >= currentPos);
+
+    Serial.print(", target=");
+    Serial.print(targetCm);
+    Serial.print(" cm, distanza=");
+    Serial.println(distance);
+
+    if (distance == 0) {
+      mode = STEPPOS;
+      posActive = true;
+      sendStatus();   // STATUS:GOTOPOS:DIR:0 — immediate completion
+      stopMotion();
+      return;
+    }
+
+    mode = STEPPOS;
+    posActive = true;
+    currentDynamicSpeed = STEP_SCAN_HZ;
+    stepper->setAcceleration(STEP_SCAN_ACCEL);
+    stepper->setSpeedInHz(STEP_SCAN_HZ);
+    stepper->moveTo(targetPos);
+    lastMoveTime = millis();
+
+    sendStatus();
+    return;
+  }
+
   // STEPPOS:<target_cm> — constant speed, no accel profile (for step-scan 1-cm moves)
   if (strncmp(command, "STEPPOS:", 8) == 0) {
     float targetCm = atof(command + 8);
