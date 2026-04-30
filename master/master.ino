@@ -102,9 +102,8 @@ long          stepScanSettleLastEnc = 0;     // encoder snapshot for stability d
 float         stepScanMeasSum      = 0.0f;
 int           stepScanMeasGot      = 0;
 unsigned long stepScanMeasDeadline = 0;
-bool          stepScanGotoSent     = false;  // GOTOPOS sent for current step
-long          stepScanGotoStartEnc = 0;      // encoder at moment GOTOPOS was sent
-unsigned long stepScanGotoSentMs   = 0;      // time GOTOPOS was sent (for no-move timeout)
+bool          stepScanGotoSent     = false;  // STEPSCAN sent for current step
+unsigned long stepScanGotoSentMs   = 0;      // time STEPSCAN was sent (for timeout fallback)
 
 unsigned long lastSpeedTime = 0;
 long lastSpeedEncoder = 0;
@@ -275,18 +274,7 @@ void motorHandleStatusLine(const char* line) {
   // Gestione GOTOPOS
   if (motorMode == "GOTOPOS") {
     if (stepScanActive) {
-      // During step-scan, slave completion (remaining=0) is the authoritative
-      // "motor arrived" signal — immune to encoder EMI noise.
-      if (colon2 && stepScanState == SS_MOVING) {
-        int remaining = atoi(colon2 + 1);
-        if (remaining == 0) {
-          stepScanState       = SS_SETTLING;
-          stepScanSettleStart = millis();
-          noInterrupts(); stepScanSettleLastEnc = encoderValue; interrupts();
-          webSocket.broadcastTXT("{\"type\":\"step_scan_settling\",\"cm\":" + String(stepScanTargetCm) + "}");
-          Serial.println("[StepScan] slave arrived at cm " + String(stepScanTargetCm));
-        }
-      }
+      // Step-scan is encoder-driven; slave position status not used here.
     } else {
       isGoToActive = true;
       if (colon2) {
@@ -404,28 +392,37 @@ void runStepScan(long encSnap) {
 
   switch (stepScanState) {
     case SS_MOVING:
-      // Send STEPPOS once per step (constant speed, no accel/decel profile)
+      // Send STEPSCAN once — master stops motor when encoder reaches target
       if (!stepScanGotoSent) {
-        noInterrupts(); stepScanGotoStartEnc = encoderValue; interrupts();
+        long targetEnc = (long)(stepScanTargetCm + 2) * PULSES_PER_CM;
+        if (encSnap >= targetEnc) {
+          // Already at or past target — go straight to settling
+          stepScanGotoSent    = true;
+          stepScanState       = SS_SETTLING;
+          stepScanSettleStart = millis();
+          noInterrupts(); stepScanSettleLastEnc = encoderValue; interrupts();
+          webSocket.broadcastTXT("{\"type\":\"step_scan_settling\",\"cm\":" + String(stepScanTargetCm) + "}");
+          break;
+        }
+        motorQueueTx("STEPSCAN");
+        stepScanGotoSent   = true;
         stepScanGotoSentMs = millis();
-        // SYNCSTEP combines sync + move in one message (single-slot TX queue can't hold both)
-        String cmd = "SYNCSTEP:" + String(stepScanGotoStartEnc) +
-                     ":" + String((float)(stepScanTargetCm + 2), 2);
-        motorQueueTx(cmd);
-        stepScanGotoSent = true;
         webSocket.broadcastTXT("{\"type\":\"step_scan_moving\",\"target\":" + String(stepScanTargetCm) + "}");
-        Serial.println("[StepScan] SYNCSTEP -> cm " + String(stepScanTargetCm));
+        Serial.println("[StepScan] STEPSCAN -> target enc " + String(targetEnc));
       }
-      // SS_MOVING → SS_SETTLING transition is driven by the slave's STATUS:GOTOPOS:DIR:0
-      // (handled in motorHandleStatusLine). Encoder-based detection removed — EMI from
-      // the stepper caused false "motorStarted" triggers and phantom steps.
-      // Timeout fallback in case STATUS message is lost.
-      if (millis() - stepScanGotoSentMs > 3000) {
-        stepScanState       = SS_SETTLING;
-        stepScanSettleStart = millis();
-        noInterrupts(); stepScanSettleLastEnc = encoderValue; interrupts();
-        webSocket.broadcastTXT("{\"type\":\"step_scan_settling\",\"cm\":" + String(stepScanTargetCm) + "}");
-        Serial.println("[StepScan] timeout fallback -> settling cm " + String(stepScanTargetCm));
+      // Stop motor when encoder reaches target position
+      {
+        long targetEnc = (long)(stepScanTargetCm + 2) * PULSES_PER_CM;
+        bool atTarget  = (encSnap >= targetEnc);
+        bool timeout   = (millis() - stepScanGotoSentMs > 5000);
+        if (atTarget || timeout) {
+          motorQueueTx("STOP");
+          stepScanState       = SS_SETTLING;
+          stepScanSettleStart = millis();
+          noInterrupts(); stepScanSettleLastEnc = encoderValue; interrupts();
+          webSocket.broadcastTXT("{\"type\":\"step_scan_settling\",\"cm\":" + String(stepScanTargetCm) + "}");
+          if (timeout) Serial.println("[StepScan] timeout fallback");
+        }
       }
       break;
 

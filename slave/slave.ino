@@ -243,6 +243,13 @@ void processCommand(const char* command) {
     sendStatus();
     return;
   }
+
+  // STEPSCAN: slow scan for step-scan mode; master stops via encoder position
+  if (strcmp(command, "STEPSCAN") == 0) {
+    startMotion(fwd, STEP_SCAN_HZ, SCAN);  // SCAN mode → SCAN_STOP_DECEL on STOP
+    sendStatus();
+    return;
+  }
   
   if (strcmp(command, "STOP") == 0) {
     stopMotion();
