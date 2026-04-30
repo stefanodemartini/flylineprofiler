@@ -463,21 +463,26 @@ void runStepScan(long encSnap) {
         float avg         = stepScanMeasSum / stepScanMeasGot;
         float compensated = avg - displayZeroValue - caliperZeroOffset;
         compensated       = round(compensated * 1000.0f) / 1000.0f;
-        addDataPoint(stepScanTargetCm, compensated, avg);
-        String json = "{\"cm\":" + String(stepScanTargetCm) +
+        // Use stable encoder position — accurate regardless of motor slip/calibration
+        float stableEncoderCm = stepScanSettleLastEnc / (float)PULSES_PER_CM - 2.0f;
+        int measuredAtCm = (int)round(stableEncoderCm);
+        addDataPoint(measuredAtCm, compensated, avg);
+        String json = "{\"cm\":" + String(measuredAtCm) +
                       ",\"diameter\":" + String(compensated, 2) +
                       ",\"rawDisplay\":" + String(avg, 2) +
                       ",\"totalPoints\":" + String(getTotalDataPoints()) + "}";
         webSocket.broadcastTXT(json);
-        Serial.print(stepScanTargetCm); Serial.print(",");
+        Serial.print(measuredAtCm); Serial.print(",");
         Serial.print(compensated, 2);   Serial.print(",");
         Serial.println(avg, 2);
-        stepScanTargetCm++;
+        // Next target: next whole cm past where we actually are (encoder-driven)
+        stepScanTargetCm = measuredAtCm + 1;
         stepScanGotoSent = false;
         stepScanState = SS_MOVING;
       } else if (timeout) {
         Serial.println("[StepScan] Caliper timeout a cm " + String(stepScanTargetCm) + ", salto");
-        stepScanTargetCm++;
+        float stableEncoderCm = stepScanSettleLastEnc / (float)PULSES_PER_CM - 2.0f;
+        stepScanTargetCm = (int)stableEncoderCm + 1;
         stepScanGotoSent = false;
         stepScanState = SS_MOVING;
       }
