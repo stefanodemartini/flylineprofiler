@@ -1343,7 +1343,11 @@ void setup() {
                     }
                 } else if (msg.type === 'step_scan') {
                     updateStepScanUI(msg.active, msg.active ? 'moving' : 'idle', 0);
+                } else if (msg.type === 'step_scan_moving') {
+                    document.getElementById('currentLength').textContent = msg.target + ' cm';
+                    updateStepScanUI(true, 'moving', msg.target);
                 } else if (msg.type === 'step_scan_settling') {
+                    document.getElementById('currentLength').textContent = msg.cm + ' cm';
                     updateStepScanUI(true, 'settling', msg.cm);
                 } else if (msg.type === 'step_scan_config') {
                     document.getElementById('ssInputSamples').value = msg.samples;
