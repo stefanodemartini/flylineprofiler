@@ -17,10 +17,10 @@
 #define UART_TX    18
 
 // -----------------------------
-// LEDC
-#define STEP_LEDC_CH  0
+// LEDC (ESP32 Arduino core v3 pin-based API)
 #define STEP_LEDC_RES 8     // 8-bit resolution
 #define STEP_DUTY_50  128   // 50% duty → continuous step pulses
+#define STEP_DUTY_OFF 0
 
 // -----------------------------
 // UART
@@ -88,15 +88,15 @@ void motorStart(bool forward, uint32_t hz, Mode newMode) {
   digitalWrite(DIR_PIN, forward ? HIGH : LOW);
   digitalWrite(ENA_PIN, LOW);              // enable driver (active LOW)
   delayMicroseconds(100);                  // DIR + ENA setup time for TB6600
-  ledcSetup(STEP_LEDC_CH, hz, STEP_LEDC_RES);
-  ledcWrite(STEP_LEDC_CH, STEP_DUTY_50);
+  ledcChangeFrequency(PUL_PIN, hz, STEP_LEDC_RES);
+  ledcWrite(PUL_PIN, STEP_DUTY_50);
   mode = newMode;
   Serial.printf("Motor START %s %s @ %u Hz\n",
                 modeToString(newMode), forward ? "FWD" : "BWD", hz);
 }
 
 void motorStop() {
-  ledcWrite(STEP_LEDC_CH, 0);   // instant stop
+  ledcWrite(PUL_PIN, STEP_DUTY_OFF);   // instant stop
   digitalWrite(ENA_PIN, HIGH);  // disable driver
   mode = STOPPED;
   Serial.println("Motor STOP");
@@ -249,10 +249,9 @@ void setup() {
   digitalWrite(DIR_PIN, HIGH);  // forward
   digitalWrite(ENA_PIN, HIGH);  // disabled at startup
 
-  // Attach LEDC channel to PUL pin; start with duty=0 (no pulses)
-  ledcSetup(STEP_LEDC_CH, SCAN_HZ, STEP_LEDC_RES);
-  ledcAttachPin(PUL_PIN, STEP_LEDC_CH);
-  ledcWrite(STEP_LEDC_CH, 0);
+  // Attach LEDC to PUL pin; start with duty=0 (no pulses)
+  ledcAttach(PUL_PIN, SCAN_HZ, STEP_LEDC_RES);
+  ledcWrite(PUL_PIN, STEP_DUTY_OFF);
 
   sendStatus();
 
