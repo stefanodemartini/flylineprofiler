@@ -95,8 +95,10 @@ enum StepScanState : uint8_t { SS_IDLE, SS_MOVING, SS_SETTLING, SS_MEASURING };
 bool          stepScanActive       = false;
 StepScanState stepScanState        = SS_IDLE;
 int           stepScanTargetCm     = 0;
-int           stepScanSamples      = 3;      // caliper samples per stop
-unsigned long stepScanSettleMs     = 80;     // ms encoder must be stable before sampling (LEDC stops instantly)
+int           stepScanSamples          = 3;      // caliper samples per stop
+unsigned long stepScanSettleMs         = 80;     // ms encoder must be stable (motor stopped)
+unsigned long stepScanCaliperSettleMs  = 300;    // ms to discard caliper readings after motor stops (line vibration)
+unsigned long stepScanCaliperSettleEnd = 0;      // absolute deadline: start sampling after this
 unsigned long stepScanSettleStart  = 0;
 long          stepScanSettleLastEnc = 0;     // encoder snapshot for stability detection
 float         stepScanMeasSum      = 0.0f;
@@ -435,17 +437,23 @@ void runStepScan(long encSnap) {
         stepScanSettleLastEnc = curEnc;   // still moving — reset stability timer
         stepScanSettleStart   = millis();
       } else if (millis() - stepScanSettleStart >= stepScanSettleMs) {
-        // Stable for settleMs → discard stale caliper reading, begin sampling
+        // Motor stopped — start caliper settle: discard readings for stepScanCaliperSettleMs
         noInterrupts(); calDataReady = false; interrupts();
-        stepScanMeasSum      = 0.0f;
-        stepScanMeasGot      = 0;
-        stepScanMeasDeadline = millis() + 3000;
-        stepScanState        = SS_MEASURING;
+        stepScanMeasSum          = 0.0f;
+        stepScanMeasGot          = 0;
+        stepScanCaliperSettleEnd = millis() + stepScanCaliperSettleMs;
+        stepScanMeasDeadline     = stepScanCaliperSettleEnd + 3000;
+        stepScanState            = SS_MEASURING;
       }
       break;
     }
 
     case SS_MEASURING: {
+      // Discard caliper readings until line vibration has died down
+      if (millis() < stepScanCaliperSettleEnd) {
+        noInterrupts(); calDataReady = false; interrupts();
+        break;
+      }
       noInterrupts();
       bool rdy = calDataReady;
       interrupts();
