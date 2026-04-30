@@ -101,7 +101,7 @@ unsigned long stepScanSettleStart  = 0;
 long          stepScanSettleLastEnc = 0;
 // Caliper stability detection
 const float   CAL_STABLE_TOL       = 0.02f;  // mm: readings must agree within this
-const int     CAL_STABLE_NEEDED    = 3;       // consecutive stable readings required
+const int     CAL_STABLE_NEEDED    = 5;       // consecutive stable readings required
 float         stepScanCalLastVal   = -999.0f;
 int           stepScanCalStableN   = 0;
 unsigned long stepScanCalTimeout   = 0;       // give up waiting after this
