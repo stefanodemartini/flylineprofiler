@@ -95,6 +95,7 @@ enum StepScanState : uint8_t { SS_IDLE, SS_MOVING, SS_SETTLING, SS_CAL_SETTLING,
 bool          stepScanActive       = false;
 StepScanState stepScanState        = SS_IDLE;
 int           stepScanTargetCm     = 0;
+long          stepScanStartEnc     = 0;      // encoder snapshot when scan started
 int           stepScanSamples          = 1;      // caliper samples once stable (stability detection already averaged)
 unsigned long stepScanSettleMs         = 80;     // ms encoder must be stable (motor stopped)
 unsigned long stepScanSettleStart  = 0;
@@ -369,18 +370,16 @@ void checkGoToStatus() {
 void startStepScan() {
   if (stepScanActive || isGoToActive) return;
   noInterrupts();
-  long enc = encoderValue;
+  stepScanStartEnc = encoderValue;
   interrupts();
-  stepScanTargetCm   = (int)((enc / (float)PULSES_PER_CM) - 2.0f) + 1;
-  if (stepScanTargetCm < 0) stepScanTargetCm = 0;
+  stepScanTargetCm   = 1;        // first step: move 1cm from current position
   stepScanActive     = true;
   stepScanState      = SS_MOVING;
   stepScanGotoSent   = false;
   scanEnabled        = false;
-  String json = "{\"type\":\"step_scan\",\"active\":true,\"samples\":" + String(stepScanSamples) +
-                ",\"settle\":" + String(stepScanSettleMs) + "}";
+  String json = "{\"type\":\"step_scan\",\"active\":true}";
   webSocket.broadcastTXT(json);
-  Serial.println("[StepScan] Avviato verso cm " + String(stepScanTargetCm));
+  Serial.println("[StepScan] Avviato, base enc=" + String(stepScanStartEnc));
 }
 
 void stopStepScan() {
@@ -400,7 +399,7 @@ void runStepScan(long encSnap) {
     case SS_MOVING:
       // Send STEPSCAN once — master stops motor when encoder reaches target
       if (!stepScanGotoSent) {
-        long targetEnc = (long)(stepScanTargetCm + 2) * PULSES_PER_CM;
+        long targetEnc = stepScanStartEnc + (long)stepScanTargetCm * PULSES_PER_CM;
         if (encSnap >= targetEnc) {
           // Already at or past target — go straight to settling
           stepScanGotoSent    = true;
@@ -418,7 +417,7 @@ void runStepScan(long encSnap) {
       }
       // Stop motor when encoder reaches target position
       {
-        long targetEnc = (long)(stepScanTargetCm + 2) * PULSES_PER_CM;
+        long targetEnc = stepScanStartEnc + (long)stepScanTargetCm * PULSES_PER_CM;
         bool atTarget  = (encSnap >= targetEnc);
         bool timeout   = (millis() - stepScanGotoSentMs > 5000);
         if (atTarget || timeout) {
