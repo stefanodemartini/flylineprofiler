@@ -95,8 +95,8 @@ enum StepScanState : uint8_t { SS_IDLE, SS_MOVING, SS_SETTLING, SS_MEASURING };
 bool          stepScanActive       = false;
 StepScanState stepScanState        = SS_IDLE;
 int           stepScanTargetCm     = 0;
-int           stepScanSamples      = 10;     // caliper samples per stop
-unsigned long stepScanSettleMs     = 300;    // ms encoder must be stable before sampling
+int           stepScanSamples      = 3;      // caliper samples per stop
+unsigned long stepScanSettleMs     = 80;     // ms encoder must be stable before sampling (LEDC stops instantly)
 unsigned long stepScanSettleStart  = 0;
 long          stepScanSettleLastEnc = 0;     // encoder snapshot for stability detection
 float         stepScanMeasSum      = 0.0f;
