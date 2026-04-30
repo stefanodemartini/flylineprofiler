@@ -275,8 +275,18 @@ void motorHandleStatusLine(const char* line) {
   // Gestione GOTOPOS
   if (motorMode == "GOTOPOS") {
     if (stepScanActive) {
-      // During step scan the slave runs GOTOPOS per step; encoder stability
-      // is the authoritative arrival signal — ignore slave GOTOPOS status here.
+      // During step-scan, slave completion (remaining=0) is the authoritative
+      // "motor arrived" signal — immune to encoder EMI noise.
+      if (colon2 && stepScanState == SS_MOVING) {
+        int remaining = atoi(colon2 + 1);
+        if (remaining == 0) {
+          stepScanState       = SS_SETTLING;
+          stepScanSettleStart = millis();
+          noInterrupts(); stepScanSettleLastEnc = encoderValue; interrupts();
+          webSocket.broadcastTXT("{\"type\":\"step_scan_settling\",\"cm\":" + String(stepScanTargetCm) + "}");
+          Serial.println("[StepScan] slave arrived at cm " + String(stepScanTargetCm));
+        }
+      }
     } else {
       isGoToActive = true;
       if (colon2) {
@@ -404,22 +414,18 @@ void runStepScan(long encSnap) {
         motorQueueTx(cmd);
         stepScanGotoSent = true;
         webSocket.broadcastTXT("{\"type\":\"step_scan_moving\",\"target\":" + String(stepScanTargetCm) + "}");
-        Serial.println("[StepScan] STEPPOS -> cm " + String(stepScanTargetCm));
+        Serial.println("[StepScan] SYNCSTEP -> cm " + String(stepScanTargetCm));
       }
-      // Don't broadcast encoder position during motor movement — EMI causes spurious counts.
-      // Position display updates once the motor settles.
-      {
-        // Transition to SETTLING once encoder starts moving, or after 1.5 s timeout
-        // (timeout covers the case where slave was already at target)
-        noInterrupts(); long curEnc2 = encoderValue; interrupts();
-        bool motorStarted  = (abs(curEnc2 - stepScanGotoStartEnc) >= 5);
-        bool noMoveTimeout = (!motorStarted && (millis() - stepScanGotoSentMs > 1500));
-        if (motorStarted || noMoveTimeout) {
-          stepScanState        = SS_SETTLING;
-          stepScanSettleStart  = millis();
-          noInterrupts(); stepScanSettleLastEnc = encoderValue; interrupts();
-          webSocket.broadcastTXT("{\"type\":\"step_scan_settling\",\"cm\":" + String(stepScanTargetCm) + "}");
-        }
+      // SS_MOVING → SS_SETTLING transition is driven by the slave's STATUS:GOTOPOS:DIR:0
+      // (handled in motorHandleStatusLine). Encoder-based detection removed — EMI from
+      // the stepper caused false "motorStarted" triggers and phantom steps.
+      // Timeout fallback in case STATUS message is lost.
+      if (millis() - stepScanGotoSentMs > 3000) {
+        stepScanState       = SS_SETTLING;
+        stepScanSettleStart = millis();
+        noInterrupts(); stepScanSettleLastEnc = encoderValue; interrupts();
+        webSocket.broadcastTXT("{\"type\":\"step_scan_settling\",\"cm\":" + String(stepScanTargetCm) + "}");
+        Serial.println("[StepScan] timeout fallback -> settling cm " + String(stepScanTargetCm));
       }
       break;
 
