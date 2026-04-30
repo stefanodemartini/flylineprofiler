@@ -95,7 +95,7 @@ enum StepScanState : uint8_t { SS_IDLE, SS_MOVING, SS_SETTLING, SS_CAL_SETTLING,
 bool          stepScanActive       = false;
 StepScanState stepScanState        = SS_IDLE;
 int           stepScanTargetCm     = 0;
-int           stepScanSamples          = 3;      // caliper samples once stable
+int           stepScanSamples          = 1;      // caliper samples once stable (stability detection already averaged)
 unsigned long stepScanSettleMs         = 80;     // ms encoder must be stable (motor stopped)
 unsigned long stepScanSettleStart  = 0;
 long          stepScanSettleLastEnc = 0;
