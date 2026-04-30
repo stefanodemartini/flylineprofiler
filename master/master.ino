@@ -731,20 +731,8 @@ void setup() {
             <div class="status-value" id="currentLength">0 cm</div>
         </div>
         <div class="status-item">
-            <div>Diametro Compensato</div>
+            <div>Diametro</div>
             <div class="status-value" id="currentDiameter">0.00 mm</div>
-        </div>
-        <div class="status-item">
-            <div>Display Calibro</div>
-            <div class="status-value" id="currentDisplay">0.00 mm</div>
-        </div>
-        <div class="status-item">
-            <div>Velocit&agrave;</div>
-            <div class="status-value" id="currentSpeed">0.00 cm/s</div>
-        </div>
-        <div class="status-item">
-            <div>Stato Velocit&agrave;</div>
-            <div class="status-value" id="speedStatus">Ottimale</div>
         </div>
         <div class="status-item">
             <div>Punti Registrati</div>
@@ -771,7 +759,7 @@ void setup() {
 
     <div class="motor-bar">
         <span class="motor-bar-title">&#x1F527; Motore</span>
-        <button class="danger" onclick="stopScan()" style="font-size:1.1em;padding:10px 24px;font-weight:bold;">⏹ STOP</button>
+        <button class="danger" onclick="universalStop()" style="font-size:1.1em;padding:10px 24px;font-weight:bold;">⏹ STOP</button>
         <button class="warning" onclick="sendCommand('motor fast_s')">FAST stessa dir</button>
         <button class="warning" onclick="sendCommand('motor fast_o')">FAST opposta dir</button>
         <button onclick="sendCommand('motor status')">Aggiorna Stato</button>
@@ -782,13 +770,6 @@ void setup() {
     <div id="stepScanBar" class="step-scan-bar" style="display:none;">
         <span style="font-weight:bold;font-size:0.9em;color:#155724;">📏 Step Scan</span>
         <span class="ss-state ss-idle" id="ssStateLabel">IDLE</span>
-        <label style="font-size:0.9em;">Campioni:
-            <input type="number" id="ssInputSamples" value="10" min="1" max="50" style="width:50px;padding:3px;border:1px solid #aaa;border-radius:4px;">
-        </label>
-        <label style="font-size:0.9em;">Attesa (ms):
-            <input type="number" id="ssInputSettle" value="300" min="50" max="2000" style="width:65px;padding:3px;border:1px solid #aaa;border-radius:4px;">
-        </label>
-        <button onclick="applyStepScanConfig()" style="padding:4px 10px;font-size:0.85em;background:#17a2b8;">Applica</button>
         <button onclick="stopStepScanUI()" class="danger" style="padding:4px 10px;font-size:0.85em;">⏹ Stop</button>
     </div>
 
@@ -922,12 +903,9 @@ void setup() {
     function startStepScanUI() {
         if (isGoToActive)    { showCommandStatus('Attendi completamento GOTOPOS', true); return; }
         if (isStepScanActive){ showCommandStatus('Step scan già in corso', true); return; }
-        const samples = parseInt(document.getElementById('ssInputSamples').value) || 10;
-        const settle  = parseInt(document.getElementById('ssInputSettle').value)  || 150;
         stopTimer();
         document.getElementById('scanTimer').textContent = '00:00';
         startTimerIfNeeded();
-        sendCommand('step_scan_config:' + samples + ':' + settle);
         sendCommand('step_scan_start');
     }
 
@@ -1019,6 +997,12 @@ void setup() {
         document.getElementById('scanTimer').textContent = "00:00";
         startTimerIfNeeded();
         sendCommand('motor scan');
+    }
+
+    function universalStop() {
+        if (isStepScanActive) sendCommand('step_scan_stop');
+        sendCommand('motor stop');
+        stopTimer();
     }
 
     function stopScan() {
@@ -1123,24 +1107,7 @@ void setup() {
         });
     }
 
-    function updateSpeedDisplay(speed) {
-        const speedElement = document.getElementById('currentSpeed');
-        const statusElement = document.getElementById('speedStatus');
-        speedElement.textContent = speed.toFixed(2) + ' cm/s';
-        if (speed < OPTIMAL_SPEED_MIN) {
-            statusElement.textContent = 'Troppo Lenta';
-            statusElement.className = 'status-value speed-too-slow';
-            speedElement.className = 'status-value speed-too-slow';
-        } else if (speed > OPTIMAL_SPEED_MAX) {
-            statusElement.textContent = 'Troppo Alta';
-            statusElement.className = 'status-value speed-too-fast';
-            speedElement.className = 'status-value speed-too-fast';
-        } else {
-            statusElement.textContent = 'Ottimale';
-            statusElement.className = 'status-value speed-optimal';
-            speedElement.className = 'status-value speed-optimal';
-        }
-    }
+    function applyStepScanConfig() { /* config now handled server-side */ }
 
     function uploadCSV() {
         const fileInput = document.getElementById('csvFile');
@@ -1339,7 +1306,7 @@ void setup() {
                 if (msg.type === 'params') {
                     updateParamsDisplay(msg.displayZero, msg.offset);
                 } else if (msg.type === 'speed') {
-                    updateSpeedDisplay(msg.speed);
+                    // speed data ignored — speed display removed
                 } else if (msg.type === 'motor') {
                     document.getElementById('motorState').textContent = msg.mode + ' ' + msg.dir;
                 } else if (msg.type === 'goto_status') {
@@ -1418,7 +1385,6 @@ void setup() {
     function updateDisplay(msg) {
         document.getElementById('currentLength').textContent = msg.cm + ' cm';
         document.getElementById('currentDiameter').textContent = msg.diameter.toFixed(2) + ' mm';
-        document.getElementById('currentDisplay').textContent = msg.rawDisplay.toFixed(2) + ' mm';
         document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString();
         document.getElementById('dataPointsCount').textContent = msg.totalPoints || dataPoints.length;
         addDataPoint(msg.cm, msg.diameter);
