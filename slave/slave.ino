@@ -30,7 +30,7 @@ HardwareSerial SerialMaster(2);
 // Motor speeds (Hz)
 const uint32_t SCAN_HZ      = 1500;
 const uint32_t FAST_HZ      = 12000;
-const uint32_t STEP_SCAN_HZ = 200;   // must be below motor pull-in speed
+const uint32_t STEP_SCAN_HZ = 800;   // ~1s per cm; increase if motor starts cleanly
 
 // Failsafe: stop GOTOPOS if master goes silent
 const unsigned long GOTOPOS_TIMEOUT_MS = 30000;
