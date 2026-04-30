@@ -26,9 +26,11 @@ HardwareSerial SerialMaster(2);
 // Motor parameters
 const uint32_t SCAN_HZ = 1500;
 const uint32_t FAST_HZ = 12000;
+const uint32_t STEP_SCAN_HZ = 800;       // Constant speed for step-scan 1-cm moves
 const uint32_t ACCEL = 1500;
 const uint32_t FAST_STOP_DECEL = 24000;  // ~1m stop distance from FAST_HZ (vs 16m at ACCEL)
 const uint32_t SCAN_STOP_DECEL = 40000;  // stop within ~1cm from SCAN_HZ
+const uint32_t STEP_SCAN_ACCEL = 1000000; // Effectively instant ramp for STEPPOS
 const uint32_t MIN_SPEED_HZ = 300;      // Velocità minima in prossimità del target
 const uint32_t DISTANCE_THRESHOLD = 500; // Passi a cui iniziare a ridurre velocità
 
@@ -38,7 +40,10 @@ const float PULSES_PER_CM = 30.0;
 
 // -----------------------------
 // State variables
-enum Mode { STOPPED, SCAN, FAST_S, FAST_O, GOTOPOS };
+enum Mode { STOPPED, SCAN, FAST_S, FAST_O, GOTOPOS, STEPPOS };
+
+// Helper: true for any position-tracking mode
+inline bool isPositionMode(Mode m) { return m == GOTOPOS || m == STEPPOS; }
 Mode mode = STOPPED;
 bool fwd = true;
 int32_t targetPos = 0;
@@ -94,6 +99,7 @@ bool isButtonPressed(int pin) {
 const char* modeToString(Mode m) {
   switch (m) {
     case GOTOPOS: return "GOTOPOS";
+    case STEPPOS: return "GOTOPOS";  // reports same status as GOTOPOS to master
     case SCAN: return "SCAN";
     case FAST_S: return "FAST_S";
     case FAST_O: return "FAST_O";
@@ -168,7 +174,7 @@ uint32_t calculateDynamicSpeed(int32_t distanceToGo) {
 }
 
 void updateDynamicSpeed() {
-  if (mode != GOTOPOS || !posActive) return;
+  if (mode != GOTOPOS || !posActive) return;  // STEPPOS intentionally excluded (constant speed)
   
   int32_t distanceToGo = getDistanceToGo();
   uint32_t newSpeed = calculateDynamicSpeed(distanceToGo);
@@ -189,7 +195,7 @@ void updateDynamicSpeed() {
 }
 
 void checkPositionReached() {
-  if (mode != GOTOPOS || !posActive) return;
+  if (!isPositionMode(mode) || !posActive) return;
   
   int32_t distanceToGo = getDistanceToGo();
   
@@ -209,7 +215,7 @@ void checkPositionReached() {
 // UART communication
 void sendStatus() {
   txPending = "STATUS:" + String(modeToString(mode)) + ":" + String(fwd ? "FWD" : "BWD");
-  if (mode == GOTOPOS && posActive) {
+  if (isPositionMode(mode) && posActive) {
     int32_t distanceToGo = getDistanceToGo();
     txPending += ":" + String(distanceToGo);
   }
@@ -339,7 +345,43 @@ void processCommand(const char* command) {
     sendStatus();
     return;
   }
-  
+
+  // STEPPOS:<target_cm> — constant speed, no accel profile (for step-scan 1-cm moves)
+  if (strncmp(command, "STEPPOS:", 8) == 0) {
+    float targetCm = atof(command + 8);
+    targetPos = (int32_t)(targetCm * PULSES_PER_CM);
+
+    int32_t currentPos = stepper->getCurrentPosition();
+    int32_t distance = abs(targetPos - currentPos);
+    fwd = (targetPos >= currentPos);
+
+    Serial.print("STEPPOS: target=");
+    Serial.print(targetCm);
+    Serial.print(" cm (");
+    Serial.print(targetPos);
+    Serial.print(" passi), distanza=");
+    Serial.println(distance);
+
+    if (distance == 0) {
+      mode = STEPPOS;
+      posActive = true;
+      sendStatus();   // STATUS:GOTOPOS:DIR:0 — immediate completion
+      stopMotion();
+      return;
+    }
+
+    mode = STEPPOS;
+    posActive = true;
+    currentDynamicSpeed = STEP_SCAN_HZ;
+    stepper->setAcceleration(STEP_SCAN_ACCEL);
+    stepper->setSpeedInHz(STEP_SCAN_HZ);
+    stepper->moveTo(targetPos);
+    lastMoveTime = millis();
+
+    sendStatus();
+    return;
+  }
+
   // Comando non riconosciuto
   Serial.print("Comando sconosciuto: ");
   Serial.println(command);
@@ -372,7 +414,7 @@ void receiveData() {
 // -----------------------------
 // Button handling
 void handleButtons() {
-  if (mode == GOTOPOS) return;  // FW-05: ignore buttons during GOTOPOS to prevent isGoToActive lock
+  if (isPositionMode(mode)) return;  // FW-05: ignore buttons during position moves
   unsigned long now = millis();
   
   // Pulsante SCAN
@@ -478,8 +520,8 @@ void loop() {
   receiveData();
   transmitPending();
   
-  // Gestione movimento GOTOPOS
-  if (mode == GOTOPOS && posActive) {
+  // Gestione movimento posizionamento (GOTOPOS / STEPPOS)
+  if (isPositionMode(mode) && posActive) {
     updateDynamicSpeed();
     checkPositionReached();
     

@@ -394,16 +394,15 @@ void runStepScan(long encSnap) {
 
   switch (stepScanState) {
     case SS_MOVING:
-      // Send GOTOPOS once per step
+      // Send STEPPOS once per step (constant speed, no accel/decel profile)
       if (!stepScanGotoSent) {
         noInterrupts(); stepScanGotoStartEnc = encoderValue; interrupts();
         stepScanGotoSentMs = millis();
-        String cmd = "GOTOPOS:" + String((float)(stepScanTargetCm + 2), 2) +
-                     ":" + String(MOTOR_FAST_HZ) + ":F";
+        String cmd = "STEPPOS:" + String((float)(stepScanTargetCm + 2), 2);
         motorQueueTx(cmd);
         stepScanGotoSent = true;
         webSocket.broadcastTXT("{\"type\":\"step_scan_moving\",\"target\":" + String(stepScanTargetCm) + "}");
-        Serial.println("[StepScan] GOTOPOS -> cm " + String(stepScanTargetCm));
+        Serial.println("[StepScan] STEPPOS -> cm " + String(stepScanTargetCm));
       }
       if (curCm != lastCm && curCm >= 0) {
         lastCm = curCm;
