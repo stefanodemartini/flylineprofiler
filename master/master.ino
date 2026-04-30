@@ -398,6 +398,8 @@ void runStepScan(long encSnap) {
       if (!stepScanGotoSent) {
         noInterrupts(); stepScanGotoStartEnc = encoderValue; interrupts();
         stepScanGotoSentMs = millis();
+        // Sync slave position counter to encoder before each step (same as regular GOTOPOS)
+        motorQueueTx("SYNCPOS:" + String(stepScanGotoStartEnc));
         String cmd = "STEPPOS:" + String((float)(stepScanTargetCm + 2), 2);
         motorQueueTx(cmd);
         stepScanGotoSent = true;
