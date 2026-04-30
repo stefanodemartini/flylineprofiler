@@ -100,7 +100,7 @@ unsigned long stepScanSettleMs         = 80;     // ms encoder must be stable (m
 unsigned long stepScanSettleStart  = 0;
 long          stepScanSettleLastEnc = 0;
 // Caliper stability detection
-const float   CAL_STABLE_TOL       = 0.02f;  // mm: readings must agree within this
+const float   CAL_STABLE_TOL       = 0.01f;  // mm: readings must agree within this
 const int     CAL_STABLE_NEEDED    = 5;       // consecutive stable readings required
 float         stepScanCalLastVal   = -999.0f;
 int           stepScanCalStableN   = 0;
