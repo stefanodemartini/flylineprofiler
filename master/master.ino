@@ -91,21 +91,25 @@ int lastCm = -1;
 // ============================================================
 // STEP SCAN — stop-and-measure state machine
 // ============================================================
-enum StepScanState : uint8_t { SS_IDLE, SS_MOVING, SS_SETTLING, SS_MEASURING };
+enum StepScanState : uint8_t { SS_IDLE, SS_MOVING, SS_SETTLING, SS_CAL_SETTLING, SS_MEASURING };
 bool          stepScanActive       = false;
 StepScanState stepScanState        = SS_IDLE;
 int           stepScanTargetCm     = 0;
-int           stepScanSamples          = 3;      // caliper samples per stop
+int           stepScanSamples          = 3;      // caliper samples once stable
 unsigned long stepScanSettleMs         = 80;     // ms encoder must be stable (motor stopped)
-unsigned long stepScanCaliperSettleMs  = 300;    // ms to discard caliper readings after motor stops (line vibration)
-unsigned long stepScanCaliperSettleEnd = 0;      // absolute deadline: start sampling after this
 unsigned long stepScanSettleStart  = 0;
-long          stepScanSettleLastEnc = 0;     // encoder snapshot for stability detection
+long          stepScanSettleLastEnc = 0;
+// Caliper stability detection
+const float   CAL_STABLE_TOL       = 0.02f;  // mm: readings must agree within this
+const int     CAL_STABLE_NEEDED    = 3;       // consecutive stable readings required
+float         stepScanCalLastVal   = -999.0f;
+int           stepScanCalStableN   = 0;
+unsigned long stepScanCalTimeout   = 0;       // give up waiting after this
 float         stepScanMeasSum      = 0.0f;
 int           stepScanMeasGot      = 0;
 unsigned long stepScanMeasDeadline = 0;
-bool          stepScanGotoSent     = false;  // STEPSCAN sent for current step
-unsigned long stepScanGotoSentMs   = 0;      // time STEPSCAN was sent (for timeout fallback)
+bool          stepScanGotoSent     = false;
+unsigned long stepScanGotoSentMs   = 0;
 
 unsigned long lastSpeedTime = 0;
 long lastSpeedEncoder = 0;
@@ -429,36 +433,62 @@ void runStepScan(long encSnap) {
       break;
 
     case SS_SETTLING: {
-      // Wait until encoder has been STABLE for settleMs — motor truly stopped
+      // Wait until encoder has been stable for settleMs — motor truly stopped
       noInterrupts();
       long curEnc = encoderValue;
       interrupts();
       if (curEnc != stepScanSettleLastEnc) {
-        stepScanSettleLastEnc = curEnc;   // still moving — reset stability timer
+        stepScanSettleLastEnc = curEnc;
         stepScanSettleStart   = millis();
       } else if (millis() - stepScanSettleStart >= stepScanSettleMs) {
-        // Motor stopped — start caliper settle: discard readings for stepScanCaliperSettleMs
+        // Motor stopped — now wait for caliper to settle
         noInterrupts(); calDataReady = false; interrupts();
-        stepScanMeasSum          = 0.0f;
-        stepScanMeasGot          = 0;
-        stepScanCaliperSettleEnd = millis() + stepScanCaliperSettleMs;
-        stepScanMeasDeadline     = stepScanCaliperSettleEnd + 3000;
-        stepScanState            = SS_MEASURING;
+        stepScanCalLastVal  = -999.0f;
+        stepScanCalStableN  = 0;
+        stepScanCalTimeout  = millis() + 2000;  // give up after 2s
+        stepScanState       = SS_CAL_SETTLING;
       }
       break;
     }
 
-    case SS_MEASURING: {
-      // Discard caliper readings until line vibration has died down
-      if (millis() < stepScanCaliperSettleEnd) {
-        noInterrupts(); calDataReady = false; interrupts();
-        break;
-      }
+    case SS_CAL_SETTLING: {
+      // Read caliper as it arrives; wait until CAL_STABLE_NEEDED consecutive
+      // readings agree within CAL_STABLE_TOL — line vibration has died down
       noInterrupts();
       bool rdy = calDataReady;
       interrupts();
       if (rdy) {
         readCaliper();
+        noInterrupts(); calDataReady = false; interrupts();
+        if (fabsf(lineDiameter - stepScanCalLastVal) <= CAL_STABLE_TOL) {
+          stepScanCalStableN++;
+        } else {
+          stepScanCalStableN = 1;  // reset streak; keep this reading as new baseline
+        }
+        stepScanCalLastVal = lineDiameter;
+        Serial.printf("[StepScan] cal settle: %.3f (%d/%d)\n",
+                      lineDiameter, stepScanCalStableN, CAL_STABLE_NEEDED);
+      }
+      bool stable  = (stepScanCalStableN >= CAL_STABLE_NEEDED);
+      bool timeout = (!stable && millis() >= stepScanCalTimeout);
+      if (stable || timeout) {
+        if (timeout) Serial.println("[StepScan] caliper settle timeout — sampling anyway");
+        // Start measuring: seed sum with already-stable reading to save one sample
+        stepScanMeasSum      = stepScanCalLastVal;
+        stepScanMeasGot      = 1;
+        stepScanMeasDeadline = millis() + 2000;
+        stepScanState        = SS_MEASURING;
+      }
+      break;
+    }
+
+    case SS_MEASURING: {
+      noInterrupts();
+      bool rdy = calDataReady;
+      interrupts();
+      if (rdy) {
+        readCaliper();
+        noInterrupts(); calDataReady = false; interrupts();
         stepScanMeasSum += lineDiameter;
         stepScanMeasGot++;
       }
