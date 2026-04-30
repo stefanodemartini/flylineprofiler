@@ -511,16 +511,7 @@ void goToPosition(float targetCm) {
   // Determina la direzione
   bool direction = (targetCm > currentCm);
   
-  // Sync slave step counter to encoder before sending GOTOPOS.
-  // This ensures slave absolute position matches encoder regardless of
-  // any prior drift, reset, or slippage.
-  noInterrupts();
-  long encSnap0 = encoderValue;
-  interrupts();
-  motorQueueTx("SYNCPOS:" + String(encSnap0));
-
-  // Slave position is synced to encoder via SYNCPOS; add 2cm offset because
-  // encoder wheel is 20mm behind caliper — slave must target (X+2)*PULSES_PER_CM.
+  // Slave runs at FAST_HZ; master stops via encoder when target is reached.
   String cmd = "GOTOPOS:" + String(targetCm + 2.0f, 2) + ":" + String(MOTOR_FAST_HZ) + ":" + (direction ? "F" : "B");
   motorQueueTx(cmd);
   

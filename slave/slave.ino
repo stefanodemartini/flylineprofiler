@@ -1,225 +1,112 @@
-#include <FastAccelStepper.h>
-
 // ===============================
-// FW SLAVE - Controllo Motore Passo-Passo
+// FW SLAVE - Controllo Motore Passo-Passo (LEDC)
 // ===============================
-#define FIRMWARE_VERSION "0.4.0"
-#define FIRMWARE_DATE "2026-04-17"
-#define FIRMWARE_FEATURES "UART Control + GOTOPOS + Dynamic Speed + Buttons + Position fix + Completion signal"
+#define FIRMWARE_VERSION "0.5.0"
+#define FIRMWARE_DATE    "2026-04-30"
+#define FIRMWARE_FEATURES "LEDC constant-speed stepper, instant start/stop, encoder-driven from master"
 
 // -----------------------------
 // Pin definitions
-#define PUL_PIN 4
-#define DIR_PIN 5
-#define ENA_PIN 6
-#define BTN_SCAN 10
+#define PUL_PIN    4
+#define DIR_PIN    5
+#define ENA_PIN    6
+#define BTN_SCAN   10
 #define BTN_FAST_S 11
 #define BTN_FAST_O 12
-#define UART_RX 21
-#define UART_TX 18
+#define UART_RX    21
+#define UART_TX    18
+
+// -----------------------------
+// LEDC
+#define STEP_LEDC_CH  0
+#define STEP_LEDC_RES 8     // 8-bit resolution
+#define STEP_DUTY_50  128   // 50% duty → continuous step pulses
 
 // -----------------------------
 // UART
 HardwareSerial SerialMaster(2);
 
 // -----------------------------
-// Motor parameters
-const uint32_t SCAN_HZ = 1500;
-const uint32_t FAST_HZ = 12000;
-const uint32_t STEP_SCAN_HZ = 200;       // Constant speed for step-scan 1-cm moves (must be below motor pull-in speed)
-const uint32_t ACCEL = 1500;
-const uint32_t FAST_STOP_DECEL = 24000;  // ~1m stop distance from FAST_HZ (vs 16m at ACCEL)
-const uint32_t SCAN_STOP_DECEL = 40000;  // stop within ~1cm from SCAN_HZ
-const uint32_t STEP_SCAN_ACCEL = 5000;   // Gentle ramp (~40 ms) to reduce stepper EMI on encoder lines
-const uint32_t MIN_SPEED_HZ = 300;      // Velocità minima in prossimità del target
-const uint32_t DISTANCE_THRESHOLD = 500; // Passi a cui iniziare a ridurre velocità
+// Motor speeds (Hz)
+const uint32_t SCAN_HZ      = 1500;
+const uint32_t FAST_HZ      = 12000;
+const uint32_t STEP_SCAN_HZ = 200;   // must be below motor pull-in speed
+
+// Failsafe: stop GOTOPOS if master goes silent
+const unsigned long GOTOPOS_TIMEOUT_MS = 30000;
 
 // -----------------------------
-// Conversion constants (deve corrispondere al master)
-const float PULSES_PER_CM = 30.0;
-
-// -----------------------------
-// State variables
-enum Mode { STOPPED, SCAN, FAST_S, FAST_O, GOTOPOS, STEPPOS };
-
-// Helper: true for any position-tracking mode
-inline bool isPositionMode(Mode m) { return m == GOTOPOS || m == STEPPOS; }
-Mode mode = STOPPED;
-bool fwd = true;
-int32_t targetPos = 0;
-bool posActive = false;
-uint32_t currentDynamicSpeed = 0;
-
-// -----------------------------
-// FastAccelStepper objects
-FastAccelStepperEngine engine;
-FastAccelStepper* stepper = nullptr;
+// State
+enum Mode { STOPPED, SCAN, FAST_S, FAST_O, GOTOPOS };
+Mode mode             = STOPPED;
+bool fwd              = true;
+unsigned long gotoStartMs = 0;
 
 // -----------------------------
 // UART buffers
-char rxBuffer[64];
+char   rxBuffer[64];
 size_t rxLen = 0;
 String txPending;
-bool txPendingFlag = false;
+bool   txPendingFlag = false;
 
 // -----------------------------
 // Button debounce
-unsigned long lastDebounceScan = 0;
+unsigned long lastDebounceScan  = 0;
 unsigned long lastDebounceFastS = 0;
 unsigned long lastDebounceFastO = 0;
 const unsigned long DEBOUNCE_MS = 250;
-
-// -----------------------------
-// Position monitoring
-unsigned long lastPosCheck = 0;
-int32_t lastPos = 0;
-unsigned long lastMoveTime = 0;
 
 // -----------------------------
 // Forward declarations
 const char* modeToString(Mode m);
 void sendStatus();
 void transmitPending();
-void startMotion(bool forward, uint32_t speedHz, Mode newMode);
-void stopMotion();
-int32_t getDistanceToGo();
-uint32_t calculateDynamicSpeed(int32_t distanceToGo);
-void updateDynamicSpeed();
-void processCommand(const char* command);
+void motorStart(bool forward, uint32_t hz, Mode newMode);
+void motorStop();
+void processCommand(const char* cmd);
 void receiveData();
-void checkPositionReached();
 void handleButtons();
+void checkGotoTimeout();
 
 // -----------------------------
-// Helper functions
-bool isButtonPressed(int pin) {
-  return !digitalRead(pin);
-}
+bool isButtonPressed(int pin) { return !digitalRead(pin); }
 
 const char* modeToString(Mode m) {
   switch (m) {
     case GOTOPOS: return "GOTOPOS";
-    case STEPPOS: return "GOTOPOS";  // reports same status as GOTOPOS to master
-    case SCAN: return "SCAN";
-    case FAST_S: return "FAST_S";
-    case FAST_O: return "FAST_O";
-    default: return "STOP";
+    case SCAN:    return "SCAN";
+    case FAST_S:  return "FAST_S";
+    case FAST_O:  return "FAST_O";
+    default:      return "STOP";
   }
 }
 
 // -----------------------------
-// Motor control functions
-void startMotion(bool forward, uint32_t speedHz, Mode newMode) {
+// Motor control — pure LEDC, instant start/stop
+void motorStart(bool forward, uint32_t hz, Mode newMode) {
   fwd = forward;
-  stepper->setSpeedInHz(speedHz);
-  stepper->setAcceleration(ACCEL);
-  
-  if (forward) {
-    stepper->runForward();
-  } else {
-    stepper->runBackward();
-  }
-  
+  digitalWrite(DIR_PIN, forward ? HIGH : LOW);
+  digitalWrite(ENA_PIN, LOW);              // enable driver (active LOW)
+  delayMicroseconds(100);                  // DIR + ENA setup time for TB6600
+  ledcSetup(STEP_LEDC_CH, hz, STEP_LEDC_RES);
+  ledcWrite(STEP_LEDC_CH, STEP_DUTY_50);
   mode = newMode;
-  currentDynamicSpeed = speedHz;
-  lastMoveTime = millis();
-  
-  if (newMode == GOTOPOS) {
-    posActive = true;
-  }
-  
-  Serial.print("Avvio movimento: ");
-  Serial.print(modeToString(newMode));
-  Serial.print(" - ");
-  Serial.println(forward ? "AVANTI" : "INDIETRO");
+  Serial.printf("Motor START %s %s @ %u Hz\n",
+                modeToString(newMode), forward ? "FWD" : "BWD", hz);
 }
 
-void stopMotion() {
-  if (stepper) {
-    if (mode == FAST_S || mode == FAST_O) {
-      stepper->setAcceleration(FAST_STOP_DECEL);
-    } else if (mode == SCAN) {
-      stepper->setAcceleration(SCAN_STOP_DECEL);
-    }
-    stepper->stopMove();
-    stepper->setAcceleration(ACCEL);  // restore normal accel for next move
-  }
+void motorStop() {
+  ledcWrite(STEP_LEDC_CH, 0);   // instant stop
+  digitalWrite(ENA_PIN, HIGH);  // disable driver
   mode = STOPPED;
-  posActive = false;
-  currentDynamicSpeed = 0;
-  Serial.println("Motore STOP");
-}
-
-int32_t getDistanceToGo() {
-  if (!stepper) return 0;
-  int32_t currentPos = stepper->getCurrentPosition();
-  return abs(targetPos - currentPos);
-}
-
-uint32_t calculateDynamicSpeed(int32_t distanceToGo) {
-  uint32_t absDist = abs(distanceToGo);
-  
-  if (absDist <= DISTANCE_THRESHOLD) {
-    // Vicino al target: velocità proporzionale alla distanza
-    // Mappa [0..DISTANCE_THRESHOLD] -> [MIN_SPEED_HZ..FAST_HZ]
-    float ratio = (float)absDist / DISTANCE_THRESHOLD;
-    // Usa una curva quadratica per una decelerazione più morbida
-    ratio = ratio * ratio;
-    uint32_t speed = MIN_SPEED_HZ + (uint32_t)((FAST_HZ - MIN_SPEED_HZ) * ratio);
-    return constrain(speed, MIN_SPEED_HZ, FAST_HZ);
-  } else {
-    // Lontano dal target: velocità massima
-    return FAST_HZ;
-  }
-}
-
-void updateDynamicSpeed() {
-  if (mode != GOTOPOS || !posActive) return;  // STEPPOS intentionally excluded (constant speed)
-  
-  int32_t distanceToGo = getDistanceToGo();
-  uint32_t newSpeed = calculateDynamicSpeed(distanceToGo);
-  
-  // Cambia velocità solo se necessario (evita aggiornamenti continui)
-  if (newSpeed != currentDynamicSpeed && distanceToGo > 0) {
-    currentDynamicSpeed = newSpeed;
-    stepper->setSpeedInHz(currentDynamicSpeed);
-    // FW-02: re-issue moveTo with updated speed instead of runForward/runBackward
-    // which would cancel the position target and cause unbounded overshoot.
-    stepper->moveTo(targetPos);
-    
-    Serial.print("Velocità aggiornata: ");
-    Serial.print(currentDynamicSpeed);
-    Serial.print(" Hz - Distanza rimanente: ");
-    Serial.println(distanceToGo);
-  }
-}
-
-void checkPositionReached() {
-  if (!isPositionMode(mode) || !posActive) return;
-  
-  int32_t distanceToGo = getDistanceToGo();
-  
-  // Se la distanza è 0 o molto piccola, considera raggiunto
-  if (distanceToGo <= 5) {  // Margine di 5 passi per evitare overshoot
-    // FW-03: set targetPos = currentPos so sendStatus() reports remaining = 0,
-    // then send BEFORE stopMotion() changes mode to STOPPED.
-    // Master checks remaining == 0 to trigger goto_status:completed:true.
-    targetPos = stepper->getCurrentPosition();
-    sendStatus();  // sends STATUS:GOTOPOS:DIR:0
-    stopMotion();
-    Serial.println("✓ Target raggiunto!");
-  }
+  Serial.println("Motor STOP");
 }
 
 // -----------------------------
 // UART communication
 void sendStatus() {
-  txPending = "STATUS:" + String(modeToString(mode)) + ":" + String(fwd ? "FWD" : "BWD");
-  if (isPositionMode(mode) && posActive) {
-    int32_t distanceToGo = getDistanceToGo();
-    txPending += ":" + String(distanceToGo);
-  }
-  txPending += "\n";
+  txPending     = "STATUS:" + String(modeToString(mode)) + ":" +
+                  String(fwd ? "FWD" : "BWD") + "\n";
   txPendingFlag = true;
 }
 
@@ -228,372 +115,158 @@ void transmitPending() {
   if (SerialMaster.availableForWrite() >= (int)txPending.length()) {
     SerialMaster.print(txPending);
     txPendingFlag = false;
-    Serial.print("Inviato: ");
+    Serial.print("TX: ");
     Serial.print(txPending);
   }
 }
 
-void processCommand(const char* command) {
-  Serial.print("Ricevuto comando: ");
-  Serial.println(command);
-  
-  // Comandi esistenti
-  if (strcmp(command, "SCAN") == 0) {
-    startMotion(fwd, SCAN_HZ, SCAN);
+// -----------------------------
+void processCommand(const char* cmd) {
+  Serial.print("RX: ");
+  Serial.println(cmd);
+
+  if (strcmp(cmd, "SCAN") == 0) {
+    motorStart(fwd, SCAN_HZ, SCAN);
     sendStatus();
     return;
   }
 
-  // STEPSCAN: slow scan for step-scan mode; master stops via encoder position
-  if (strcmp(command, "STEPSCAN") == 0) {
-    startMotion(fwd, STEP_SCAN_HZ, SCAN);  // SCAN mode → SCAN_STOP_DECEL on STOP
-    sendStatus();
-    return;
-  }
-  
-  if (strcmp(command, "STOP") == 0) {
-    stopMotion();
-    sendStatus();
-    return;
-  }
-  
-  if (strcmp(command, "FAST_S") == 0) {
-    startMotion(fwd, FAST_HZ, FAST_S);
-    sendStatus();
-    return;
-  }
-  
-  if (strcmp(command, "FAST_O") == 0) {
-    startMotion(!fwd, FAST_HZ, FAST_O);
-    sendStatus();
-    return;
-  }
-  
-  if (strcmp(command, "STATUS?") == 0) {
+  // STEPSCAN: slow constant-speed run; master sends STOP via encoder
+  if (strcmp(cmd, "STEPSCAN") == 0) {
+    motorStart(fwd, STEP_SCAN_HZ, SCAN);
     sendStatus();
     return;
   }
 
-  // SYNCPOS: sync step counter to encoder value sent by master before GOTOPOS
-  if (strncmp(command, "SYNCPOS:", 8) == 0) {
-    int32_t pos = (int32_t)atol(command + 8);
-    stepper->setCurrentPosition(pos);
-    Serial.print("Posizione sincronizzata: ");
-    Serial.println(pos);
+  if (strcmp(cmd, "STOP") == 0) {
+    motorStop();
+    sendStatus();
     return;
   }
 
-  // Comando GOTOPOS:GOTOPOS:target_cm:velocita_max:direction
-  // Esempio: GOTOPOS:150:12000:F
-  if (strncmp(command, "GOTOPOS:", 8) == 0) {
-    char* ptr = (char*)command + 8;
-    
-    // Estrai target cm
-    float targetCm = atof(ptr);
-    
-    // Converti cm in passi (usa stessa costante del master)
-    targetPos = (int32_t)(targetCm * PULSES_PER_CM);
-    
-    // Cerca il prossimo separatore per la velocità
-    char* speedPtr = strchr(ptr, ':');
-    if (speedPtr) {
-      speedPtr++;
-      // Velocità max (opzionale, può essere ignorata)
-      uint32_t maxSpeed = atoi(speedPtr);
-      if (maxSpeed > 0 && maxSpeed <= FAST_HZ) {
-        // Si potrebbe usare maxSpeed, ma manteniamo FAST_HZ per semplicità
-      }
-    }
-    
-    // Determina direzione
-    char* dirPtr = strrchr(ptr, ':');
+  if (strcmp(cmd, "FAST_S") == 0) {
+    motorStart(fwd, FAST_HZ, FAST_S);
+    sendStatus();
+    return;
+  }
+
+  if (strcmp(cmd, "FAST_O") == 0) {
+    motorStart(!fwd, FAST_HZ, FAST_O);
+    sendStatus();
+    return;
+  }
+
+  if (strcmp(cmd, "STATUS?") == 0) {
+    sendStatus();
+    return;
+  }
+
+  // GOTOPOS:<cm>:<hz>:<F|B>
+  // Slave runs at FAST_HZ; master stops via encoder when target reached.
+  // Slave adds a 30s failsafe in case master goes silent.
+  if (strncmp(cmd, "GOTOPOS:", 8) == 0) {
+    const char* dirPtr = strrchr(cmd, ':');
+    bool forward = fwd;
     if (dirPtr) {
       dirPtr++;
-      fwd = (*dirPtr == 'F' || *dirPtr == 'f');
-    } else {
-      // Determina automaticamente la direzione in base alla posizione attuale
-      int32_t currentPos = stepper->getCurrentPosition();
-      fwd = (targetPos > currentPos);
+      forward = (*dirPtr == 'F' || *dirPtr == 'f');
     }
-    
-    // Calcola distanza da percorrere
-    int32_t currentPos = stepper->getCurrentPosition();
-    int32_t distance = abs(targetPos - currentPos);
-    
-    if (distance == 0) {
-      // Già a target
-      Serial.println("Già alla posizione target");
-      stopMotion();
-      sendStatus();
-      return;
-    }
-    
-    Serial.print("GOTOPOS: target=");
-    Serial.print(targetCm);
-    Serial.print(" cm (");
-    Serial.print(targetPos);
-    Serial.print(" passi), distanza=");
-    Serial.print(distance);
-    Serial.print(" passi, direzione=");
-    Serial.println(fwd ? "AVANTI" : "INDIETRO");
-    
-    // Avvia movimento verso target
-    mode = GOTOPOS;
-    posActive = true;
-    
-    // Imposta velocità iniziale
-    currentDynamicSpeed = FAST_HZ;
-    stepper->setSpeedInHz(currentDynamicSpeed);
-    stepper->setAcceleration(ACCEL);
-    
-    // FW-06: both branches were identical (dead code). moveTo() handles direction internally.
-    stepper->moveTo(targetPos);
-    
+    motorStart(forward, FAST_HZ, GOTOPOS);
+    gotoStartMs = millis();
     sendStatus();
     return;
   }
 
-  // SYNCSTEP:<enc_pulses>:<target_cm> — atomic sync + constant-speed move for step-scan
-  // Combines SYNCPOS and STEPPOS in one message to fit the single-slot TX queue.
-  if (strncmp(command, "SYNCSTEP:", 9) == 0) {
-    char* ptr = (char*)command + 9;
-    int32_t syncPos = (int32_t)atol(ptr);
-    stepper->setCurrentPosition(syncPos);
-    Serial.print("SYNCSTEP: sincronizzato a ");
-    Serial.print(syncPos);
-
-    char* sep = strchr(ptr, ':');
-    if (!sep) { sendStatus(); return; }
-    float targetCm = atof(sep + 1);
-    targetPos = (int32_t)(targetCm * PULSES_PER_CM);
-
-    int32_t currentPos = stepper->getCurrentPosition();
-    int32_t distance = abs(targetPos - currentPos);
-    fwd = (targetPos >= currentPos);
-
-    Serial.print(", target=");
-    Serial.print(targetCm);
-    Serial.print(" cm, distanza=");
-    Serial.println(distance);
-
-    if (distance == 0) {
-      mode = STEPPOS;
-      posActive = true;
-      sendStatus();   // STATUS:GOTOPOS:DIR:0 — immediate completion
-      stopMotion();
-      return;
-    }
-
-    mode = STEPPOS;
-    posActive = true;
-    currentDynamicSpeed = STEP_SCAN_HZ;
-    stepper->setAcceleration(STEP_SCAN_ACCEL);
-    stepper->setSpeedInHz(STEP_SCAN_HZ);
-    stepper->moveTo(targetPos);
-    lastMoveTime = millis();
-
-    sendStatus();
-    return;
-  }
-
-  // STEPPOS:<target_cm> — constant speed, no accel profile (for step-scan 1-cm moves)
-  if (strncmp(command, "STEPPOS:", 8) == 0) {
-    float targetCm = atof(command + 8);
-    targetPos = (int32_t)(targetCm * PULSES_PER_CM);
-
-    int32_t currentPos = stepper->getCurrentPosition();
-    int32_t distance = abs(targetPos - currentPos);
-    fwd = (targetPos >= currentPos);
-
-    Serial.print("STEPPOS: target=");
-    Serial.print(targetCm);
-    Serial.print(" cm (");
-    Serial.print(targetPos);
-    Serial.print(" passi), distanza=");
-    Serial.println(distance);
-
-    if (distance == 0) {
-      mode = STEPPOS;
-      posActive = true;
-      sendStatus();   // STATUS:GOTOPOS:DIR:0 — immediate completion
-      stopMotion();
-      return;
-    }
-
-    mode = STEPPOS;
-    posActive = true;
-    currentDynamicSpeed = STEP_SCAN_HZ;
-    stepper->setAcceleration(STEP_SCAN_ACCEL);
-    stepper->setSpeedInHz(STEP_SCAN_HZ);
-    stepper->moveTo(targetPos);
-    lastMoveTime = millis();
-
-    sendStatus();
-    return;
-  }
-
-  // Comando non riconosciuto
-  Serial.print("Comando sconosciuto: ");
-  Serial.println(command);
-  sendStatus();
+  // Unknown commands (e.g. legacy SYNCPOS, SYNCSTEP) are silently ignored
+  Serial.print("Unknown command ignored: ");
+  Serial.println(cmd);
 }
 
+// -----------------------------
 void receiveData() {
   while (SerialMaster.available()) {
     char ch = SerialMaster.read();
     if (ch == '\r') continue;
-    
     if (ch == '\n') {
       rxBuffer[rxLen] = '\0';
-      if (rxLen > 0) {
-        processCommand(rxBuffer);
-      }
+      if (rxLen > 0) processCommand(rxBuffer);
       rxLen = 0;
       continue;
     }
-    
-    if (rxLen < sizeof(rxBuffer) - 1) {
-      rxBuffer[rxLen++] = ch;
-    } else {
-      // Buffer overflow, reset
-      rxLen = 0;
-    }
+    if (rxLen < sizeof(rxBuffer) - 1) rxBuffer[rxLen++] = ch;
+    else rxLen = 0;  // buffer overflow — reset
   }
 }
 
 // -----------------------------
-// Button handling
+// Failsafe: auto-stop GOTOPOS if master goes silent
+void checkGotoTimeout() {
+  if (mode != GOTOPOS) return;
+  if (millis() - gotoStartMs > GOTOPOS_TIMEOUT_MS) {
+    Serial.println("GOTOPOS timeout — stopping motor");
+    motorStop();
+    sendStatus();
+  }
+}
+
+// -----------------------------
 void handleButtons() {
-  if (isPositionMode(mode)) return;  // FW-05: ignore buttons during position moves
   unsigned long now = millis();
-  
-  // Pulsante SCAN
+
   if (isButtonPressed(BTN_SCAN) && (now - lastDebounceScan) > DEBOUNCE_MS) {
-    if (mode == SCAN) {
-      stopMotion();
-    } else {
-      startMotion(fwd, SCAN_HZ, SCAN);
-    }
+    if (mode == SCAN) motorStop(); else motorStart(fwd, SCAN_HZ, SCAN);
     lastDebounceScan = now;
     sendStatus();
-    Serial.println("Pulsante SCAN premuto");
+    Serial.println("BTN SCAN");
   }
-  
-  // Pulsante FAST_S (stessa direzione)
+
   if (isButtonPressed(BTN_FAST_S) && (now - lastDebounceFastS) > DEBOUNCE_MS) {
-    if (mode == FAST_S) {
-      stopMotion();
-    } else {
-      startMotion(fwd, FAST_HZ, FAST_S);
-    }
+    if (mode == FAST_S) motorStop(); else motorStart(fwd, FAST_HZ, FAST_S);
     lastDebounceFastS = now;
     sendStatus();
-    Serial.println("Pulsante FAST_S premuto");
+    Serial.println("BTN FAST_S");
   }
-  
-  // Pulsante FAST_O (direzione opposta)
+
   if (isButtonPressed(BTN_FAST_O) && (now - lastDebounceFastO) > DEBOUNCE_MS) {
-    if (mode == FAST_O) {
-      stopMotion();
-    } else {
-      startMotion(!fwd, FAST_HZ, FAST_O);
-    }
+    if (mode == FAST_O) motorStop(); else motorStart(!fwd, FAST_HZ, FAST_O);
     lastDebounceFastO = now;
     sendStatus();
-    Serial.println("Pulsante FAST_O premuto");
+    Serial.println("BTN FAST_O");
   }
 }
 
 // -----------------------------
-// Setup
 void setup() {
-  // Serial console per debug
   Serial.begin(115200);
-  
-  // UART per comunicazione con master
   SerialMaster.begin(115200, SERIAL_8N1, UART_RX, UART_TX);
-  
-  // Configura pulsanti
-  pinMode(BTN_SCAN, INPUT_PULLUP);
+
+  pinMode(BTN_SCAN,   INPUT_PULLUP);
   pinMode(BTN_FAST_S, INPUT_PULLUP);
   pinMode(BTN_FAST_O, INPUT_PULLUP);
-  
-  // Inizializza stepper
-  engine.init();
-  stepper = engine.stepperConnectToPin(PUL_PIN);
-  
-  if (!stepper) {
-    Serial.println("ERRORE: Impossibile inizializzare lo stepper!");
-    while (1) {
-      delay(1000);
-    }
-  }
-  
-  stepper->setDirectionPin(DIR_PIN);
-  stepper->setEnablePin(ENA_PIN);
-  stepper->setAutoEnable(true);
-  
-  // Imposta posizione iniziale a 0
-  stepper->setCurrentPosition(0);
-  
-  // Ferma motore all'avvio
-  stopMotion();
-  
-  // Invia stato iniziale
+  pinMode(DIR_PIN,    OUTPUT);
+  pinMode(ENA_PIN,    OUTPUT);
+
+  digitalWrite(DIR_PIN, HIGH);  // forward
+  digitalWrite(ENA_PIN, HIGH);  // disabled at startup
+
+  // Attach LEDC channel to PUL pin; start with duty=0 (no pulses)
+  ledcSetup(STEP_LEDC_CH, SCAN_HZ, STEP_LEDC_RES);
+  ledcAttachPin(PUL_PIN, STEP_LEDC_CH);
+  ledcWrite(STEP_LEDC_CH, 0);
+
   sendStatus();
-  
-  // Stampa informazioni di avvio
-  Serial.println("========================================");
-  Serial.println("=== SLAVE CONTROLLO MOTORE ===");
-  Serial.print("Versione: ");
-  Serial.println(FIRMWARE_VERSION);
-  Serial.print("Data: ");
-  Serial.println(FIRMWARE_DATE);
-  Serial.print("Caratteristiche: ");
-  Serial.println(FIRMWARE_FEATURES);
-  Serial.println("========================================");
-  Serial.println("Comandi disponibili:");
-  Serial.println("  SCAN           - Avvia scansione (velocità lenta)");
-  Serial.println("  STOP           - Ferma motore");
-  Serial.println("  FAST_S         - Avanti veloce (stessa direzione)");
-  Serial.println("  FAST_O         - Indietro veloce (direzione opposta)");
-  Serial.println("  STATUS?        - Richiedi stato");
-  Serial.println("  GOTOPOS:cm:max_hz:dir - Vai a posizione");
-  Serial.println("    Esempio: GOTOPOS:150:12000:F");
-  Serial.println("========================================");
+
+  Serial.println("=== SLAVE MOTOR CONTROLLER (LEDC) ===");
+  Serial.printf("Version: %s  Date: %s\n", FIRMWARE_VERSION, FIRMWARE_DATE);
+  Serial.println("Commands: SCAN STEPSCAN STOP FAST_S FAST_O STATUS? GOTOPOS:cm:hz:dir");
+  Serial.println("======================================");
 }
 
 // -----------------------------
-// Main loop
 void loop() {
-  // Gestione comunicazione UART
   receiveData();
   transmitPending();
-  
-  // Gestione movimento posizionamento (GOTOPOS / STEPPOS)
-  if (isPositionMode(mode) && posActive) {
-    updateDynamicSpeed();
-    checkPositionReached();
-    
-    // Monitoraggio posizione per debug (ogni 500ms)
-    unsigned long now = millis();
-    if (now - lastPosCheck > 500) {
-      lastPosCheck = now;
-      int32_t currentPos = stepper->getCurrentPosition();
-      if (currentPos != lastPos) {
-        lastPos = currentPos;
-        int32_t remaining = abs(targetPos - currentPos);
-        Serial.print("Posizione: ");
-        Serial.print(currentPos);
-        Serial.print(" passi, rimanenti: ");
-        Serial.println(remaining);
-      }
-    }
-  }
-  
-  // Gestione pulsanti fisici
+  checkGotoTimeout();
   handleButtons();
-  
-  // Piccolo delay per non sovraccaricare la CPU
   delay(1);
 }
