@@ -406,10 +406,8 @@ void runStepScan(long encSnap) {
         webSocket.broadcastTXT("{\"type\":\"step_scan_moving\",\"target\":" + String(stepScanTargetCm) + "}");
         Serial.println("[StepScan] STEPPOS -> cm " + String(stepScanTargetCm));
       }
-      if (curCm != lastCm && curCm >= 0) {
-        lastCm = curCm;
-        webSocket.broadcastTXT("{\"cm\":" + String(curCm) + "}");
-      }
+      // Don't broadcast encoder position during motor movement — EMI causes spurious counts.
+      // Position display updates once the motor settles.
       {
         // Transition to SETTLING once encoder starts moving, or after 1.5 s timeout
         // (timeout covers the case where slave was already at target)

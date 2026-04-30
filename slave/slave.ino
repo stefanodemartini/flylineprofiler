@@ -30,7 +30,7 @@ const uint32_t STEP_SCAN_HZ = 200;       // Constant speed for step-scan 1-cm mo
 const uint32_t ACCEL = 1500;
 const uint32_t FAST_STOP_DECEL = 24000;  // ~1m stop distance from FAST_HZ (vs 16m at ACCEL)
 const uint32_t SCAN_STOP_DECEL = 40000;  // stop within ~1cm from SCAN_HZ
-const uint32_t STEP_SCAN_ACCEL = 1000000; // Effectively instant ramp for STEPPOS
+const uint32_t STEP_SCAN_ACCEL = 5000;   // Gentle ramp (~40 ms) to reduce stepper EMI on encoder lines
 const uint32_t MIN_SPEED_HZ = 300;      // Velocità minima in prossimità del target
 const uint32_t DISTANCE_THRESHOLD = 500; // Passi a cui iniziare a ridurre velocità
 
