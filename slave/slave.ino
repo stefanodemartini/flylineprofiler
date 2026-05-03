@@ -44,6 +44,12 @@ int32_t targetPos = 0;
 bool posActive = false;
 uint32_t currentDynamicSpeed = 0;
 
+// Encoder-fed position: updated by POS:<steps> messages from master.
+// Used instead of stepper->getCurrentPosition() during GOTOPOS so that
+// the wheel encoder is the sole authoritative position source.
+int32_t encoderFedPos = 0;
+bool encoderPosReceived = false;
+
 // -----------------------------
 // FastAccelStepper objects
 FastAccelStepperEngine engine;
@@ -139,13 +145,13 @@ void stopMotion() {
   mode = STOPPED;
   posActive = false;
   currentDynamicSpeed = 0;
+  encoderPosReceived = false;  // clear encoder state for next GOTOPOS
   Serial.println("Motore STOP");
 }
 
 int32_t getDistanceToGo() {
-  if (!stepper) return 0;
-  int32_t currentPos = stepper->getCurrentPosition();
-  return abs(targetPos - currentPos);
+  if (!encoderPosReceived) return INT32_MAX;  // position unknown, stay at full speed
+  return abs(targetPos - encoderFedPos);
 }
 
 uint32_t calculateDynamicSpeed(int32_t distanceToGo) {
@@ -187,19 +193,18 @@ void updateDynamicSpeed() {
 }
 
 void checkPositionReached() {
-  if (mode != GOTOPOS || !posActive) return;
+  if (mode != GOTOPOS || !posActive || !encoderPosReceived) return;
   
   int32_t distanceToGo = getDistanceToGo();
   
-  // Se la distanza è 0 o molto piccola, considera raggiunto
-  if (distanceToGo <= 5) {  // Margine di 5 passi per evitare overshoot
-    // FW-03: set targetPos = currentPos so sendStatus() reports remaining = 0,
+  // 5 encoder pulses ≈ 0.17 cm — stop margin
+  if (distanceToGo <= 5) {
+    // FW-03: set targetPos = encoderFedPos so sendStatus() reports remaining = 0,
     // then send BEFORE stopMotion() changes mode to STOPPED.
-    // Master checks remaining == 0 to trigger goto_status:completed:true.
-    targetPos = stepper->getCurrentPosition();
+    targetPos = encoderFedPos;
     sendStatus();  // sends STATUS:GOTOPOS:DIR:0
     stopMotion();
-    Serial.println("✓ Target raggiunto!");
+    Serial.println("✓ Target raggiunto (encoder)!");
   }
 }
 
@@ -207,7 +212,7 @@ void checkPositionReached() {
 // UART communication
 void sendStatus() {
   txPending = "STATUS:" + String(modeToString(mode)) + ":" + String(fwd ? "FWD" : "BWD");
-  if (mode == GOTOPOS && posActive) {
+  if (mode == GOTOPOS && posActive && encoderPosReceived) {
     int32_t distanceToGo = getDistanceToGo();
     txPending += ":" + String(distanceToGo);
   }
@@ -259,79 +264,54 @@ void processCommand(const char* command) {
     return;
   }
 
-  // SYNCPOS: sync step counter to encoder value sent by master before GOTOPOS
-  if (strncmp(command, "SYNCPOS:", 8) == 0) {
-    int32_t pos = (int32_t)atol(command + 8);
-    stepper->setCurrentPosition(pos);
-    Serial.print("Posizione sincronizzata: ");
-    Serial.println(pos);
+  // POS:<steps> — encoder position fed by master every ~100ms during GOTOPOS.
+  // This is the sole authoritative position source; step counter is not used.
+  if (strncmp(command, "POS:", 4) == 0) {
+    encoderFedPos = (int32_t)atol(command + 4);
+    encoderPosReceived = true;
+    // Immediately apply dynamic speed with the fresh position
+    if (mode == GOTOPOS && posActive) {
+      updateDynamicSpeed();
+      checkPositionReached();
+    }
     return;
   }
 
-  // Comando GOTOPOS:GOTOPOS:target_cm:velocita_max:direction
+  // Comando GOTOPOS:<target_cm>:<velocita_max>:<F|B>
   // Esempio: GOTOPOS:150:12000:F
   if (strncmp(command, "GOTOPOS:", 8) == 0) {
     char* ptr = (char*)command + 8;
     
-    // Estrai target cm
     float targetCm = atof(ptr);
-    
-    // Converti cm in passi (usa stessa costante del master)
+    // Convert cm to encoder steps (same constant as master)
     targetPos = (int32_t)(targetCm * PULSES_PER_CM);
     
-    // Cerca il prossimo separatore per la velocità
-    char* speedPtr = strchr(ptr, ':');
-    if (speedPtr) {
-      speedPtr++;
-      // Velocità max (opzionale, può essere ignorata)
-      uint32_t maxSpeed = atoi(speedPtr);
-      if (maxSpeed > 0 && maxSpeed <= FAST_HZ) {
-        // Si potrebbe usare maxSpeed, ma manteniamo FAST_HZ per semplicità
-      }
-    }
-    
-    // Determina direzione
+    // Determina direzione dal flag F/B (sempre fornito dal master)
     char* dirPtr = strrchr(ptr, ':');
     if (dirPtr) {
       dirPtr++;
       fwd = (*dirPtr == 'F' || *dirPtr == 'f');
     } else {
-      // Determina automaticamente la direzione in base alla posizione attuale
-      int32_t currentPos = stepper->getCurrentPosition();
-      fwd = (targetPos > currentPos);
-    }
-    
-    // Calcola distanza da percorrere
-    int32_t currentPos = stepper->getCurrentPosition();
-    int32_t distance = abs(targetPos - currentPos);
-    
-    if (distance == 0) {
-      // Già a target
-      Serial.println("Già alla posizione target");
-      stopMotion();
-      sendStatus();
-      return;
+      fwd = true;  // fallback: forward
     }
     
     Serial.print("GOTOPOS: target=");
     Serial.print(targetCm);
     Serial.print(" cm (");
     Serial.print(targetPos);
-    Serial.print(" passi), distanza=");
-    Serial.print(distance);
-    Serial.print(" passi, direzione=");
+    Serial.print(" passi), direzione=");
     Serial.println(fwd ? "AVANTI" : "INDIETRO");
     
     // Avvia movimento verso target
     mode = GOTOPOS;
     posActive = true;
+    encoderPosReceived = false;  // wait for first POS update before speed control
     
-    // Imposta velocità iniziale
     currentDynamicSpeed = FAST_HZ;
     stepper->setSpeedInHz(currentDynamicSpeed);
     stepper->setAcceleration(ACCEL);
     
-    // FW-06: both branches were identical (dead code). moveTo() handles direction internally.
+    // FW-06: moveTo() handles direction internally.
     stepper->moveTo(targetPos);
     
     sendStatus();
@@ -485,12 +465,11 @@ void loop() {
     unsigned long now = millis();
     if (now - lastPosCheck > 500) {
       lastPosCheck = now;
-      int32_t currentPos = stepper->getCurrentPosition();
-      if (currentPos != lastPos) {
-        lastPos = currentPos;
-        int32_t remaining = abs(targetPos - currentPos);
-        Serial.print("Posizione: ");
-        Serial.print(currentPos);
+      if (encoderPosReceived && encoderFedPos != lastPos) {
+        lastPos = encoderFedPos;
+        int32_t remaining = getDistanceToGo();
+        Serial.print("Encoder pos: ");
+        Serial.print(encoderFedPos);
         Serial.print(" passi, rimanenti: ");
         Serial.println(remaining);
       }

@@ -60,6 +60,7 @@ bool isGoToActive = false;
 float goToTargetCm = 0;
 unsigned long lastGoToStatusCheck = 0;
 bool goToEncoderReached = false;  // set when encoder reaches target; used to send completed:true
+static unsigned long lastPosSentMs = 0;  // throttle POS:<steps> updates to slave
 
 struct DataPoint {
   int cm;
@@ -99,6 +100,7 @@ WebSocketsServer webSocket(81);
 // Forward declarations
 void readCaliper();
 float readCaliperAverage(int samples = 3);
+float readCaliperMedian(int samples = 5);
 float readCaliperDisplay();
 void handleCommand(String cmd);
 void sendParamsToClients();
@@ -217,8 +219,9 @@ void IRAM_ATTR onCaliperChange() {
 }
 
 void motorQueueTx(const String& lineNoNewline) {
-    // Non sovrascrivere un comando utente con un semplice poll
+    // Drop low-priority messages if a real command is already waiting
     if (motorTxHasPending && lineNoNewline == "STATUS?") return;
+    if (motorTxHasPending && lineNoNewline.startsWith("POS:")) return;
     motorTxPending = lineNoNewline + "\n";
     motorTxHasPending = true;
 }
@@ -358,16 +361,9 @@ void goToPosition(float targetCm) {
   // Determina la direzione
   bool direction = (targetCm > currentCm);
   
-  // Sync slave step counter to encoder before sending GOTOPOS.
-  // This ensures slave absolute position matches encoder regardless of
-  // any prior drift, reset, or slippage.
-  noInterrupts();
-  long encSnap0 = encoderValue;
-  interrupts();
-  motorQueueTx("SYNCPOS:" + String(encSnap0));
-
-  // Slave position is synced to encoder via SYNCPOS; add 2cm offset because
-  // encoder wheel is 20mm behind caliper — slave must target (X+2)*PULSES_PER_CM.
+  // Send GOTOPOS to slave. Target is (targetCm + 2) to account for the 20mm
+  // offset between encoder wheel and caliper. Slave will use encoder-fed POS
+  // updates for position tracking — no step-counter sync needed.
   String cmd = "GOTOPOS:" + String(targetCm + 2.0f, 2) + ":" + String(MOTOR_FAST_HZ) + ":" + (direction ? "F" : "B");
   motorQueueTx(cmd);
   
@@ -375,6 +371,7 @@ void goToPosition(float targetCm) {
   isGoToActive = true;
   goToEncoderReached = false;
   lastGoToStatusCheck = 0;
+  lastPosSentMs = 0;  // send first POS update immediately
   
   Serial.print("GOTOPOS avviato verso ");
   Serial.print(targetCm, 2);
@@ -609,7 +606,7 @@ void setup() {
         <div class="accordion-body acc-open">
             <label>Smooth Alpha:
             <input type="range" id="smoothAlpha" min="0.01" max="0.5" step="0.01" value="0.1"
-                oninput="document.getElementById('alphaVal').textContent=this.value">
+                oninput="document.getElementById('alphaVal').textContent=this.value; redrawLiveSmoothing()">
             <span id="alphaVal">0.1</span>
             </label>
             <button onclick="resetChart()">Reset Grafico</button>
@@ -1061,7 +1058,8 @@ void setup() {
                 if (!isNaN(x) && !isNaN(y)) dataPoints.push({ x, y });
             }
             dataPoints.sort((a, b) => a.x - b.x);
-            chart.data.datasets[0].data = dataPoints;
+            const alpha = parseFloat(document.getElementById('smoothAlpha').value) || 0.1;
+            chart.data.datasets[0].data = dataPoints.length > 1 ? smoothEMA(dataPoints, alpha) : dataPoints;
             document.getElementById('dataPointsCount').textContent = dataPoints.length;
             if (autoScaleEnabled) fitToData(); else chart.update();
             showCommandStatus('Storico caricato: ' + (dataPoints.length - 1) + ' punti', false);
@@ -1171,10 +1169,18 @@ void setup() {
             dataPoints.push(point);
         }
         dataPoints.sort((a, b) => a.x - b.x);
-        chart.data.datasets[0].data = dataPoints;
+        const alpha = parseFloat(document.getElementById('smoothAlpha').value) || 0.1;
+        chart.data.datasets[0].data = dataPoints.length > 1 ? smoothEMA(dataPoints, alpha) : dataPoints;
         document.getElementById('dataPointsCount').textContent = dataPoints.length;
         if (autoScaleEnabled) fitToData();
         else chart.update('none');
+    }
+
+    function redrawLiveSmoothing() {
+        if (dataPoints.length < 2) return;
+        const alpha = parseFloat(document.getElementById('smoothAlpha').value) || 0.1;
+        chart.data.datasets[0].data = smoothEMA(dataPoints, alpha);
+        chart.update('none');
     }
 
     function zoomIn()  { userHasZoomed = true; chart.zoom(1.1); }
@@ -1424,7 +1430,7 @@ void loop() {
   if (!isGoToActive && currentCm != lastCm && currentCm >= 0 && scanEnabled) {
     lastCm = currentCm;
 
-    float displayValue = readCaliperDisplay();
+    float displayValue = readCaliperMedian(5);
 
     float compensatedDiameter = displayValue - displayZeroValue - caliperZeroOffset;
     compensatedDiameter = round(compensatedDiameter * 1000.0) / 1000.0;
@@ -1446,6 +1452,17 @@ void loop() {
       goToEncoderReached = true;
       motorQueueTx("STOP");  // encoder says we're there — stop the motor
     }
+
+    // Stream encoder position to slave every 100 ms so slave uses encoder
+    // (not its own step counter) for dynamic speed and stop detection
+    {
+      unsigned long nowMs = millis();
+      if (nowMs - lastPosSentMs >= 100) {
+        lastPosSentMs = nowMs;
+        motorQueueTx("POS:" + String(encSnap));
+      }
+    }
+
     // Aggiorna solo la posizione durante GOTOPOS
     if (currentCm != lastCm) {
       lastCm = currentCm;
@@ -1481,6 +1498,37 @@ float readCaliperAverage(int samples) {
     delay(1);
   }
   return got > 0 ? sum / got : lineDiameter;
+}
+
+// Collects up to `samples` caliper readings and returns the median.
+// Rejects outlier spikes better than a mean — ideal for mechanical noise.
+// At 13 Hz caliper rate, 5 samples ≈ 385 ms; fine at 0.5–2.5 cm/s scan speed.
+float readCaliperMedian(int samples) {
+  if (samples < 1) samples = 1;
+  if (samples > 9) samples = 9;  // cap to avoid stack growth
+  float vals[9];
+  int got = 0;
+  unsigned long deadline = millis() + 2000;
+  while (got < samples && millis() < deadline) {
+    noInterrupts();
+    bool rdy = calDataReady;
+    interrupts();
+    if (rdy) {
+      readCaliper();
+      vals[got++] = lineDiameter;
+    }
+    delay(1);
+  }
+  if (got == 0) return lineDiameter;
+  if (got == 1) return vals[0];
+  // Insertion sort (tiny array — fast and stack-friendly)
+  for (int i = 1; i < got; i++) {
+    float key = vals[i];
+    int j = i - 1;
+    while (j >= 0 && vals[j] > key) { vals[j + 1] = vals[j]; j--; }
+    vals[j + 1] = key;
+  }
+  return vals[got / 2];
 }
 
 void readCaliper() {
