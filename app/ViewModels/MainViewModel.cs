@@ -289,7 +289,9 @@ public class MainViewModel : ObservableObject
             Theme              = _settings.Chart.Theme,
             XAxisUnit          = _settings.Chart.XAxisUnit,
             SmoothingAlpha     = _settings.Chart.SmoothingAlpha,
-            LineWidth          = _settings.Chart.LineWidth
+            LineWidth          = _settings.Chart.LineWidth,
+            FilteredOpacity    = _settings.Chart.FilteredOpacity,
+            RawOpacity         = _settings.Chart.RawOpacity
         }
     };
 
@@ -406,25 +408,15 @@ public class MainViewModel : ObservableObject
 
     private void AddLivePoint(double x, double rawY, double firmwareY)
     {
-        double filtered;
-        if (_smoothingEnabled)
-        {
-            var alpha = _settings.Chart.SmoothingAlpha;
-            _ema = _ema is null ? firmwareY : alpha * firmwareY + (1 - alpha) * _ema.Value;
-            filtered = Math.Round(_ema.Value, 3);
-        }
-        else
-        {
-            _ema = null;
-            filtered = Math.Round(firmwareY, 3);
-        }
+        _ema = null;
+        var measured = Math.Round(firmwareY, 3);
 
         // Remove existing point at same cm to trigger CollectionChanged (→ plot refresh)
         var existing = Points.FirstOrDefault(p => Math.Abs(p.X - x) < 0.0001);
         if (existing is not null)
             Points.Remove(existing);
 
-        Points.Add(new MeasurementPoint { X = x, RawY = rawY, FilteredY = filtered });
+        Points.Add(new MeasurementPoint { X = x, RawY = rawY, FilteredY = measured });
         PointsCount = Points.Count.ToString();
     }
 

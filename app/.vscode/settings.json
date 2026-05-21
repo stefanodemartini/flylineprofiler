@@ -1,0 +1,6 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "dotnet build": true,
+        ".\\bin\\Debug\\net8.0-windows\\DiametroLineaDesktop.exe": true
+    }
+}

@@ -9,9 +9,9 @@
 // ===============================
 // FW
 // ===============================
-#define FIRMWARE_VERSION "0.4.0"
-#define FIRMWARE_DATE "2026-04-17"
-#define FIRMWARE_FEATURES "WiFi Manager + EMA + 0.01mm + UART Motor + Scan timer + Autostop + RicezioneON/OFF + GOTOPOS + Caliper timeout + Atomic encoder + Watchdog fixes"
+#define FIRMWARE_VERSION "0.4.1"
+#define FIRMWARE_DATE "2026-05-21"
+#define FIRMWARE_FEATURES "WiFi Manager + EMA + 0.01mm + UART Motor + Scan timer + Autostop + RicezioneON/OFF + GOTOPOS + Caliper timeout + Atomic encoder + Watchdog fixes + Scan state sync on connect"
 
 // -----------------------------
 #define ENCODER_DATA_PIN 12
@@ -56,6 +56,14 @@ static const unsigned long MOTOR_STALE_MS = 4000;
 
 // Parametri per GOTOPOS
 const uint32_t MOTOR_FAST_HZ = 12000;
+
+// Closed-loop scan speed control (compensates for spool diameter growth)
+// Target 2 cm/s: motor runs smoothly at ~1500 Hz (low speed cogging causes caliper noise)
+const float    TARGET_SCAN_SPEED_CMS = 2.0f;   // target linear speed during scan (cm/s)
+const uint32_t SCAN_HZ_INIT = 1500;            // initial estimate (calibrated: 1500 Hz ≈ 2 cm/s)
+const uint32_t SCAN_HZ_MIN  = 800;             // never go below ~1 cm/s — avoids cogging zone
+const uint32_t SCAN_HZ_MAX  = 4000;            // headroom for spool growth compensation
+uint32_t currentScanHz = SCAN_HZ_INIT;
 bool isGoToActive = false;
 float goToTargetCm = 0;
 unsigned long lastGoToStatusCheck = 0;
@@ -89,6 +97,13 @@ float caliperZeroOffset = 0.0;
 float displayZeroValue = 0.0;
 int lastCm = -1;
 
+// Rolling caliper buffer — filled non-blocking every main loop iteration.
+// Replaces blocking readCaliperMedian: no loop stall, no missed cm steps.
+#define CAL_BUF_SIZE 7
+float calRollingBuf[CAL_BUF_SIZE];
+int   calRollingCount = 0;   // how many valid entries (capped at CAL_BUF_SIZE)
+int   calRollingIdx   = 0;   // next write position (circular)
+
 unsigned long lastSpeedTime = 0;
 long lastSpeedEncoder = 0;
 float currentSpeed = 0.0;
@@ -99,6 +114,8 @@ WebSocketsServer webSocket(81);
 
 // Forward declarations
 void readCaliper();
+void pumpCaliper();
+float readCaliperBufferedMedian();
 float readCaliperAverage(int samples = 3);
 float readCaliperMedian(int samples = 5);
 float readCaliperDisplay();
@@ -122,7 +139,7 @@ void addDataPoint(int cm, float diameter, float rawDisplay) {
   DataPoint* newPoint = new DataPoint();
   if (!newPoint) { Serial.println("[OOM] DataPoint alloc failed"); return; }  // FW-11
   newPoint->cm = cm;
-  newPoint->diameter = round(diameter * 1000.0) / 1000.0;  // raw compensated, no EMA
+  newPoint->diameter = roundf(diameter * 100.0f) / 100.0f;  // clamp to caliper precision: 0.01 mm
   newPoint->rawDisplay = rawDisplay;
   newPoint->next = nullptr;
 
@@ -167,6 +184,8 @@ void clearAllData() {
   totalDataPoints = 0;
   filterInitialized = false;
   smoothedDiameter = 0.0;
+  calRollingCount = 0;
+  calRollingIdx   = 0;
 }
 
 int getTotalDataPoints() {
@@ -222,6 +241,7 @@ void motorQueueTx(const String& lineNoNewline) {
     // Drop low-priority messages if a real command is already waiting
     if (motorTxHasPending && lineNoNewline == "STATUS?") return;
     if (motorTxHasPending && lineNoNewline.startsWith("POS:")) return;
+    if (motorTxHasPending && lineNoNewline.startsWith("SETHZ:")) return;  // speed trim — next one will get through
     motorTxPending = lineNoNewline + "\n";
     motorTxHasPending = true;
 }
@@ -604,10 +624,10 @@ void setup() {
             &#x1F4CA; Grafico &amp; Dati <span class="accordion-arrow">&#x25BC;</span>
         </button>
         <div class="accordion-body acc-open">
-            <label>Smooth Alpha:
-            <input type="range" id="smoothAlpha" min="0.01" max="0.5" step="0.01" value="0.1"
+            <label>Smoothing level (0=raw, 10=max):
+            <input type="range" id="smoothAlpha" min="0" max="10" step="1" value="0"
                 oninput="document.getElementById('alphaVal').textContent=this.value; redrawLiveSmoothing()">
-            <span id="alphaVal">0.1</span>
+            <span id="alphaVal">0</span>
             </label>
             <button onclick="resetChart()">Reset Grafico</button>
             <button onclick="exportAllData()">Esporta Tutti i Dati CSV</button>
@@ -704,7 +724,6 @@ void setup() {
     let autoScaleEnabled = true;
     let userHasZoomed = false;
     let ws;
-    let zeroPoint = {x: 0, y: 0};
     let currentDisplayZero = 0.0;
     let currentOffset = 0.0;
     let uploadedDatasets = [];
@@ -722,15 +741,46 @@ void setup() {
     let scanInterval = null;
     let scanReceiving = false;
 
-    function smoothEMA(data, alpha) {
-        let result = [{x: data[0].x, y: data[0].y}];
-        for (let i = 1; i < data.length; i++) {
-            result.push({
-                x: data[i].x,
-                y: alpha * data[i].y + (1 - alpha) * result[i-1].y
-            });
+    // Rauch-Tung-Striebel (RTS) Kalman smoother:
+    //   forward Kalman pass + backward smoothing pass → zero phase lag, optimal for Gaussian noise.
+    // R = measurement noise variance (caliper 0.01mm precision → R = 0.0001 mm²).
+    // Q = process noise: how much diameter can change per step.
+    //     level 0 → raw data. level 1–10 → Q = R × 10^(2 - level×0.4).
+    function smoothKalman(data, level) {
+        if (level === 0 || data.length < 2) return data.slice();
+        const R = 0.0001;                              // (0.01mm)² — caliper resolution
+        // Q maps level → process noise. Steeper curve so mid-range levels give real smoothing:
+        //   level 0 → Q=R×100 → K≈1 (raw)
+        //   level 5 → Q=R×0.1  → K≈0.24
+        //   level 7 → Q=R×0.006 → K≈0.07
+        //   level 10→ Q=R×0.0001→ K≈0.01
+        const Q = R * Math.pow(10, 2 - level * 0.6);
+
+        const n = data.length;
+        const xf = new Float64Array(n);
+        const Pf = new Float64Array(n);
+
+        // Forward pass (Kalman filter)
+        xf[0] = data[0].y;
+        Pf[0] = R;
+        for (let i = 1; i < n; i++) {
+            const Pp = Pf[i-1] + Q;
+            const K  = Pp / (Pp + R);
+            xf[i]   = xf[i-1] + K * (data[i].y - xf[i-1]);
+            Pf[i]   = (1 - K) * Pp;
         }
-        return result;
+
+        // Backward pass (RTS smoother)
+        const xs = xf.slice();
+        const Ps = Pf.slice();
+        for (let i = n - 2; i >= 0; i--) {
+            const Pp = Pf[i] + Q;
+            const G  = Pf[i] / Pp;
+            xs[i]   = xf[i] + G * (xs[i+1] - xf[i]);
+            Ps[i]   = Pf[i] + G * G * (Ps[i+1] - Pp);
+        }
+
+        return data.map((p, i) => ({ x: p.x, y: Math.round(xs[i] * 100) / 100 }));
     }
 
     function formatMMSS(totalSeconds) {
@@ -791,7 +841,7 @@ void setup() {
         }
     }
 
-    const OPTIMAL_SPEED_MIN = 0.5;
+    const OPTIMAL_SPEED_MIN = 1.5;
     const OPTIMAL_SPEED_MAX = 2.5;
 
     function initializeChart() {
@@ -805,7 +855,9 @@ void setup() {
                     data: dataPoints,
                     borderColor: '#007bff',
                     backgroundColor: 'rgba(0, 123, 255, 0.1)',
-                    borderWidth: 3,
+                    borderWidth: 2,
+                    tension: 0.4,
+                    cubicInterpolationMode: 'monotone',
                     fill: true,
                     pointRadius: 1,
                     pointHoverRadius: 4,
@@ -826,7 +878,11 @@ void setup() {
                     },
                     y: {
                         title: { display: true, text: 'Diametro Compensato (mm)', font: { size: 14, weight: 'bold' } },
-                        grid: { color: 'rgba(0,0,0,0.1)' }
+                        grid: { color: 'rgba(0,0,0,0.1)' },
+                        ticks: {
+                            stepSize: 0.5,
+                            callback: v => v.toFixed(1) + ' mm'
+                        }
                     }
                 },
                 plugins: {
@@ -849,9 +905,7 @@ void setup() {
                 interaction: { intersect: false, mode: 'nearest' }
             }
         });
-        ensureZeroPoint();
-        fitToData();
-    }
+        fitToData();    }
 
     function initializeColorPalette() {
         const paletteContainer = document.getElementById('colorPalette');
@@ -956,14 +1010,15 @@ void setup() {
     }
 
     function addDatasetToChart(dataset) {
-        const smoothed = smoothEMA(dataset.data, 0.1);
+        const smoothed = smoothKalman(dataset.data, parseInt(document.getElementById('smoothAlpha').value) || 5);
         chart.data.datasets.push({
             label: dataset.name,
             data: smoothed,
             borderColor: dataset.color,
             backgroundColor: dataset.color + '1A',
-            borderWidth: 3,
-            borderDash: [],
+            borderWidth: 2,
+            tension: 0.4,
+            cubicInterpolationMode: 'monotone',
             fill: false,
             pointRadius: 1,
             pointHoverRadius: 4,
@@ -1041,7 +1096,6 @@ void setup() {
             const csv = await r.text();
             const lines = csv.trim().split('\n');
             dataPoints = [];
-            ensureZeroPoint();
             if (lines.length === 0) return;
             const first = (lines[0] || '').trim().toLowerCase();
             const hasHeader = first.includes('lunghezza') || first.includes('diametro') || first.includes('dataset');
@@ -1058,8 +1112,8 @@ void setup() {
                 if (!isNaN(x) && !isNaN(y)) dataPoints.push({ x, y });
             }
             dataPoints.sort((a, b) => a.x - b.x);
-            const alpha = parseFloat(document.getElementById('smoothAlpha').value) || 0.1;
-            chart.data.datasets[0].data = dataPoints.length > 1 ? smoothEMA(dataPoints, alpha) : dataPoints;
+            const level = parseInt(document.getElementById('smoothAlpha').value) || 0;
+            chart.data.datasets[0].data = dataPoints.length > 1 ? smoothKalman(dataPoints, level) : dataPoints;
             document.getElementById('dataPointsCount').textContent = dataPoints.length;
             if (autoScaleEnabled) fitToData(); else chart.update();
             showCommandStatus('Storico caricato: ' + (dataPoints.length - 1) + ' punti', false);
@@ -1154,14 +1208,8 @@ void setup() {
         addDataPoint(msg.cm, msg.diameter);
     }
 
-    function ensureZeroPoint() {
-        const hasZeroPoint = dataPoints.some(point => point.x === 0 && point.y === 0);
-        if (!hasZeroPoint) dataPoints.unshift(zeroPoint);
-    }
-
     function addDataPoint(x, y) {
-        const point = {x: x, y: Math.round(y * 1000) / 1000};
-        ensureZeroPoint();
+        const point = {x: x, y: Math.round(y * 100) / 100};
         const existingIndex = dataPoints.findIndex(p => p.x === x);
         if (existingIndex !== -1) {
             dataPoints[existingIndex] = point;
@@ -1169,8 +1217,8 @@ void setup() {
             dataPoints.push(point);
         }
         dataPoints.sort((a, b) => a.x - b.x);
-        const alpha = parseFloat(document.getElementById('smoothAlpha').value) || 0.1;
-        chart.data.datasets[0].data = dataPoints.length > 1 ? smoothEMA(dataPoints, alpha) : dataPoints;
+        const level = parseInt(document.getElementById('smoothAlpha').value) || 0;
+        chart.data.datasets[0].data = dataPoints.length > 1 ? smoothKalman(dataPoints, level) : dataPoints;
         document.getElementById('dataPointsCount').textContent = dataPoints.length;
         if (autoScaleEnabled) fitToData();
         else chart.update('none');
@@ -1178,8 +1226,8 @@ void setup() {
 
     function redrawLiveSmoothing() {
         if (dataPoints.length < 2) return;
-        const alpha = parseFloat(document.getElementById('smoothAlpha').value) || 0.1;
-        chart.data.datasets[0].data = smoothEMA(dataPoints, alpha);
+        const level = parseInt(document.getElementById('smoothAlpha').value) || 0;
+        chart.data.datasets[0].data = smoothKalman(dataPoints, level);
         chart.update('none');
     }
 
@@ -1202,23 +1250,20 @@ void setup() {
         const yValues = allChartData.map(p => p.y);
         let minX = Math.min(...xValues);
         let maxX = Math.max(...xValues);
-        let minY = Math.min(...yValues);
         let maxY = Math.max(...yValues);
         const xRange = maxX - minX;
-        const yRange = maxY - minY;
         if (xRange === 0) { minX -= 10; maxX += 10; } else { minX -= xRange * 0.05; maxX += xRange * 0.05; }
-        if (yRange === 0) { minY -= 0.1; maxY += 0.1; } else { minY -= yRange * 0.1; maxY += yRange * 0.1; }
+        // Y always starts at 0: variation is shown proportional to actual diameter
         chart.options.scales.x.min = minX;
         chart.options.scales.x.max = maxX;
-        chart.options.scales.y.min = minY;
-        chart.options.scales.y.max = maxY;
+        chart.options.scales.y.min = 0;
+        chart.options.scales.y.max = Math.max(maxY * 1.15, 0.1);
         chart.update();
     }
 
     function resetChart() {
         dataPoints = [];
         chart.data.datasets[0].data = dataPoints;
-        ensureZeroPoint();
         if (autoScaleEnabled) fitToData(); else chart.update();
         document.getElementById('dataPointsCount').textContent = 0;
         showCommandStatus('Grafico resettato');
@@ -1254,7 +1299,6 @@ void setup() {
             if (command === 'reset') {
                 dataPoints = [];
                 chart.data.datasets[0].data = dataPoints;
-                ensureZeroPoint();
                 if (autoScaleEnabled) fitToData(); else chart.update();
                 document.getElementById('dataPointsCount').textContent = 0;
                 stopTimer();
@@ -1362,6 +1406,8 @@ void setup() {
     } else if (type == WStype_CONNECTED) {
       String json = "{\"type\":\"params\",\"displayZero\":" + String(displayZeroValue, 2) + ",\"offset\":" + String(caliperZeroOffset, 2) + "}";
       webSocket.sendTXT(num, json);
+      String scanJson = "{\"type\":\"scan_enabled\",\"value\":" + String(scanEnabled ? "true" : "false") + "}";
+      webSocket.sendTXT(num, scanJson);
     }
   });
 
@@ -1374,11 +1420,22 @@ void calculateSpeed() {
   unsigned long currentTime = millis();
   if (currentTime - lastSpeedTime >= 1000) {
     int encoderDiff = encoderValue - lastSpeedEncoder;
-    currentSpeed = (encoderDiff / (float)PULSES_PER_CM);
+    currentSpeed = abs(encoderDiff / (float)PULSES_PER_CM);
     lastSpeedEncoder = encoderValue;
     lastSpeedTime = currentTime;
     String json = "{\"type\":\"speed\",\"speed\":" + String(currentSpeed, 2) + "}";
     webSocket.broadcastTXT(json);
+
+    // Closed-loop scan speed control: compensates for spool diameter growth.
+    // Sends SETHZ:<hz> to slave proportionally — runs every second.
+    if (scanEnabled && !isGoToActive && currentSpeed > 0.1f) {
+      float ratio = TARGET_SCAN_SPEED_CMS / currentSpeed;
+      uint32_t newHz = (uint32_t)constrain((float)currentScanHz * ratio, (float)SCAN_HZ_MIN, (float)SCAN_HZ_MAX);
+      if (abs((int32_t)newHz - (int32_t)currentScanHz) > 10) {
+        currentScanHz = newHz;
+        motorQueueTx("SETHZ:" + String(currentScanHz));
+      }
+    }
   }
 }
 
@@ -1397,6 +1454,7 @@ void loop() {
   server.handleClient();
   webSocket.loop();
 
+  pumpCaliper();       // keep rolling buffer fresh — non-blocking, must run every iteration
   motorPumpRx();
   motorPollIfNeeded();
   motorPumpTx();
@@ -1430,10 +1488,10 @@ void loop() {
   if (!isGoToActive && currentCm != lastCm && currentCm >= 0 && scanEnabled) {
     lastCm = currentCm;
 
-    float displayValue = readCaliperMedian(5);
+    float displayValue = readCaliperBufferedMedian();
 
     float compensatedDiameter = displayValue - displayZeroValue - caliperZeroOffset;
-    compensatedDiameter = round(compensatedDiameter * 1000.0) / 1000.0;
+    compensatedDiameter = roundf(compensatedDiameter * 100.0f) / 100.0f;  // 0.01 mm precision
     addDataPoint(currentCm, compensatedDiameter, displayValue);
 
     String json = "{\"cm\":" + String(currentCm) + ",\"diameter\":" + String(compensatedDiameter, 2) + 
@@ -1502,7 +1560,8 @@ float readCaliperAverage(int samples) {
 
 // Collects up to `samples` caliper readings and returns the median.
 // Rejects outlier spikes better than a mean — ideal for mechanical noise.
-// At 13 Hz caliper rate, 5 samples ≈ 385 ms; fine at 0.5–2.5 cm/s scan speed.
+// At 13 Hz caliper rate, 5 samples ≈ 385 ms; at 2 cm/s scan speed smear = 4×77ms×2 = 6mm.
+// 5 samples also averages over stepper cogging vibration better than 3.
 float readCaliperMedian(int samples) {
   if (samples < 1) samples = 1;
   if (samples > 9) samples = 9;  // cap to avoid stack growth
@@ -1534,10 +1593,40 @@ float readCaliperMedian(int samples) {
 void readCaliper() {
   noInterrupts();
   if (calDataReady) {
-    lineDiameter = (float)(calRawValue * calSign) / 200.0f;  // protocol LSB = 0.005 mm
+    float raw = (float)(calRawValue * calSign) / 200.0f;  // protocol LSB = 0.005 mm
+    lineDiameter = roundf(raw * 100.0f) / 100.0f;         // round to caliper precision: 0.01 mm
     calDataReady = false;
+    calRollingBuf[calRollingIdx % CAL_BUF_SIZE] = lineDiameter;
+    calRollingIdx++;
+    if (calRollingCount < CAL_BUF_SIZE) calRollingCount++;
   }
   interrupts();
+}
+
+// Non-blocking caliper pump — call every main loop iteration to keep rolling buffer fresh.
+void pumpCaliper() {
+  noInterrupts();
+  bool rdy = calDataReady;
+  interrupts();
+  if (rdy) readCaliper();
+}
+
+// Returns median of the rolling buffer — instant, no blocking.
+// Buffer holds the last CAL_BUF_SIZE readings collected continuously at ~13 Hz.
+float readCaliperBufferedMedian() {
+  if (calRollingCount == 0) return lineDiameter;
+  float tmp[CAL_BUF_SIZE];
+  int n = calRollingCount;
+  // Copy from circular buffer in chronological order
+  for (int i = 0; i < n; i++)
+    tmp[i] = calRollingBuf[(calRollingIdx - n + i + CAL_BUF_SIZE * 2) % CAL_BUF_SIZE];
+  // Insertion sort
+  for (int i = 1; i < n; i++) {
+    float key = tmp[i]; int j = i - 1;
+    while (j >= 0 && tmp[j] > key) { tmp[j + 1] = tmp[j]; j--; }
+    tmp[j + 1] = key;
+  }
+  return tmp[n / 2];
 }
 
 // -----------------------------
@@ -1553,7 +1642,7 @@ void handleCommand(String cmd) {
     arg.replace("motor", "");
     arg.trim();
     arg.toLowerCase();
-    if (arg == "scan") motorQueueTx("SCAN");
+    if (arg == "scan") { currentScanHz = SCAN_HZ_INIT; motorQueueTx("SCAN"); }
     else if (arg == "stop") motorQueueTx("STOP");
     else if (arg == "fast_s") motorQueueTx("FAST_S");
     else if (arg == "fast_o") motorQueueTx("FAST_O");

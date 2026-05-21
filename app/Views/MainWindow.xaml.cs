@@ -18,6 +18,7 @@ public partial class MainWindow : Fluent.RibbonWindow, INotifyPropertyChanged
     private readonly MainViewModel _vm = new();
     private bool _plotInitialized = false;
     private bool _autoFitEnabled = true;
+    private bool _chartControlsInitialized = false;
     private readonly List<ImportedSeries> _importedSeries = new();
     private string _lastImportedFile = "-";
     private string _uiStatus = "Pronto";
@@ -42,6 +43,10 @@ public partial class MainWindow : Fluent.RibbonWindow, INotifyPropertyChanged
     public string ImportedSeriesStatus   => $"Serie importate: {_importedSeries.Count}";
     public string LastImportedFileStatus => $"Ultimo CSV: {_lastImportedFile}";
     public string AutoFitStatus          => $"Auto-fit: {(_autoFitEnabled ? "ON" : "OFF")}";
+    public string SmoothingAlphaStatus   => $"Alpha: {_vm.Settings.Chart.SmoothingAlpha:0.00}";
+    public string LineWidthStatus        => $"Spessore: {_vm.Settings.Chart.LineWidth}";
+    public string FilteredOpacityStatus  => $"Filtro: {_vm.Settings.Chart.FilteredOpacity:0.00}";
+    public string RawOpacityStatus       => $"Raw: {_vm.Settings.Chart.RawOpacity:0.00}";
     public string DrawModeStatus         => _segmentDrawMode ? "DISEGNO SEGMENTI ATTIVO" : string.Empty;
     public string SegmentNodesStatus     => _segmentNodes.Count > 0 ? $"Nodi: {_segmentNodes.Count}" : string.Empty;
 
@@ -56,6 +61,7 @@ public partial class MainWindow : Fluent.RibbonWindow, INotifyPropertyChanged
     {
         InitializeComponent();
         DataContext = _vm;
+        InitializeChartControls();
 
         _vm.OnConnected += async () =>
         {
@@ -79,6 +85,16 @@ public partial class MainWindow : Fluent.RibbonWindow, INotifyPropertyChanged
         };
     }
 
+    private void InitializeChartControls()
+    {
+        SmoothingToggle.IsChecked = _vm.SmoothingEnabled;
+        SmoothingAlphaSlider.Value = Math.Clamp(_vm.Settings.Chart.SmoothingAlpha, SmoothingAlphaSlider.Minimum, SmoothingAlphaSlider.Maximum);
+        LineWidthSlider.Value = Math.Clamp(_vm.Settings.Chart.LineWidth, (int)LineWidthSlider.Minimum, (int)LineWidthSlider.Maximum);
+        FilteredOpacitySlider.Value = Math.Clamp(_vm.Settings.Chart.FilteredOpacity, FilteredOpacitySlider.Minimum, FilteredOpacitySlider.Maximum);
+        RawOpacitySlider.Value = Math.Clamp(_vm.Settings.Chart.RawOpacity, RawOpacitySlider.Minimum, RawOpacitySlider.Maximum);
+        _chartControlsInitialized = true;
+    }
+
     private void OnPropertyChanged(string propertyName)
         => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
 
@@ -87,6 +103,10 @@ public partial class MainWindow : Fluent.RibbonWindow, INotifyPropertyChanged
         OnPropertyChanged(nameof(ImportedSeriesStatus));
         OnPropertyChanged(nameof(LastImportedFileStatus));
         OnPropertyChanged(nameof(AutoFitStatus));
+        OnPropertyChanged(nameof(SmoothingAlphaStatus));
+        OnPropertyChanged(nameof(LineWidthStatus));
+        OnPropertyChanged(nameof(FilteredOpacityStatus));
+        OnPropertyChanged(nameof(RawOpacityStatus));
         OnPropertyChanged(nameof(DrawModeStatus));
         OnPropertyChanged(nameof(SegmentNodesStatus));
     }
@@ -123,6 +143,7 @@ public partial class MainWindow : Fluent.RibbonWindow, INotifyPropertyChanged
         plot.Clear();
 
         var pts = _vm.Points.OrderBy(p => p.X).ToList();
+        var displayedYs = GetDisplayedSeries(pts);
 
         if (pts.Count > 0)
         {
@@ -130,11 +151,11 @@ public partial class MainWindow : Fluent.RibbonWindow, INotifyPropertyChanged
 
             if (_vm.Settings.Chart.ShowFilteredSeries)
             {
-                var filtered = plot.Add.Scatter(xs, pts.Select(p => p.FilteredY).ToArray());
+                var filtered = plot.Add.Scatter(xs, displayedYs);
                 filtered.LegendText = "Filtered";
                 filtered.LineWidth  = _vm.Settings.Chart.LineWidth;
                 filtered.MarkerSize = 0;
-                filtered.Color      = Colors.Blue;
+                filtered.Color      = Colors.Blue.WithAlpha((float)Math.Clamp(_vm.Settings.Chart.FilteredOpacity, 0.0, 1.0));
             }
 
             if (_vm.Settings.Chart.ShowRawSeries)
@@ -143,7 +164,7 @@ public partial class MainWindow : Fluent.RibbonWindow, INotifyPropertyChanged
                 raw.LegendText = "Raw";
                 raw.LineWidth  = 1;
                 raw.MarkerSize = 0;
-                raw.Color      = Colors.Orange;
+                raw.Color      = Colors.Orange.WithAlpha((float)Math.Clamp(_vm.Settings.Chart.RawOpacity, 0.0, 1.0));
             }
         }
 
@@ -166,6 +187,28 @@ public partial class MainWindow : Fluent.RibbonWindow, INotifyPropertyChanged
         if (_autoFitEnabled) plot.Axes.AutoScale();
         PlotControl.Refresh();
         RefreshStatusBar();
+    }
+
+    private double[] GetDisplayedSeries(IReadOnlyList<MeasurementPoint> points)
+    {
+        if (points.Count == 0)
+            return Array.Empty<double>();
+
+        if (!_vm.SmoothingEnabled)
+            return points.Select(p => p.FilteredY).ToArray();
+
+        double alpha = Math.Clamp(_vm.Settings.Chart.SmoothingAlpha, 0.0, 1.0);
+        double? ema = null;
+        var values = new double[points.Count];
+
+        for (int i = 0; i < points.Count; i++)
+        {
+            double sample = points[i].FilteredY;
+            ema = ema is null ? sample : alpha * sample + (1 - alpha) * ema.Value;
+            values[i] = Math.Round(ema.Value, 3);
+        }
+
+        return values;
     }
 
     // Segment overlay rendering
@@ -286,8 +329,15 @@ public partial class MainWindow : Fluent.RibbonWindow, INotifyPropertyChanged
         var pts = _vm.Points;
         if (pts.Count == 0) { HoverCoordsStatus = string.Empty; return; }
 
-        var nearest = pts.OrderBy(p => Math.Abs(p.X - plotX)).First();
-        HoverCoordsStatus = $"↖  {nearest.X:0} cm  |  {nearest.FilteredY:0.000} mm";
+        var orderedPoints = pts.OrderBy(p => p.X).ToList();
+        var displayedYs = GetDisplayedSeries(orderedPoints);
+        int nearestIndex = orderedPoints
+            .Select((point, index) => new { point, index })
+            .OrderBy(item => Math.Abs(item.point.X - plotX))
+            .First()
+            .index;
+
+        HoverCoordsStatus = $"↖  {orderedPoints[nearestIndex].X:0} cm  |  {displayedYs[nearestIndex]:0.000} mm";
     }
 
     private void PlotControl_PreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
@@ -748,8 +798,13 @@ public partial class MainWindow : Fluent.RibbonWindow, INotifyPropertyChanged
 
         var sb = new StringBuilder();
         sb.AppendLine("Lunghezza cm,Raw mm,Filtered mm");
-        foreach (var p in _vm.Points.OrderBy(p => p.X))
-            sb.AppendLine($"{p.X:0.0},{p.RawY:0.000},{p.FilteredY:0.000}");
+        var orderedPoints = _vm.Points.OrderBy(p => p.X).ToList();
+        var displayedYs = GetDisplayedSeries(orderedPoints);
+        for (int i = 0; i < orderedPoints.Count; i++)
+        {
+            var p = orderedPoints[i];
+            sb.AppendLine($"{p.X:0.0},{p.RawY:0.000},{displayedYs[i]:0.000}");
+        }
 
         File.WriteAllText(dlg.FileName, sb.ToString());
         UiStatus = "CSV esportato";
@@ -830,7 +885,78 @@ public partial class MainWindow : Fluent.RibbonWindow, INotifyPropertyChanged
     {
         bool enabled = SmoothingToggle.IsChecked ?? true;
         _vm.SmoothingEnabled = enabled;
+        RefreshPlot();
         UiStatus = enabled ? "Smoothing EMA ON" : "Smoothing EMA OFF — dati grezzi";
+    }
+
+    private void SmoothingAlphaSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (!_chartControlsInitialized || !IsLoaded)
+            return;
+
+        double alpha = Math.Round(e.NewValue, 2);
+        if (Math.Abs(_vm.Settings.Chart.SmoothingAlpha - alpha) < 0.0001)
+            return;
+
+        _vm.Settings.Chart.SmoothingAlpha = alpha;
+        _vm.SaveSettings();
+        RefreshStatusBar();
+        RefreshPlot();
+        UiStatus = $"Smoothing alpha = {alpha:0.00}";
+    }
+
+    private void ResetSmoothingAlpha_Click(object sender, RoutedEventArgs e)
+    {
+        SmoothingAlphaSlider.Value = 0.10;
+        UiStatus = "Smoothing alpha ripristinato a 0.10";
+    }
+
+    private void LineWidthSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (!_chartControlsInitialized || !IsLoaded)
+            return;
+
+        int lineWidth = (int)Math.Round(e.NewValue);
+        if (_vm.Settings.Chart.LineWidth == lineWidth)
+            return;
+
+        _vm.Settings.Chart.LineWidth = lineWidth;
+        _vm.SaveSettings();
+        RefreshStatusBar();
+        RefreshPlot();
+        UiStatus = $"Spessore linea = {lineWidth}";
+    }
+
+    private void FilteredOpacitySlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (!_chartControlsInitialized || !IsLoaded)
+            return;
+
+        double opacity = Math.Round(e.NewValue, 2);
+        if (Math.Abs(_vm.Settings.Chart.FilteredOpacity - opacity) < 0.0001)
+            return;
+
+        _vm.Settings.Chart.FilteredOpacity = opacity;
+        _vm.SaveSettings();
+        RefreshStatusBar();
+        RefreshPlot();
+        UiStatus = $"Opacita filtro = {opacity:0.00}";
+    }
+
+    private void RawOpacitySlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (!_chartControlsInitialized || !IsLoaded)
+            return;
+
+        double opacity = Math.Round(e.NewValue, 2);
+        if (Math.Abs(_vm.Settings.Chart.RawOpacity - opacity) < 0.0001)
+            return;
+
+        _vm.Settings.Chart.RawOpacity = opacity;
+        _vm.SaveSettings();
+        RefreshStatusBar();
+        RefreshPlot();
+        UiStatus = $"Opacita raw = {opacity:0.00}";
     }
 
     // Impostazioni

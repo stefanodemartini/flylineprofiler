@@ -8,190 +8,475 @@
         xmlns:Fluent="urn:fluent-ribbon"
         xmlns:ScottPlot="clr-namespace:ScottPlot.WPF;assembly=ScottPlot.WPF"
         mc:Ignorable="d"
-        Title="Diametro Linea Desktop" Height="920" Width="1450">
+        Title="Diametro Linea Desktop"
+        Height="920"
+        Width="1450"
+        Background="#EFF4F8"
+        FontFamily="Bahnschrift">
 
-    <DockPanel>
+    <Fluent:RibbonWindow.Resources>
+        <LinearGradientBrush x:Key="WindowBackgroundBrush" StartPoint="0,0" EndPoint="1,1">
+            <GradientStop Color="#F4F7FB" Offset="0"/>
+            <GradientStop Color="#E6EDF5" Offset="0.52"/>
+            <GradientStop Color="#DEE8F2" Offset="1"/>
+        </LinearGradientBrush>
 
-        <!-- ═══════════════════════════════════════════════════════ RIBBON -->
-        <Fluent:Ribbon DockPanel.Dock="Top" AutomaticStateManagement="False"
-                       CanCustomizeQuickAccessToolBar="False">
+        <LinearGradientBrush x:Key="HeroBrush" StartPoint="0,0" EndPoint="1,1">
+            <GradientStop Color="#0E223B" Offset="0"/>
+            <GradientStop Color="#18456A" Offset="0.6"/>
+            <GradientStop Color="#2A6D86" Offset="1"/>
+        </LinearGradientBrush>
 
-            <!-- File backstage -->
-            <Fluent:Ribbon.Menu>
-                <Fluent:Backstage>
-                    <Fluent:BackstageTabControl>
-                        <Fluent:Button Header="Importa CSV confronto" Click="ImportCsv_Click"/>
-                        <Fluent:Button Header="Esporta CSV"           Click="ExportCsv_Click"/>
-                        <Fluent:Button Header="Esporta PNG grafico"   Click="ExportPng_Click"/>
-                        <Fluent:SeparatorTabItem/>
-                        <Fluent:Button Header="Esporta segmenti CSV"  Click="ExportSegmentsCsv_Click"/>
-                        <Fluent:Button Header="Salva nodi..."         Click="SaveNodes_Click"/>
-                        <Fluent:Button Header="Carica nodi..."        Click="LoadNodes_Click"/>
-                        <Fluent:SeparatorTabItem/>
-                        <Fluent:Button Header="Impostazioni"          Click="Settings_Click"/>
-                        <Fluent:Button Header="Esci"                  Click="Exit_Click"/>
-                    </Fluent:BackstageTabControl>
-                </Fluent:Backstage>
-            </Fluent:Ribbon.Menu>
+        <SolidColorBrush x:Key="CardBackgroundBrush" Color="#FCFDFE"/>
+        <SolidColorBrush x:Key="CardBorderBrush" Color="#D8E2ED"/>
+        <SolidColorBrush x:Key="AccentBrush" Color="#0F5E8C"/>
+        <SolidColorBrush x:Key="AccentSoftBrush" Color="#E8F2F7"/>
+        <SolidColorBrush x:Key="MetricBrush" Color="#F7FAFD"/>
+        <SolidColorBrush x:Key="MetricBorderBrush" Color="#D6E1EB"/>
+        <SolidColorBrush x:Key="InkBrush" Color="#102033"/>
+        <SolidColorBrush x:Key="MutedBrush" Color="#617186"/>
+        <SolidColorBrush x:Key="LogBackgroundBrush" Color="#0F1726"/>
+        <SolidColorBrush x:Key="LogBorderBrush" Color="#2E405A"/>
 
-            <!-- ── Tab: CONNESSIONE ── -->
-            <Fluent:RibbonTabItem Header="Connessione">
-                <Fluent:RibbonGroupBox Header="Rete">
-                    <Fluent:Button Header="Connetti"     Size="Large" Click="Connect_Click"/>
-                    <Fluent:Button Header="Disconnetti"  Size="Large" Click="Disconnect_Click"/>
-                </Fluent:RibbonGroupBox>
-                <Fluent:RibbonGroupBox Header="Scansione">
-                    <Fluent:Button Header="START SCAN"   Size="Large" Click="StartScan_Click"  IsEnabled="{Binding CanControl}"/>
-                    <Fluent:Button Header="STOP"         Size="Large" Click="Stop_Click"/>
-                    <Fluent:Button Header="Ricezione ON"  Click="ScanOn_Click"  IsEnabled="{Binding CanEnableScan}"/>
-                    <Fluent:Button Header="Ricezione OFF" Click="ScanOff_Click" IsEnabled="{Binding ScanReceiving}"/>
-                </Fluent:RibbonGroupBox>
-            </Fluent:RibbonTabItem>
+        <Style x:Key="CardGroupBoxStyle" TargetType="GroupBox">
+            <Setter Property="Margin" Value="0,0,0,10"/>
+            <Setter Property="Background" Value="{StaticResource CardBackgroundBrush}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource CardBorderBrush}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="GroupBox">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+                            <Border Grid.RowSpan="2"
+                                    CornerRadius="20"
+                                    Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="1"
+                                    Margin="0,14,0,0">
+                                <Border.Effect>
+                                    <DropShadowEffect BlurRadius="22" ShadowDepth="0" Color="#19000000"/>
+                                </Border.Effect>
+                            </Border>
+                            <Border Margin="18,0,18,0"
+                                    Padding="12,6"
+                                    HorizontalAlignment="Left"
+                                    Background="{StaticResource AccentSoftBrush}"
+                                    CornerRadius="12"
+                                    BorderBrush="{StaticResource CardBorderBrush}"
+                                    BorderThickness="1">
+                                <ContentPresenter ContentSource="Header"
+                                                  TextElement.Foreground="{StaticResource AccentBrush}"
+                                                  TextElement.FontWeight="SemiBold"
+                                                  TextElement.FontSize="13"/>
+                            </Border>
+                            <ContentPresenter Grid.Row="1" Margin="18,26,18,18"/>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
 
-            <!-- ── Tab: MOTORE ── -->
-            <Fluent:RibbonTabItem Header="Motore">
-                <Fluent:RibbonGroupBox Header="Movimento">
-                    <Fluent:Button Header="FAST stessa dir"  Click="FastS_Click"       IsEnabled="{Binding CanControl}"/>
-                    <Fluent:Button Header="FAST opposta dir" Click="FastO_Click"        IsEnabled="{Binding CanControl}"/>
-                    <Fluent:Button Header="Vai a posizione"  Click="Goto_Click"         IsEnabled="{Binding CanControl}"/>
-                    <Fluent:Button Header="Aggiorna stato"   Click="MotorStatus_Click"/>
-                </Fluent:RibbonGroupBox>
-                <Fluent:RibbonGroupBox Header="Calibrazione">
-                    <Fluent:Button Header="Zero display"    Click="SetDisplayZero_Click"/>
-                    <Fluent:Button Header="Reset offset"    Click="ResetOffset_Click"/>
-                    <Fluent:Button Header="Imposta Offset…" Click="SetOffset_Click"/>
-                    <Fluent:Button Header="Lettura raw"     Click="ReadRaw_Click"/>
-                </Fluent:RibbonGroupBox>
-            </Fluent:RibbonTabItem>
+        <Style x:Key="MetricCardStyle" TargetType="Border">
+            <Setter Property="Background" Value="{StaticResource MetricBrush}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource MetricBorderBrush}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="16"/>
+            <Setter Property="Padding" Value="14,12"/>
+            <Setter Property="Margin" Value="0,0,10,10"/>
+            <Setter Property="MinWidth" Value="126"/>
+            <Setter Property="MinHeight" Value="88"/>
+        </Style>
 
-            <!-- ── Tab: GRAFICO ── -->
-            <Fluent:RibbonTabItem Header="Grafico">
-                <Fluent:RibbonGroupBox Header="Vista">
-                    <Fluent:Button       Header="Adatta assi"   Size="Large" Click="FitPlot_Click"/>
-                    <Fluent:ToggleButton Header="Auto-fit"      Size="Large" IsChecked="True" Click="AutoFitToggle_Click"/>
-                    <Fluent:Button       Header="Azzera tutto"  Click="Reset_Click" ToolTip="Azzera posizione e cancella grafico"/>
-                    <Fluent:ToggleButton x:Name="SmoothingToggle"
-                                         Header="Smoothing EMA" IsChecked="True"
-                                         Click="SmoothingToggle_Click"
-                                         ToolTip="Applica filtro EMA ai dati ricevuti"/>
-                </Fluent:RibbonGroupBox>
-                <Fluent:RibbonGroupBox Header="Serie">
-                    <Fluent:Button Header="Importa CSV confronto"   Click="ImportCsv_Click"/>
-                    <Fluent:Button Header="Cancella serie importate" Click="ClearImported_Click"/>
-                </Fluent:RibbonGroupBox>
-            </Fluent:RibbonTabItem>
+        <Style x:Key="MetricLabelStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Foreground" Value="{StaticResource MutedBrush}"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+        </Style>
 
-            <!-- ── Tab: SEGMENTI ── -->
-            <Fluent:RibbonTabItem Header="Segmenti">
-                <Fluent:RibbonGroupBox Header="Disegno">
-                    <Fluent:ToggleButton x:Name="MenuDrawSegments"
-                                         Header="Disegna segmenti"
-                                         Size="Large"
-                                         Click="ToggleDrawMode_Click"/>
-                    <Fluent:Button Header="Annulla nodo" Click="UndoLastNode_Click"/>
-                    <Fluent:Button Header="Cancella tutti" Click="ClearSegments_Click"/>
-                </Fluent:RibbonGroupBox>
-                <Fluent:RibbonGroupBox Header="File nodi">
-                    <Fluent:Button Header="Salva nodi..."          Click="SaveNodes_Click"/>
-                    <Fluent:Button Header="Carica nodi..."         Click="LoadNodes_Click"/>
-                    <Fluent:Button Header="Esporta segmenti CSV"   Click="ExportSegmentsCsv_Click"/>
-                </Fluent:RibbonGroupBox>
-            </Fluent:RibbonTabItem>
+        <Style x:Key="MetricValueStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="21"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="{StaticResource InkBrush}"/>
+            <Setter Property="Margin" Value="0,6,0,0"/>
+        </Style>
 
-        </Fluent:Ribbon>
+        <Style x:Key="DashboardStatusBarStyle" TargetType="StatusBar">
+            <Setter Property="Background" Value="#F9FBFD"/>
+            <Setter Property="BorderBrush" Value="{StaticResource CardBorderBrush}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="8,4"/>
+        </Style>
+    </Fluent:RibbonWindow.Resources>
 
-        <!-- ═══════════════════════════════════════════════════════ STATUS BAR -->
-        <StatusBar DockPanel.Dock="Bottom">
-            <StatusBarItem>
-                <TextBlock Text="{Binding ElementName=MainWin, Path=AutoFitStatus}"/>
-            </StatusBarItem>
-            <Separator/>
-            <StatusBarItem>
-                <TextBlock Text="{Binding ElementName=MainWin, Path=ImportedSeriesStatus}"/>
-            </StatusBarItem>
-            <Separator/>
-            <StatusBarItem>
-                <TextBlock Text="{Binding ElementName=MainWin, Path=LastImportedFileStatus}"/>
-            </StatusBarItem>
-            <Separator/>
-            <StatusBarItem>
-                <TextBlock Text="{Binding ElementName=MainWin, Path=DrawModeStatus}" Foreground="Red" FontWeight="SemiBold"/>
-            </StatusBarItem>
-            <Separator/>
-            <StatusBarItem>
-                <TextBlock Text="{Binding ElementName=MainWin, Path=SegmentNodesStatus}"/>
-            </StatusBarItem>
-            <Separator/>
-            <StatusBarItem HorizontalAlignment="Right">
-                <TextBlock Text="{Binding ElementName=MainWin, Path=HoverCoordsStatus}" FontFamily="Consolas" Foreground="#1a6e2e"/>
-            </StatusBarItem>
-        </StatusBar>
+    <Grid Background="{StaticResource WindowBackgroundBrush}">
+        <DockPanel Margin="10">
 
-        <!-- ═══════════════════════════════════════════════════════ CONTENT -->
-        <Grid Margin="8">
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="*"/>
-                <RowDefinition Height="160"/>
-            </Grid.RowDefinitions>
+            <Border DockPanel.Dock="Top"
+                    Background="#F8FBFD"
+                    BorderBrush="{StaticResource CardBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="22"
+                    Margin="0,0,0,10">
+                <Border.Effect>
+                    <DropShadowEffect BlurRadius="24" ShadowDepth="0" Color="#18000000"/>
+                </Border.Effect>
 
-            <!-- Row 0: Stato + GOTOPOS -->
-            <Grid Grid.Row="0" Margin="0,0,0,6">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="200"/>
-                </Grid.ColumnDefinitions>
+                <Fluent:Ribbon AutomaticStateManagement="False"
+                               CanCustomizeQuickAccessToolBar="False"
+                               Background="Transparent">
 
-                <GroupBox Header="Stato" Grid.Column="0" Margin="0,0,6,0">
-                    <UniformGrid Rows="1" Columns="9">
-                        <StackPanel Margin="6,4"><TextBlock Text="Connessione" FontWeight="Bold" FontSize="10"/><TextBlock Text="{Binding ConnectionStatus}"/></StackPanel>
-                        <StackPanel Margin="6,4"><TextBlock Text="Motore"      FontWeight="Bold" FontSize="10"/><TextBlock Text="{Binding MotorState}"/></StackPanel>
-                        <StackPanel Margin="6,4"><TextBlock Text="Lunghezza"   FontWeight="Bold" FontSize="10"/><TextBlock Text="{Binding CurrentLength}"/></StackPanel>
-                        <StackPanel Margin="6,4"><TextBlock Text="Diametro"    FontWeight="Bold" FontSize="10"/><TextBlock Text="{Binding CurrentDiameter}"/></StackPanel>
-                        <StackPanel Margin="6,4"><TextBlock Text="Display"     FontWeight="Bold" FontSize="10"/><TextBlock Text="{Binding CurrentDisplay}"/></StackPanel>
-                        <StackPanel Margin="6,4">
-                            <TextBlock Text="Velocità" FontWeight="Bold" FontSize="10"/>
-                            <TextBlock Text="{Binding Speed}"/>
-                            <TextBlock Text="{Binding SpeedStatus}" FontSize="10" Foreground="Gray"/>
+                    <Fluent:Ribbon.Menu>
+                        <Fluent:Backstage>
+                            <Fluent:BackstageTabControl>
+                                <Fluent:Button Header="Importa CSV confronto" Click="ImportCsv_Click"/>
+                                <Fluent:Button Header="Esporta CSV" Click="ExportCsv_Click"/>
+                                <Fluent:Button Header="Esporta PNG grafico" Click="ExportPng_Click"/>
+                                <Fluent:SeparatorTabItem/>
+                                <Fluent:Button Header="Esporta segmenti CSV" Click="ExportSegmentsCsv_Click"/>
+                                <Fluent:Button Header="Salva nodi..." Click="SaveNodes_Click"/>
+                                <Fluent:Button Header="Carica nodi..." Click="LoadNodes_Click"/>
+                                <Fluent:SeparatorTabItem/>
+                                <Fluent:Button Header="Impostazioni" Click="Settings_Click"/>
+                                <Fluent:Button Header="Esci" Click="Exit_Click"/>
+                            </Fluent:BackstageTabControl>
+                        </Fluent:Backstage>
+                    </Fluent:Ribbon.Menu>
+
+                    <Fluent:RibbonTabItem Header="Connessione">
+                        <Fluent:RibbonGroupBox Header="Rete">
+                            <Fluent:Button Header="Connetti" Size="Large" Click="Connect_Click"/>
+                            <Fluent:Button Header="Disconnetti" Size="Large" Click="Disconnect_Click"/>
+                        </Fluent:RibbonGroupBox>
+                        <Fluent:RibbonGroupBox Header="Scansione">
+                            <Fluent:Button Header="START SCAN" Size="Large" Click="StartScan_Click" IsEnabled="{Binding CanControl}"/>
+                            <Fluent:Button Header="STOP" Size="Large" Click="Stop_Click"/>
+                            <Fluent:Button Header="Ricezione ON" Click="ScanOn_Click" IsEnabled="{Binding CanEnableScan}"/>
+                            <Fluent:Button Header="Ricezione OFF" Click="ScanOff_Click" IsEnabled="{Binding ScanReceiving}"/>
+                        </Fluent:RibbonGroupBox>
+                    </Fluent:RibbonTabItem>
+
+                    <Fluent:RibbonTabItem Header="Motore">
+                        <Fluent:RibbonGroupBox Header="Movimento">
+                            <Fluent:Button Header="FAST stessa dir" Click="FastS_Click" IsEnabled="{Binding CanControl}"/>
+                            <Fluent:Button Header="FAST opposta dir" Click="FastO_Click" IsEnabled="{Binding CanControl}"/>
+                            <Fluent:Button Header="Vai a posizione" Click="Goto_Click" IsEnabled="{Binding CanControl}"/>
+                            <Fluent:Button Header="Aggiorna stato" Click="MotorStatus_Click"/>
+                        </Fluent:RibbonGroupBox>
+                        <Fluent:RibbonGroupBox Header="Calibrazione">
+                            <Fluent:Button Header="Zero display" Click="SetDisplayZero_Click"/>
+                            <Fluent:Button Header="Reset offset" Click="ResetOffset_Click"/>
+                            <Fluent:Button Header="Imposta Offset..." Click="SetOffset_Click"/>
+                            <Fluent:Button Header="Lettura raw" Click="ReadRaw_Click"/>
+                        </Fluent:RibbonGroupBox>
+                    </Fluent:RibbonTabItem>
+
+                    <Fluent:RibbonTabItem Header="Grafico">
+                        <Fluent:RibbonGroupBox Header="Vista">
+                            <Fluent:Button Header="Adatta assi" Size="Large" Click="FitPlot_Click"/>
+                            <Fluent:ToggleButton Header="Auto-fit" Size="Large" IsChecked="True" Click="AutoFitToggle_Click"/>
+                            <Fluent:Button Header="Azzera tutto" Click="Reset_Click" ToolTip="Azzera posizione e cancella grafico"/>
+                            <Fluent:ToggleButton x:Name="SmoothingToggle"
+                                                 Header="Smoothing EMA"
+                                                 IsChecked="True"
+                                                 Click="SmoothingToggle_Click"
+                                                 ToolTip="Applica filtro EMA ai dati ricevuti"/>
+                            <StackPanel Width="190" Margin="8,0,0,0" VerticalAlignment="Center">
+                                <TextBlock Text="Alpha smoothing" FontSize="11" FontWeight="SemiBold"/>
+                                <Slider x:Name="SmoothingAlphaSlider"
+                                        Minimum="0.01"
+                                        Maximum="1.00"
+                                        TickFrequency="0.01"
+                                        IsSnapToTickEnabled="False"
+                                        SmallChange="0.01"
+                                        LargeChange="0.05"
+                                        IsEnabled="{Binding ElementName=SmoothingToggle, Path=IsChecked}"
+                                        ValueChanged="SmoothingAlphaSlider_ValueChanged"/>
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                    <TextBlock Text="{Binding ElementName=MainWin, Path=SmoothingAlphaStatus}"
+                                               FontSize="11"
+                                               VerticalAlignment="Center"/>
+                                    <Button Content="Reset"
+                                            Margin="8,0,0,0"
+                                            Padding="6,1"
+                                            FontSize="11"
+                                            IsEnabled="{Binding ElementName=SmoothingToggle, Path=IsChecked}"
+                                            Click="ResetSmoothingAlpha_Click"/>
+                                </StackPanel>
+                            </StackPanel>
+                            <StackPanel Width="150" Margin="8,0,0,0" VerticalAlignment="Center">
+                                <TextBlock Text="Spessore linea" FontSize="11" FontWeight="SemiBold"/>
+                                <Slider x:Name="LineWidthSlider"
+                                        Minimum="1"
+                                        Maximum="8"
+                                        TickFrequency="1"
+                                        IsSnapToTickEnabled="True"
+                                        ValueChanged="LineWidthSlider_ValueChanged"/>
+                                <TextBlock Text="{Binding ElementName=MainWin, Path=LineWidthStatus}"
+                                           FontSize="11"
+                                           HorizontalAlignment="Right"/>
+                            </StackPanel>
+                            <StackPanel Width="150" Margin="8,0,0,0" VerticalAlignment="Center">
+                                <TextBlock Text="Opacita filtro" FontSize="11" FontWeight="SemiBold"/>
+                                <Slider x:Name="FilteredOpacitySlider"
+                                        Minimum="0.05"
+                                        Maximum="1.00"
+                                        TickFrequency="0.05"
+                                        SmallChange="0.05"
+                                        LargeChange="0.10"
+                                        ValueChanged="FilteredOpacitySlider_ValueChanged"/>
+                                <TextBlock Text="{Binding ElementName=MainWin, Path=FilteredOpacityStatus}"
+                                           FontSize="11"
+                                           HorizontalAlignment="Right"/>
+                            </StackPanel>
+                            <StackPanel Width="150" Margin="8,0,0,0" VerticalAlignment="Center">
+                                <TextBlock Text="Opacita raw" FontSize="11" FontWeight="SemiBold"/>
+                                <Slider x:Name="RawOpacitySlider"
+                                        Minimum="0.05"
+                                        Maximum="1.00"
+                                        TickFrequency="0.05"
+                                        SmallChange="0.05"
+                                        LargeChange="0.10"
+                                        ValueChanged="RawOpacitySlider_ValueChanged"/>
+                                <TextBlock Text="{Binding ElementName=MainWin, Path=RawOpacityStatus}"
+                                           FontSize="11"
+                                           HorizontalAlignment="Right"/>
+                            </StackPanel>
+                        </Fluent:RibbonGroupBox>
+                        <Fluent:RibbonGroupBox Header="Serie">
+                            <Fluent:Button Header="Importa CSV confronto" Click="ImportCsv_Click"/>
+                            <Fluent:Button Header="Cancella serie importate" Click="ClearImported_Click"/>
+                        </Fluent:RibbonGroupBox>
+                    </Fluent:RibbonTabItem>
+
+                    <Fluent:RibbonTabItem Header="Segmenti">
+                        <Fluent:RibbonGroupBox Header="Disegno">
+                            <Fluent:ToggleButton x:Name="MenuDrawSegments"
+                                                 Header="Disegna segmenti"
+                                                 Size="Large"
+                                                 Click="ToggleDrawMode_Click"/>
+                            <Fluent:Button Header="Annulla nodo" Click="UndoLastNode_Click"/>
+                            <Fluent:Button Header="Cancella tutti" Click="ClearSegments_Click"/>
+                        </Fluent:RibbonGroupBox>
+                        <Fluent:RibbonGroupBox Header="File nodi">
+                            <Fluent:Button Header="Salva nodi..." Click="SaveNodes_Click"/>
+                            <Fluent:Button Header="Carica nodi..." Click="LoadNodes_Click"/>
+                            <Fluent:Button Header="Esporta segmenti CSV" Click="ExportSegmentsCsv_Click"/>
+                        </Fluent:RibbonGroupBox>
+                    </Fluent:RibbonTabItem>
+
+                </Fluent:Ribbon>
+            </Border>
+
+            <Border DockPanel.Dock="Bottom"
+                    Background="#F9FBFD"
+                    BorderBrush="{StaticResource CardBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="18"
+                    Margin="0,10,0,0">
+                <StatusBar Style="{StaticResource DashboardStatusBarStyle}">
+                    <StatusBarItem>
+                        <TextBlock Text="{Binding ElementName=MainWin, Path=UiStatus}" FontWeight="SemiBold" Foreground="{StaticResource AccentBrush}"/>
+                    </StatusBarItem>
+                    <Separator/>
+                    <StatusBarItem>
+                        <TextBlock Text="{Binding ElementName=MainWin, Path=AutoFitStatus}"/>
+                    </StatusBarItem>
+                    <Separator/>
+                    <StatusBarItem>
+                        <TextBlock Text="{Binding ElementName=MainWin, Path=ImportedSeriesStatus}"/>
+                    </StatusBarItem>
+                    <Separator/>
+                    <StatusBarItem>
+                        <TextBlock Text="{Binding ElementName=MainWin, Path=LastImportedFileStatus}"/>
+                    </StatusBarItem>
+                    <Separator/>
+                    <StatusBarItem>
+                        <TextBlock Text="{Binding ElementName=MainWin, Path=DrawModeStatus}" Foreground="#B42318" FontWeight="SemiBold"/>
+                    </StatusBarItem>
+                    <Separator/>
+                    <StatusBarItem>
+                        <TextBlock Text="{Binding ElementName=MainWin, Path=SegmentNodesStatus}"/>
+                    </StatusBarItem>
+                    <Separator/>
+                    <StatusBarItem HorizontalAlignment="Right">
+                        <TextBlock Text="{Binding ElementName=MainWin, Path=HoverCoordsStatus}" FontFamily="Consolas" Foreground="#0F6B51"/>
+                    </StatusBarItem>
+                </StatusBar>
+            </Border>
+
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="180"/>
+                </Grid.RowDefinitions>
+
+                <Border Grid.Row="0"
+                        Margin="0,0,0,10"
+                        Padding="24"
+                        Background="{StaticResource HeroBrush}"
+                        CornerRadius="26">
+                    <Border.Effect>
+                        <DropShadowEffect BlurRadius="28" ShadowDepth="0" Color="#26000000"/>
+                    </Border.Effect>
+
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <StackPanel Grid.Row="0">
+                            <TextBlock Text="Dashboard di misura"
+                                       FontSize="28"
+                                       FontWeight="SemiBold"
+                                       Foreground="White"/>
+                            <TextBlock Text="Controllo motore, profilo diametro e diagnostica in un'unica console operativa."
+                                       Margin="0,6,0,0"
+                                       FontSize="13"
+                                       Foreground="#D8E8F4"/>
                         </StackPanel>
-                        <StackPanel Margin="6,4"><TextBlock Text="Punti"       FontWeight="Bold" FontSize="10"/><TextBlock Text="{Binding PointsCount}"/></StackPanel>
-                        <StackPanel Margin="6,4"><TextBlock Text="Zero Display" FontWeight="Bold" FontSize="10"/><TextBlock Text="{Binding DisplayZeroText}"/></StackPanel>
-                        <StackPanel Margin="6,4"><TextBlock Text="Offset"      FontWeight="Bold" FontSize="10"/><TextBlock Text="{Binding OffsetText}"/></StackPanel>
-                    </UniformGrid>
+
+                        <WrapPanel Grid.Row="1" Margin="0,22,0,0">
+                            <Border Style="{StaticResource MetricCardStyle}" Background="#FDFEFE">
+                                <StackPanel>
+                                    <TextBlock Style="{StaticResource MetricLabelStyle}" Text="Connessione"/>
+                                    <TextBlock Style="{StaticResource MetricValueStyle}" Text="{Binding ConnectionStatus}"/>
+                                </StackPanel>
+                            </Border>
+                            <Border Style="{StaticResource MetricCardStyle}" Background="#FDFEFE">
+                                <StackPanel>
+                                    <TextBlock Style="{StaticResource MetricLabelStyle}" Text="Motore"/>
+                                    <TextBlock Style="{StaticResource MetricValueStyle}" Text="{Binding MotorState}"/>
+                                </StackPanel>
+                            </Border>
+                            <Border Style="{StaticResource MetricCardStyle}" Background="#FDFEFE">
+                                <StackPanel>
+                                    <TextBlock Style="{StaticResource MetricLabelStyle}" Text="Lunghezza"/>
+                                    <TextBlock Style="{StaticResource MetricValueStyle}" Text="{Binding CurrentLength}"/>
+                                </StackPanel>
+                            </Border>
+                            <Border Style="{StaticResource MetricCardStyle}" Background="#FDFEFE">
+                                <StackPanel>
+                                    <TextBlock Style="{StaticResource MetricLabelStyle}" Text="Diametro"/>
+                                    <TextBlock Style="{StaticResource MetricValueStyle}" Text="{Binding CurrentDiameter}"/>
+                                </StackPanel>
+                            </Border>
+                            <Border Style="{StaticResource MetricCardStyle}" Background="#FDFEFE">
+                                <StackPanel>
+                                    <TextBlock Style="{StaticResource MetricLabelStyle}" Text="Display"/>
+                                    <TextBlock Style="{StaticResource MetricValueStyle}" Text="{Binding CurrentDisplay}"/>
+                                </StackPanel>
+                            </Border>
+                            <Border Style="{StaticResource MetricCardStyle}" Background="#FDFEFE">
+                                <StackPanel>
+                                    <TextBlock Style="{StaticResource MetricLabelStyle}" Text="Velocita"/>
+                                    <TextBlock Style="{StaticResource MetricValueStyle}" Text="{Binding Speed}"/>
+                                    <TextBlock Margin="0,4,0,0" FontSize="11" Foreground="{StaticResource MutedBrush}" Text="{Binding SpeedStatus}"/>
+                                </StackPanel>
+                            </Border>
+                            <Border Style="{StaticResource MetricCardStyle}" Background="#FDFEFE">
+                                <StackPanel>
+                                    <TextBlock Style="{StaticResource MetricLabelStyle}" Text="Punti"/>
+                                    <TextBlock Style="{StaticResource MetricValueStyle}" Text="{Binding PointsCount}"/>
+                                </StackPanel>
+                            </Border>
+                            <Border Style="{StaticResource MetricCardStyle}" Background="#FDFEFE">
+                                <StackPanel>
+                                    <TextBlock Style="{StaticResource MetricLabelStyle}" Text="Zero display"/>
+                                    <TextBlock Style="{StaticResource MetricValueStyle}" Text="{Binding DisplayZeroText}"/>
+                                </StackPanel>
+                            </Border>
+                            <Border Style="{StaticResource MetricCardStyle}" Background="#FDFEFE">
+                                <StackPanel>
+                                    <TextBlock Style="{StaticResource MetricLabelStyle}" Text="Offset"/>
+                                    <TextBlock Style="{StaticResource MetricValueStyle}" Text="{Binding OffsetText}"/>
+                                </StackPanel>
+                            </Border>
+                        </WrapPanel>
+
+                        <Border Grid.Row="2"
+                                Margin="0,18,0,0"
+                                Padding="18,14"
+                                Background="#1B3352"
+                                CornerRadius="18"
+                                BorderBrush="#547091"
+                                BorderThickness="1">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <Border Width="10" Height="10" CornerRadius="5" Background="#63D3A4" VerticalAlignment="Center"/>
+                                <StackPanel Grid.Column="1" Margin="14,0,0,0">
+                                    <TextBlock Text="GOTOPOS" FontSize="11" Foreground="#99B7D0"/>
+                                    <TextBlock Text="{Binding GotoStatus}" FontSize="16" FontWeight="SemiBold" Foreground="White" TextWrapping="Wrap"/>
+                                </StackPanel>
+                                <TextBlock Grid.Column="2" Text="{Binding LastUpdate}" Foreground="#BFD3E3" VerticalAlignment="Center"/>
+                            </Grid>
+                        </Border>
+                    </Grid>
+                </Border>
+
+                <GroupBox Grid.Row="1" Style="{StaticResource CardGroupBoxStyle}">
+                    <GroupBox.Header>
+                        <StackPanel>
+                            <TextBlock Text="Grafico profilo"/>
+                            <TextBlock Text="Serie live, smoothing regolabile e confronto CSV"
+                                       FontSize="11"
+                                       Foreground="#5B7188"/>
+                        </StackPanel>
+                    </GroupBox.Header>
+                    <Border Background="#F7FAFD"
+                            BorderBrush="#D9E5EF"
+                            BorderThickness="1"
+                            CornerRadius="18"
+                            Padding="8">
+                        <ScottPlot:WpfPlot x:Name="PlotControl" Margin="2"/>
+                    </Border>
                 </GroupBox>
 
-                <GroupBox Header="GOTOPOS" Grid.Column="1">
-                    <StackPanel Margin="6">
-                        <TextBlock Text="{Binding GotoStatus}" FontSize="13" FontWeight="SemiBold" TextWrapping="Wrap"/>
-                        <TextBlock Text="{Binding LastUpdate}" FontSize="10" Foreground="Gray" Margin="0,4,0,0"/>
-                    </StackPanel>
+                <GroupBox Grid.Row="2" Style="{StaticResource CardGroupBoxStyle}">
+                    <GroupBox.Header>
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="Log diagnostico" VerticalAlignment="Center"/>
+                            <CheckBox x:Name="ChkAutoScroll"
+                                      Content="Auto-scroll"
+                                      IsChecked="True"
+                                      Margin="16,0,0,0"
+                                      VerticalAlignment="Center"/>
+                            <Button Content="Pulisci"
+                                    Margin="10,0,0,0"
+                                    Padding="8,2"
+                                    FontSize="11"
+                                    Click="ClearLog_Click"/>
+                        </StackPanel>
+                    </GroupBox.Header>
+                    <Border Background="{StaticResource LogBackgroundBrush}"
+                            BorderBrush="{StaticResource LogBorderBrush}"
+                            BorderThickness="1"
+                            CornerRadius="18"
+                            Padding="10">
+                        <TextBox x:Name="TxtLog"
+                                 Text="{Binding LogText}"
+                                 IsReadOnly="True"
+                                 AcceptsReturn="True"
+                                 VerticalScrollBarVisibility="Auto"
+                                 HorizontalScrollBarVisibility="Auto"
+                                 TextChanged="TxtLog_TextChanged"
+                                 Background="Transparent"
+                                 BorderThickness="0"
+                                 Foreground="#DCE6F3"
+                                 FontFamily="Consolas"
+                                 SelectionBrush="#3E6F99"/>
+                    </Border>
                 </GroupBox>
             </Grid>
-
-            <!-- Row 1: Chart -->
-            <GroupBox Header="Grafico" Grid.Row="1" Margin="0,0,0,6">
-                <ScottPlot:WpfPlot x:Name="PlotControl" Margin="4"/>
-            </GroupBox>
-
-            <!-- Row 2: Log -->
-            <GroupBox Grid.Row="2">
-                <GroupBox.Header>
-                    <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="Log diagnostico" VerticalAlignment="Center"/>
-                        <CheckBox x:Name="ChkAutoScroll" Content="Auto-scroll" IsChecked="True"
-                                  Margin="12,0,0,0" VerticalAlignment="Center"/>
-                        <Button Content="Pulisci" Margin="8,0,0,0" Padding="6,1" FontSize="11" Click="ClearLog_Click"/>
-                    </StackPanel>
-                </GroupBox.Header>
-                <TextBox x:Name="TxtLog"
-                         Text="{Binding LogText}"
-                         IsReadOnly="True"
-                         AcceptsReturn="True"
-                         VerticalScrollBarVisibility="Auto"
-                         HorizontalScrollBarVisibility="Auto"
-                         TextChanged="TxtLog_TextChanged"/>
-            </GroupBox>
-        </Grid>
-
-    </DockPanel>
+        </DockPanel>
+    </Grid>
 </Fluent:RibbonWindow>

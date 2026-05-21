@@ -25,6 +25,8 @@ public class ChartSettings
     public string XAxisUnit { get; set; } = "cm";
     public double SmoothingAlpha { get; set; } = 0.10;
     public int LineWidth { get; set; } = 2;
+    public double FilteredOpacity { get; set; } = 1.0;
+    public double RawOpacity { get; set; } = 0.65;
 }
 public class MeasurementPoint
 {

@@ -24,7 +24,7 @@ HardwareSerial SerialMaster(2);
 
 // -----------------------------
 // Motor parameters
-const uint32_t SCAN_HZ = 1500;
+const uint32_t SCAN_HZ = 1500;  // Initial estimate for 2.0 cm/s; closed-loop from master fine-tunes this
 const uint32_t FAST_HZ = 12000;
 const uint32_t ACCEL = 1500;
 const uint32_t FAST_STOP_DECEL = 24000;  // ~1m stop distance from FAST_HZ (vs 16m at ACCEL)
@@ -318,6 +318,19 @@ void processCommand(const char* command) {
     return;
   }
   
+  // SETHZ:<hz> — dynamic scan speed adjustment sent by master closed-loop controller.
+  // Only applied during SCAN; ignored in other modes.
+  if (strncmp(command, "SETHZ:", 6) == 0) {
+    uint32_t newHz = (uint32_t)atol(command + 6);
+    if (mode == SCAN && newHz >= 200 && newHz <= 3000) {
+      stepper->setSpeedInHz(newHz);
+      currentDynamicSpeed = newHz;
+      Serial.print("SETHZ: ");
+      Serial.println(newHz);
+    }
+    return;
+  }
+
   // Comando non riconosciuto
   Serial.print("Comando sconosciuto: ");
   Serial.println(command);
