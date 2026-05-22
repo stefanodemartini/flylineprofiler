@@ -9,9 +9,9 @@
 // ===============================
 // FW
 // ===============================
-#define FIRMWARE_VERSION "0.4.2"
+#define FIRMWARE_VERSION "0.4.3"
 #define FIRMWARE_DATE "2026-05-22"
-#define FIRMWARE_FEATURES "WiFi Manager + EMA + 0.01mm + UART Motor + Scan timer + Autostop + RicezioneON/OFF + GOTOPOS + Caliper timeout + Atomic encoder + Watchdog fixes + Scan state sync on connect"
+#define FIRMWARE_FEATURES "WiFi Manager + EMA + 0.01mm + UART Motor + Scan timer + Autostop + RicezioneON/OFF + GOTOPOS + Caliper timeout + Atomic encoder + Watchdog fixes + Scan state sync on connect + GOTOPOS chart overlay"
 
 // -----------------------------
 #define ENCODER_DATA_PIN 12
@@ -741,6 +741,7 @@ void setup() {
     let scanStartMs = 0;
     let scanInterval = null;
     let scanReceiving = false;
+    let gotoPosX = null;  // current GOTOPOS position in cm — drives vertical line overlay on chart
 
     // Rauch-Tung-Striebel (RTS) Kalman smoother:
     //   forward Kalman pass + backward smoothing pass → zero phase lag, optimal for Gaussian noise.
@@ -844,6 +845,36 @@ void setup() {
 
     const OPTIMAL_SPEED_MIN = 1.5;
     const OPTIMAL_SPEED_MAX = 2.5;
+
+    // Custom plugin: draws a vertical red line at gotoPosX (cm) during GOTOPOS.
+    // Registered globally so it applies to the chart without any CDN dependency.
+    const gotoposLinePlugin = {
+        id: 'gotoposLine',
+        afterDraw(chart) {
+            if (gotoPosX === null) return;
+            const xScale = chart.scales.x;
+            const yScale = chart.scales.y;
+            const xPixel = xScale.getPixelForValue(gotoPosX);
+            if (xPixel < xScale.left || xPixel > xScale.right) return;
+            const ctx = chart.ctx;
+            ctx.save();
+            ctx.beginPath();
+            ctx.moveTo(xPixel, yScale.top);
+            ctx.lineTo(xPixel, yScale.bottom);
+            ctx.strokeStyle = 'rgba(255, 60, 60, 0.85)';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([6, 3]);
+            ctx.stroke();
+            // Label
+            ctx.setLineDash([]);
+            ctx.fillStyle = 'rgba(255, 60, 60, 0.85)';
+            ctx.font = 'bold 11px sans-serif';
+            ctx.textAlign = xPixel > xScale.right - 60 ? 'right' : 'left';
+            ctx.fillText(gotoPosX.toFixed(1) + ' cm', xPixel + (ctx.textAlign === 'left' ? 4 : -4), yScale.top + 14);
+            ctx.restore();
+        }
+    };
+    Chart.register(gotoposLinePlugin);
 
     function initializeChart() {
         const ctx = document.getElementById('lineChart').getContext('2d');
@@ -1159,13 +1190,19 @@ void setup() {
                         const progressSpan = document.getElementById('gotoProgress');
                         progressSpan.style.display = 'none';
                         progressSpan.textContent = '';
+                        gotoPosX = null;
+                        chart.update('none');
                     } else if (!msg.active && !msg.completed) {
                         showCommandStatus('Movimento interrotto', true);
+                        gotoPosX = null;
+                        chart.update('none');
                     }
                 } else if (msg.type === 'goto_progress') {
                     const progressSpan = document.getElementById('gotoProgress');
                     progressSpan.style.display = 'inline-block';
                     progressSpan.textContent = `📍 GOTOPOS: ${msg.remaining_cm.toFixed(1)} cm rimanenti (${msg.current_cm.toFixed(1)}/${msg.target_cm.toFixed(1)} cm)`;
+                    gotoPosX = msg.current_cm;
+                    chart.update('none');
                 } else if (msg.type === 'scan_enabled') {
                     scanReceiving = msg.value;
                     const btn = document.getElementById('btnScanEnable');
