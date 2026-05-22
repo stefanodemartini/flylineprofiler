@@ -3,9 +3,9 @@
 // ===============================
 // FW SLAVE - Controllo Motore Passo-Passo
 // ===============================
-#define FIRMWARE_VERSION "0.4.5"
+#define FIRMWARE_VERSION "0.4.6"
 #define FIRMWARE_DATE "2026-05-22"
-#define FIRMWARE_FEATURES "UART Control + GOTOPOS two-phase hard-brake into slow zone + forceStop"
+#define FIRMWARE_FEATURES "UART Control + GOTOPOS two-phase slow zone + forceStop on STOP command"
 
 // -----------------------------
 // Pin definitions
@@ -137,17 +137,25 @@ void startMotion(bool forward, uint32_t speedHz, Mode newMode) {
 
 void stopMotion() {
   if (stepper) {
-    // Use higher deceleration when stopping from FAST modes to avoid 16m+ coast
     if (mode == FAST_S || mode == FAST_O) {
       stepper->setAcceleration(FAST_STOP_DECEL);
+      stepper->stopMove();
+    } else if (mode == GOTOPOS) {
+      // forceStop() cuts power immediately — no deceleration ramp.
+      // CRITICAL: stopMove() followed by setAcceleration(ACCEL) would override any
+      // FAST_STOP_DECEL set during the slow-zone transition, reverting to 1500 Hz/s
+      // and causing 64 cm of coast. forceStop() avoids this entirely.
+      // Step loss is acceptable: encoder (not step counter) is the position reference.
+      stepper->forceStop();
+    } else {
+      stepper->stopMove();
     }
-    stepper->stopMove();
-    stepper->setAcceleration(ACCEL);  // restore normal accel for next move
+    stepper->setAcceleration(ACCEL);  // safe: motor is stopped (forceStop) or decelerating (stopMove)
   }
   mode = STOPPED;
   posActive = false;
   currentDynamicSpeed = 0;
-  encoderPosReceived = false;  // clear encoder state for next GOTOPOS
+  encoderPosReceived = false;
   Serial.println("Motore STOP");
 }
 
