@@ -300,13 +300,16 @@ void processCommand(const char* command) {
     posActive = true;
     currentDynamicSpeed = GOTOPOS_MAX_HZ;
 
-    // Use move() with a finite step count so FastAccelStepper plans a full
-    // trapezoidal profile (accelerate → cruise → decelerate) automatically.
-    // We use 120% of estimated steps so the motor is GUARANTEED to still be
-    // moving (in its decel phase) when the encoder target is hit.
-    // forceStop() via checkPositionReached() gives the precise stop before
-    // the move() command would naturally finish.
-    int32_t steps = (int32_t)((float)initialDist * (float)STEPS_PER_ENC * 1.20f);
+    // Physics-based step calculation:
+    // Decel distance (steps) = v² / (2 * a) = GOTOPOS_MAX_HZ² / (2 * GOTOPOS_ACCEL)
+    // = 8400² / (2 * 6000) ≈ 5880 steps ≈ 7.8 cm
+    // We aim to hit the encoder target halfway through the decel zone.
+    // So the move() endpoint = encoder_target + decelSteps/2 steps past it.
+    // This guarantees the motor is already decelerating before the encoder fires forceStop().
+    int32_t baseSteps  = initialDist * (int32_t)STEPS_PER_ENC;
+    int32_t decelSteps = (int32_t)((float)GOTOPOS_MAX_HZ * (float)GOTOPOS_MAX_HZ
+                                   / (2.0f * (float)GOTOPOS_ACCEL));
+    int32_t steps = baseSteps + decelSteps / 2;
     stepper->setSpeedInHz(GOTOPOS_MAX_HZ);
     stepper->setAcceleration(GOTOPOS_ACCEL);
     stepper->move(fwd ? steps : -steps);
