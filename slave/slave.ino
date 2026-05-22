@@ -3,9 +3,9 @@
 // ===============================
 // FW SLAVE - Controllo Motore Passo-Passo
 // ===============================
-#define FIRMWARE_VERSION "0.4.6"
+#define FIRMWARE_VERSION "0.4.7"
 #define FIRMWARE_DATE "2026-05-22"
-#define FIRMWARE_FEATURES "UART Control + GOTOPOS two-phase slow zone + forceStop on STOP command"
+#define FIRMWARE_FEATURES "UART Control + GOTOPOS linear speed ramp + forceStop at target"
 
 // -----------------------------
 // Pin definitions
@@ -24,14 +24,15 @@ HardwareSerial SerialMaster(2);
 
 // -----------------------------
 // Motor parameters
-const uint32_t SCAN_HZ = 1500;  // Initial estimate for 2.0 cm/s; closed-loop from master fine-tunes this
+const uint32_t SCAN_HZ = 1500;       // Initial estimate for 2.0 cm/s; closed-loop from master fine-tunes this
 const uint32_t FAST_HZ = 12000;
-const uint32_t ACCEL = 1500;
-const uint32_t FAST_STOP_DECEL = 24000;  // ~1m stop distance from FAST_HZ (vs 16m at ACCEL)
-const uint32_t MIN_SPEED_HZ = 300;       // Slow-approach speed for GOTOPOS final phase (~0.5 cm/s)
-const uint32_t SLOW_ZONE_ENC = 200;      // Enter slow phase this many enc before target (~6.7 cm)
-// At FAST_STOP_DECEL=24000 Hz/s, braking from FAST_HZ to MIN_SPEED_HZ takes ~120 enc (4 cm).
-// SLOW_ZONE_ENC=200 gives 80 enc of genuine crawl before forceStop() fires at 5 enc.
+const uint32_t ACCEL = 1500;         // Acceleration for SCAN and normal moves
+const uint32_t GOTOPOS_ACCEL = 6000; // Higher accel so motor can track the speed ramp in GOTOPOS
+const uint32_t FAST_STOP_DECEL = 24000;
+const uint32_t MIN_SPEED_HZ = 300;   // Floor speed at the very end of GOTOPOS approach (~0.5 cm/s)
+const uint32_t SLOW_ZONE_ENC = 1000; // Start linear speed ramp this many enc before target (~33 cm)
+// Linear ramp: v = MIN_SPEED_HZ + (FAST_HZ - MIN_SPEED_HZ) * (dist / SLOW_ZONE_ENC)
+// With GOTOPOS_ACCEL=6000 Hz/s the motor can follow this ramp; ACCEL=1500 is too slow.
 
 // -----------------------------
 // Conversion constants (deve corrispondere al master)
@@ -165,14 +166,12 @@ int32_t getDistanceToGo() {
 }
 
 uint32_t calculateDynamicSpeed(int32_t distanceToGo) {
-  // Two-phase approach:
-  // - Far from target (> SLOW_ZONE_ENC): run at FAST_HZ
-  // - Near target (≤ SLOW_ZONE_ENC): crawl at MIN_SPEED_HZ
-  // At MIN_SPEED_HZ the motor is stopped instantly via forceStop() at the target.
-  if ((uint32_t)abs(distanceToGo) <= SLOW_ZONE_ENC) {
-    return MIN_SPEED_HZ;
-  }
-  return FAST_HZ;
+  uint32_t dist = (uint32_t)abs(distanceToGo);
+  if (dist >= SLOW_ZONE_ENC) return FAST_HZ;
+  // Linear ramp: full speed at zone edge, MIN_SPEED_HZ at target
+  float ratio = (float)dist / (float)SLOW_ZONE_ENC;
+  float v = (float)MIN_SPEED_HZ + (float)(FAST_HZ - MIN_SPEED_HZ) * ratio;
+  return (uint32_t)constrain(v, (float)MIN_SPEED_HZ, (float)FAST_HZ);
 }
 
 void updateDynamicSpeed() {
@@ -185,11 +184,11 @@ void updateDynamicSpeed() {
   // Do NOT call runForward()/runBackward() here: re-issuing those resets FastAccelStepper's
   // motion trajectory on every POS update, causing the motor to stutter or not move at all.
   if (newSpeed != currentDynamicSpeed && distanceToGo > 0) {
-    // When entering the slow zone: use FAST_STOP_DECEL to brake hard from FAST_HZ to MIN_SPEED_HZ.
-    // Without this, ACCEL=1500 Hz/s would take ~62 cm to reach MIN_SPEED_HZ (way past target).
-    // At FAST_STOP_DECEL=24000 Hz/s the motor reaches MIN_SPEED_HZ in ~4 cm — well within SLOW_ZONE.
-    if (newSpeed == MIN_SPEED_HZ && currentDynamicSpeed == FAST_HZ) {
-      stepper->setAcceleration(FAST_STOP_DECEL);
+    // When entering the slow zone for the first time, switch to GOTOPOS_ACCEL
+    // so the motor can track the linear speed ramp. ACCEL=1500 is too slow
+    // and the motor would still be at FAST_HZ when forceStop() fires.
+    if (currentDynamicSpeed == FAST_HZ && newSpeed < FAST_HZ) {
+      stepper->setAcceleration(GOTOPOS_ACCEL);
     }
     currentDynamicSpeed = newSpeed;
     stepper->setSpeedInHz(currentDynamicSpeed);
@@ -341,7 +340,7 @@ void processCommand(const char* command) {
     // If encoder pos not known yet, POS updates will set the right speed.
     currentDynamicSpeed = encoderPosReceived ? calculateDynamicSpeed(initialDist) : FAST_HZ;
     stepper->setSpeedInHz(currentDynamicSpeed);
-    stepper->setAcceleration(ACCEL);
+    stepper->setAcceleration(GOTOPOS_ACCEL);  // higher accel to track the linear speed ramp
     if (fwd) stepper->runForward(); else stepper->runBackward();
     
     sendStatus();
