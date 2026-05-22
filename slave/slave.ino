@@ -302,10 +302,11 @@ void processCommand(const char* command) {
 
     // Use move() with a finite step count so FastAccelStepper plans a full
     // trapezoidal profile (accelerate → cruise → decelerate) automatically.
-    // We use 85% of estimated steps so the motor is already decelerating well
-    // before the encoder target. forceStop() via checkPositionReached() gives
-    // the precise stop; we don't need the step count to be exact.
-    int32_t steps = (int32_t)((float)initialDist * (float)STEPS_PER_ENC * 0.85f);
+    // We use 120% of estimated steps so the motor is GUARANTEED to still be
+    // moving (in its decel phase) when the encoder target is hit.
+    // forceStop() via checkPositionReached() gives the precise stop before
+    // the move() command would naturally finish.
+    int32_t steps = (int32_t)((float)initialDist * (float)STEPS_PER_ENC * 1.20f);
     stepper->setSpeedInHz(GOTOPOS_MAX_HZ);
     stepper->setAcceleration(GOTOPOS_ACCEL);
     stepper->move(fwd ? steps : -steps);
