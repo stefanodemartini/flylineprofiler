@@ -194,7 +194,7 @@ void updateDynamicSpeed() {
   // currentDynamicSpeed is the commanded speed; enc/s = Hz / STEPS_PER_ENC.
   unsigned long elapsed = now - gotoSyncMs;
   int32_t traveled = (int32_t)((uint32_t)(currentDynamicSpeed / STEPS_PER_ENC) * elapsed / 1000UL);
-  int32_t distEnc = max(0, gotoDistAtSync - traveled);
+  int32_t distEnc = max((int32_t)0, gotoDistAtSync - traveled);
 
   uint32_t newSpeed = calculateDynamicSpeed(distEnc);
 
@@ -331,9 +331,6 @@ void processCommand(const char* command) {
     }
     
     int32_t initialDist = getDistanceToGo();
-    // Record step counter start for real-time ramp (independent of 100ms POS updates)
-    startStepPos = stepper->getCurrentPosition();
-    initialDistSteps = initialDist * (int32_t)STEPS_PER_ENC;
 
     Serial.print("GOTOPOS: target=");
     Serial.print(targetCm);
