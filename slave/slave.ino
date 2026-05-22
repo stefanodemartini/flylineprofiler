@@ -173,26 +173,6 @@ void checkPositionReached() {
 
   if (overshot || distanceToGo <= 5) {
     if (overshot) Serial.println("⚠ Overshoot rilevato — stop forzato");
-    stepper->forceStop();
-    stepper->setAcceleration(ACCEL);
-    mode = STOPPED;
-    posActive = false;
-    currentDynamicSpeed = 0;
-    encoderPosReceived = false;
-    sendStatus();
-    Serial.println("✓ Target raggiunto!");
-  }
-}
-
-void checkPositionReached() {
-  if (mode != GOTOPOS || !posActive || !encoderPosReceived) return;
-
-  int32_t signedDist = targetPos - encoderFedPos;
-  bool overshot = fwd ? (signedDist < 0) : (signedDist > 0);
-  int32_t distanceToGo = abs(signedDist);
-
-  if (overshot || distanceToGo <= 5) {
-    if (overshot) Serial.println("⚠ Overshoot rilevato — stop forzato");
     // forceStop() cuts power immediately — no deceleration ramp.
     // Safe here because we are already at MIN_SPEED_HZ (300 Hz ≈ 0.5 cm/s).
     stepper->forceStop();
