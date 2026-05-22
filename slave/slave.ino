@@ -3,9 +3,9 @@
 // ===============================
 // FW SLAVE - Controllo Motore Passo-Passo
 // ===============================
-#define FIRMWARE_VERSION "0.4.0"
-#define FIRMWARE_DATE "2026-04-17"
-#define FIRMWARE_FEATURES "UART Control + GOTOPOS + Dynamic Speed + Buttons + Position fix + Completion signal"
+#define FIRMWARE_VERSION "0.4.2"
+#define FIRMWARE_DATE "2026-05-22"
+#define FIRMWARE_FEATURES "UART Control + GOTOPOS encoder-only + Smooth decel approach + Overshoot detection"
 
 // -----------------------------
 // Pin definitions
@@ -28,8 +28,8 @@ const uint32_t SCAN_HZ = 1500;  // Initial estimate for 2.0 cm/s; closed-loop fr
 const uint32_t FAST_HZ = 12000;
 const uint32_t ACCEL = 1500;
 const uint32_t FAST_STOP_DECEL = 24000;  // ~1m stop distance from FAST_HZ (vs 16m at ACCEL)
-const uint32_t MIN_SPEED_HZ = 300;      // Velocità minima in prossimità del target
-const uint32_t DISTANCE_THRESHOLD = 500; // Passi a cui iniziare a ridurre velocità
+const uint32_t MIN_SPEED_HZ = 300;       // Minimum speed near target — at this speed stopping distance ≈ 1 encoder pulse
+const uint32_t DISTANCE_THRESHOLD = 2500; // Encoder pulses at which gradual deceleration begins (~83 cm)
 
 // -----------------------------
 // Conversion constants (deve corrispondere al master)
@@ -177,13 +177,12 @@ void updateDynamicSpeed() {
   int32_t distanceToGo = getDistanceToGo();
   uint32_t newSpeed = calculateDynamicSpeed(distanceToGo);
   
-  // Cambia velocità solo se necessario (evita aggiornamenti continui)
+  // Only update speed if it changed — setSpeedInHz() is enough while already running.
+  // Do NOT call runForward()/runBackward() here: re-issuing those resets FastAccelStepper's
+  // motion trajectory on every POS update, causing the motor to stutter or not move at all.
   if (newSpeed != currentDynamicSpeed && distanceToGo > 0) {
     currentDynamicSpeed = newSpeed;
     stepper->setSpeedInHz(currentDynamicSpeed);
-    // FW-02: re-issue moveTo with updated speed instead of runForward/runBackward
-    // which would cancel the position target and cause unbounded overshoot.
-    stepper->moveTo(targetPos);
     
     Serial.print("Velocità aggiornata: ");
     Serial.print(currentDynamicSpeed);
@@ -194,17 +193,21 @@ void updateDynamicSpeed() {
 
 void checkPositionReached() {
   if (mode != GOTOPOS || !posActive || !encoderPosReceived) return;
-  
-  int32_t distanceToGo = getDistanceToGo();
-  
-  // 5 encoder pulses ≈ 0.17 cm — stop margin
-  if (distanceToGo <= 5) {
-    // FW-03: set targetPos = encoderFedPos so sendStatus() reports remaining = 0,
-    // then send BEFORE stopMotion() changes mode to STOPPED.
+
+  // Use signed distance to detect overshoot: positive = still approaching, negative = passed target
+  int32_t signedDist = targetPos - encoderFedPos;
+  // If moving forward, overshoot means encoderFedPos > targetPos (signedDist < 0)
+  // If moving backward, overshoot means encoderFedPos < targetPos (signedDist > 0)
+  bool overshot = fwd ? (signedDist < 0) : (signedDist > 0);
+
+  int32_t distanceToGo = abs(signedDist);
+
+  if (overshot || (currentDynamicSpeed <= MIN_SPEED_HZ && distanceToGo <= 5)) {
+    if (overshot) Serial.println("⚠ Overshoot rilevato — stop forzato");
     targetPos = encoderFedPos;
     sendStatus();  // sends STATUS:GOTOPOS:DIR:0
     stopMotion();
-    Serial.println("✓ Target raggiunto (encoder)!");
+    Serial.println("✓ Target raggiunto!");
   }
 }
 
@@ -302,7 +305,9 @@ void processCommand(const char* command) {
     Serial.print(" passi), direzione=");
     Serial.println(fwd ? "AVANTI" : "INDIETRO");
     
-    // Avvia movimento verso target
+    // Avvia movimento verso target — encoder is the sole position reference.
+    // Motor just runs in the correct direction; checkPositionReached() stops it
+    // via encoder distance, independent of the stepper's internal step counter.
     mode = GOTOPOS;
     posActive = true;
     encoderPosReceived = false;  // wait for first POS update before speed control
@@ -310,9 +315,7 @@ void processCommand(const char* command) {
     currentDynamicSpeed = FAST_HZ;
     stepper->setSpeedInHz(currentDynamicSpeed);
     stepper->setAcceleration(ACCEL);
-    
-    // FW-06: moveTo() handles direction internally.
-    stepper->moveTo(targetPos);
+    if (fwd) stepper->runForward(); else stepper->runBackward();
     
     sendStatus();
     return;
