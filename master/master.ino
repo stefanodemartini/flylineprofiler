@@ -9,8 +9,8 @@
 // ===============================
 // FW
 // ===============================
-#define FIRMWARE_VERSION "0.4.1"
-#define FIRMWARE_DATE "2026-05-21"
+#define FIRMWARE_VERSION "0.4.2"
+#define FIRMWARE_DATE "2026-05-22"
 #define FIRMWARE_FEATURES "WiFi Manager + EMA + 0.01mm + UART Motor + Scan timer + Autostop + RicezioneON/OFF + GOTOPOS + Caliper timeout + Atomic encoder + Watchdog fixes + Scan state sync on connect"
 
 // -----------------------------
@@ -382,9 +382,10 @@ void goToPosition(float targetCm) {
   bool direction = (targetCm > currentCm);
   
   // Send GOTOPOS to slave. Target is (targetCm + 2) to account for the 20mm
-  // offset between encoder wheel and caliper. Slave will use encoder-fed POS
-  // updates for position tracking — no step-counter sync needed.
-  String cmd = "GOTOPOS:" + String(targetCm + 2.0f, 2) + ":" + String(MOTOR_FAST_HZ) + ":" + (direction ? "F" : "B");
+  // offset between encoder wheel and caliper. Include current encoder value so
+  // slave knows the exact distance from step 0 and can start at the correct speed.
+  noInterrupts(); long encNow = encoderValue; interrupts();
+  String cmd = "GOTOPOS:" + String(targetCm + 2.0f, 2) + ":" + String(MOTOR_FAST_HZ) + ":" + String(encNow) + ":" + (direction ? "F" : "B");
   motorQueueTx(cmd);
   
   goToTargetCm = targetCm;
