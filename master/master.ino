@@ -9,9 +9,9 @@
 // ===============================
 // FW
 // ===============================
-#define FIRMWARE_VERSION "0.4.3"
+#define FIRMWARE_VERSION "0.4.4"
 #define FIRMWARE_DATE "2026-05-22"
-#define FIRMWARE_FEATURES "WiFi Manager + EMA + 0.01mm + UART Motor + Scan timer + Autostop + RicezioneON/OFF + GOTOPOS + Caliper timeout + Atomic encoder + Watchdog fixes + Scan state sync on connect + GOTOPOS chart overlay"
+#define FIRMWARE_FEATURES "WiFi Manager + EMA + 0.01mm + UART Motor + Scan timer + Autostop + RicezioneON/OFF + GOTOPOS + Caliper timeout + Atomic encoder + Watchdog fixes + Scan state sync on connect + GOTOPOS chart overlay + encoder init fix"
 
 // -----------------------------
 #define ENCODER_DATA_PIN 12
@@ -81,7 +81,7 @@ DataPoint* firstDataPoint = nullptr;
 DataPoint* lastDataPoint = nullptr;
 int totalDataPoints = 0;
 
-volatile long encoderValue = 0;
+volatile long encoderValue = 2 * PULSES_PER_CM;  // init to 60 so display starts at 0 cm (encoder wheel is 20mm behind caliper)
 volatile int lastEncoded = 0;
 
 // Caliper ISR state — written only in onCaliperChange(), read under noInterrupts()
@@ -288,7 +288,8 @@ void motorHandleStatusLine(const char* line) {
         // FW-13: broadcast restored scan state so clients stay in sync
         String scanJson = "{\"type\":\"scan_enabled\",\"value\":" + String(scanEnabled ? "true" : "false") + "}";
         webSocket.broadcastTXT(scanJson);
-        String json = "{\"type\":\"goto_status\",\"active\":false,\"completed\":true}";
+        float finalCm = (float)encoderValue / PULSES_PER_CM - 2.0f;
+        String json = "{\"type\":\"goto_status\",\"active\":false,\"completed\":true,\"final_cm\":" + String(finalCm, 1) + "}";
         webSocket.broadcastTXT(json);
       } else {
         // Invia stato di avanzamento al client
@@ -308,8 +309,9 @@ void motorHandleStatusLine(const char* line) {
       String scanJson = "{\"type\":\"scan_enabled\",\"value\":" + String(scanEnabled ? "true" : "false") + "}";
       webSocket.broadcastTXT(scanJson);
       // Use goToEncoderReached so encoder-based stops report completed:true
+      float finalCm = (float)encoderValue / PULSES_PER_CM - 2.0f;
       String json = "{\"type\":\"goto_status\",\"active\":false,\"completed\":" +
-                    String(goToEncoderReached ? "true" : "false") + ",\"reason\":\"stopped\"}";
+                    String(goToEncoderReached ? "true" : "false") + ",\"final_cm\":" + String(finalCm, 1) + ",\"reason\":\"stopped\"}";
       webSocket.broadcastTXT(json);
       goToEncoderReached = false;
     }
@@ -1190,7 +1192,8 @@ void setup() {
                         const progressSpan = document.getElementById('gotoProgress');
                         progressSpan.style.display = 'none';
                         progressSpan.textContent = '';
-                        // Line stays visible at reached position — cleared only on next GOTOPOS or page reload
+                        // Snap line to actual final encoder position (more accurate than last goto_progress)
+                        if (msg.final_cm !== undefined) { gotoPosX = msg.final_cm; chart.update('none'); }
                     } else if (!msg.active && !msg.completed) {
                         showCommandStatus('Movimento interrotto', true);
                         gotoPosX = null;
