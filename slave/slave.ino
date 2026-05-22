@@ -3,9 +3,9 @@
 // ===============================
 // FW SLAVE - Controllo Motore Passo-Passo
 // ===============================
-#define FIRMWARE_VERSION "0.4.4"
+#define FIRMWARE_VERSION "0.4.5"
 #define FIRMWARE_DATE "2026-05-22"
-#define FIRMWARE_FEATURES "UART Control + GOTOPOS two-phase (fast→slow→forceStop) + encoder-only position"
+#define FIRMWARE_FEATURES "UART Control + GOTOPOS two-phase hard-brake into slow zone + forceStop"
 
 // -----------------------------
 // Pin definitions
@@ -29,7 +29,9 @@ const uint32_t FAST_HZ = 12000;
 const uint32_t ACCEL = 1500;
 const uint32_t FAST_STOP_DECEL = 24000;  // ~1m stop distance from FAST_HZ (vs 16m at ACCEL)
 const uint32_t MIN_SPEED_HZ = 300;       // Slow-approach speed for GOTOPOS final phase (~0.5 cm/s)
-const uint32_t SLOW_ZONE_ENC = 500;      // Switch to slow phase when this many encoder pulses remain (~16 cm)
+const uint32_t SLOW_ZONE_ENC = 200;      // Enter slow phase this many enc before target (~6.7 cm)
+// At FAST_STOP_DECEL=24000 Hz/s, braking from FAST_HZ to MIN_SPEED_HZ takes ~120 enc (4 cm).
+// SLOW_ZONE_ENC=200 gives 80 enc of genuine crawl before forceStop() fires at 5 enc.
 
 // -----------------------------
 // Conversion constants (deve corrispondere al master)
@@ -175,6 +177,12 @@ void updateDynamicSpeed() {
   // Do NOT call runForward()/runBackward() here: re-issuing those resets FastAccelStepper's
   // motion trajectory on every POS update, causing the motor to stutter or not move at all.
   if (newSpeed != currentDynamicSpeed && distanceToGo > 0) {
+    // When entering the slow zone: use FAST_STOP_DECEL to brake hard from FAST_HZ to MIN_SPEED_HZ.
+    // Without this, ACCEL=1500 Hz/s would take ~62 cm to reach MIN_SPEED_HZ (way past target).
+    // At FAST_STOP_DECEL=24000 Hz/s the motor reaches MIN_SPEED_HZ in ~4 cm — well within SLOW_ZONE.
+    if (newSpeed == MIN_SPEED_HZ && currentDynamicSpeed == FAST_HZ) {
+      stepper->setAcceleration(FAST_STOP_DECEL);
+    }
     currentDynamicSpeed = newSpeed;
     stepper->setSpeedInHz(currentDynamicSpeed);
     
@@ -197,7 +205,7 @@ void checkPositionReached() {
     // forceStop() cuts power immediately — no deceleration ramp.
     // Safe here because we are already at MIN_SPEED_HZ (300 Hz ≈ 0.5 cm/s).
     stepper->forceStop();
-    stepper->setAcceleration(ACCEL);  // restore for next move
+    stepper->setAcceleration(ACCEL);  // restore normal accel (FAST_STOP_DECEL was set during slow-zone transition)
     mode = STOPPED;
     posActive = false;
     currentDynamicSpeed = 0;
