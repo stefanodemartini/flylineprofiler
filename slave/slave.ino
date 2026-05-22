@@ -28,7 +28,7 @@ const uint32_t SCAN_HZ = 1500;       // Initial estimate for 2.0 cm/s; closed-lo
 const uint32_t FAST_HZ = 12000;
 const uint32_t GOTOPOS_MAX_HZ = (uint32_t)(FAST_HZ * 0.70f);  // 8400 Hz — 30% slower than FAST
 const uint32_t ACCEL = 1500;
-const uint32_t GOTOPOS_ACCEL = 1500; // Accel/decel for GOTOPOS — low value = long gradual decel (~31 cm from 8400 Hz)
+const uint32_t GOTOPOS_ACCEL = 800;  // Accel/decel for GOTOPOS — low value = long gradual decel (~58cm from 8400 Hz, starts ~30cm before target)
 const uint32_t FAST_STOP_DECEL = 24000;
 const uint32_t MIN_SPEED_HZ = 300;
 const uint32_t STEPS_PER_ENC = 25;   // Stepper steps per encoder pulse
