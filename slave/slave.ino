@@ -3,9 +3,9 @@
 // ===============================
 // FW SLAVE - Controllo Motore Passo-Passo
 // ===============================
-#define FIRMWARE_VERSION "0.4.3"
+#define FIRMWARE_VERSION "0.4.4"
 #define FIRMWARE_DATE "2026-05-22"
-#define FIRMWARE_FEATURES "UART Control + GOTOPOS encoder-only + Physics-correct sqrt decel + Initial encoder sync"
+#define FIRMWARE_FEATURES "UART Control + GOTOPOS two-phase (fast→slow→forceStop) + encoder-only position"
 
 // -----------------------------
 // Pin definitions
@@ -28,9 +28,8 @@ const uint32_t SCAN_HZ = 1500;  // Initial estimate for 2.0 cm/s; closed-loop fr
 const uint32_t FAST_HZ = 12000;
 const uint32_t ACCEL = 1500;
 const uint32_t FAST_STOP_DECEL = 24000;  // ~1m stop distance from FAST_HZ (vs 16m at ACCEL)
-const uint32_t MIN_SPEED_HZ = 300;       // Floor speed — sqrt curve never goes below this
-const uint32_t GOTOPOS_ACCEL = 6000;     // Higher accel for GOTOPOS braking (4x SCAN for crisp stop)
-const uint32_t STEPS_PER_ENC = 25;       // Stepper steps per encoder pulse (calibrated: 1500 Hz ≈ 2 cm/s = 60 enc/s)
+const uint32_t MIN_SPEED_HZ = 300;       // Slow-approach speed for GOTOPOS final phase (~0.5 cm/s)
+const uint32_t SLOW_ZONE_ENC = 500;      // Switch to slow phase when this many encoder pulses remain (~16 cm)
 
 // -----------------------------
 // Conversion constants (deve corrispondere al master)
@@ -139,8 +138,6 @@ void stopMotion() {
     // Use higher deceleration when stopping from FAST modes to avoid 16m+ coast
     if (mode == FAST_S || mode == FAST_O) {
       stepper->setAcceleration(FAST_STOP_DECEL);
-    } else if (mode == GOTOPOS) {
-      stepper->setAcceleration(GOTOPOS_ACCEL);  // match the physics used in sqrt curve
     }
     stepper->stopMove();
     stepper->setAcceleration(ACCEL);  // restore normal accel for next move
@@ -158,13 +155,14 @@ int32_t getDistanceToGo() {
 }
 
 uint32_t calculateDynamicSpeed(int32_t distanceToGo) {
-  uint32_t absDist = (uint32_t)abs(distanceToGo);
-  // Physics-correct deceleration profile: v = sqrt(2 * a * d)
-  // Guarantees the motor can always stop exactly at the target under GOTOPOS_ACCEL.
-  // At distanceToGo=5 enc, v ≈ 1225 Hz → stopping distance = 5 enc → lands on target.
-  float vMax = sqrtf(2.0f * (float)GOTOPOS_ACCEL * (float)absDist * (float)STEPS_PER_ENC);
-  uint32_t speed = (uint32_t)vMax;
-  return constrain(speed, MIN_SPEED_HZ, FAST_HZ);
+  // Two-phase approach:
+  // - Far from target (> SLOW_ZONE_ENC): run at FAST_HZ
+  // - Near target (≤ SLOW_ZONE_ENC): crawl at MIN_SPEED_HZ
+  // At MIN_SPEED_HZ the motor is stopped instantly via forceStop() at the target.
+  if ((uint32_t)abs(distanceToGo) <= SLOW_ZONE_ENC) {
+    return MIN_SPEED_HZ;
+  }
+  return FAST_HZ;
 }
 
 void updateDynamicSpeed() {
@@ -190,18 +188,21 @@ void updateDynamicSpeed() {
 void checkPositionReached() {
   if (mode != GOTOPOS || !posActive || !encoderPosReceived) return;
 
-  // Signed distance: positive = still approaching, negative/positive = overshot
   int32_t signedDist = targetPos - encoderFedPos;
   bool overshot = fwd ? (signedDist < 0) : (signedDist > 0);
   int32_t distanceToGo = abs(signedDist);
 
-  // The sqrt curve guarantees: at distanceToGo=5, commanded speed ≈ 1225 Hz,
-  // stopping distance (at GOTOPOS_ACCEL) = 5 enc → motor lands exactly on target.
   if (overshot || distanceToGo <= 5) {
     if (overshot) Serial.println("⚠ Overshoot rilevato — stop forzato");
-    targetPos = encoderFedPos;
-    sendStatus();  // sends STATUS:GOTOPOS:DIR:0
-    stopMotion();
+    // forceStop() cuts power immediately — no deceleration ramp.
+    // Safe here because we are already at MIN_SPEED_HZ (300 Hz ≈ 0.5 cm/s).
+    stepper->forceStop();
+    stepper->setAcceleration(ACCEL);  // restore for next move
+    mode = STOPPED;
+    posActive = false;
+    currentDynamicSpeed = 0;
+    encoderPosReceived = false;
+    sendStatus();
     Serial.println("✓ Target raggiunto!");
   }
 }
@@ -320,12 +321,11 @@ void processCommand(const char* command) {
     mode = GOTOPOS;
     posActive = true;
     
-    // Start at physics-correct speed for this distance.
-    // If initial encoder pos is known, motor starts at the right speed immediately.
-    // If not known yet, motor starts at FAST_HZ and POS updates will slow it down.
+    // Start at the correct two-phase speed immediately if we know the distance.
+    // If encoder pos not known yet, POS updates will set the right speed.
     currentDynamicSpeed = encoderPosReceived ? calculateDynamicSpeed(initialDist) : FAST_HZ;
     stepper->setSpeedInHz(currentDynamicSpeed);
-    stepper->setAcceleration(GOTOPOS_ACCEL);
+    stepper->setAcceleration(ACCEL);
     if (fwd) stepper->runForward(); else stepper->runBackward();
     
     sendStatus();
