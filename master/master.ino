@@ -1190,8 +1190,7 @@ void setup() {
                         const progressSpan = document.getElementById('gotoProgress');
                         progressSpan.style.display = 'none';
                         progressSpan.textContent = '';
-                        gotoPosX = null;
-                        chart.update('none');
+                        // Line stays visible at reached position — cleared only on next GOTOPOS or page reload
                     } else if (!msg.active && !msg.completed) {
                         showCommandStatus('Movimento interrotto', true);
                         gotoPosX = null;
