@@ -9,7 +9,7 @@
 // ===============================
 // FW
 // ===============================
-#define FIRMWARE_VERSION "0.4.10"
+#define FIRMWARE_VERSION "0.4.11"
 #define FIRMWARE_DATE "2026-05-27"
 #define FIRMWARE_FEATURES "WiFi Manager + EMA + 0.01mm + UART Motor + Scan timer + Autostop + RicezioneON/OFF + GOTOPOS + Caliper timeout + Atomic encoder + Watchdog fixes + Scan state sync on connect + GOTOPOS chart overlay + encoder init fix + non-blocking caliper buffer + GOTOPOS overshoot safety guard + mirrored profile chart + encoder-diameter position correction"
 
@@ -885,7 +885,81 @@ void setup() {
     const OPTIMAL_SPEED_MIN = 1.5;
     const OPTIMAL_SPEED_MAX = 2.5;
 
-    // Custom plugin: draws a vertical red line at gotoPosX (cm) during GOTOPOS.
+    // Custom plugin: draws a technical dimension annotation (quota) at the latest
+    // scan point while scanning is active. Shows inward arrows spanning the full
+    // profile height (±radius) with "Ø X.XX mm" centered between them.
+    const diameterQuotaPlugin = {
+        id: 'diameterQuota',
+        afterDraw(chart) {
+            if (!scanReceiving || dataPoints.length === 0) return;
+            const last = dataPoints[dataPoints.length - 1];
+            if (!last || last.y == null || last.y <= 0) return;
+
+            const xScale = chart.scales.x;
+            const yScale = chart.scales.y;
+
+            // dataPoints stores full diameter; chart displays radius (d/2)
+            const radius = last.y / 2;
+            const xDataPixel = xScale.getPixelForValue(last.x);
+            const yTopPixel  = yScale.getPixelForValue( radius);
+            const yBotPixel  = yScale.getPixelForValue(-radius);
+            const yMid       = (yTopPixel + yBotPixel) / 2;
+
+            // Draw annotation to the right of the last point; flip left if near edge
+            const offsetX = 22;
+            const x = xDataPixel + offsetX > xScale.right - 50
+                    ? xDataPixel - offsetX
+                    : xDataPixel + offsetX;
+
+            const ctx = chart.ctx;
+            ctx.save();
+
+            const color      = 'rgba(40, 40, 40, 0.85)';
+            const arrowH     = 7;
+            const arrowW     = 4;
+            const tickHalf   = 7;
+            const textHalfH  = 9;   // half-height reserved around the label
+
+            ctx.strokeStyle = color;
+            ctx.fillStyle   = color;
+            ctx.lineWidth   = 1.5;
+
+            // Horizontal ticks at top and bottom
+            ctx.beginPath();
+            ctx.moveTo(x - tickHalf, yTopPixel); ctx.lineTo(x + tickHalf, yTopPixel);
+            ctx.moveTo(x - tickHalf, yBotPixel); ctx.lineTo(x + tickHalf, yBotPixel);
+            ctx.stroke();
+
+            // Vertical dimension lines (split around the label)
+            ctx.beginPath();
+            ctx.moveTo(x, yTopPixel + arrowH);   ctx.lineTo(x, yMid - textHalfH);
+            ctx.moveTo(x, yMid + textHalfH);     ctx.lineTo(x, yBotPixel - arrowH);
+            ctx.stroke();
+
+            // Top arrow ▲ pointing toward yTopPixel
+            ctx.beginPath();
+            ctx.moveTo(x,          yTopPixel);
+            ctx.lineTo(x - arrowW, yTopPixel + arrowH);
+            ctx.lineTo(x + arrowW, yTopPixel + arrowH);
+            ctx.closePath(); ctx.fill();
+
+            // Bottom arrow ▼ pointing toward yBotPixel
+            ctx.beginPath();
+            ctx.moveTo(x,          yBotPixel);
+            ctx.lineTo(x - arrowW, yBotPixel - arrowH);
+            ctx.lineTo(x + arrowW, yBotPixel - arrowH);
+            ctx.closePath(); ctx.fill();
+
+            // Label "Ø X.XX mm"
+            ctx.font         = 'bold 11px sans-serif';
+            ctx.textAlign    = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('Ø ' + last.y.toFixed(2) + ' mm', x, yMid);
+
+            ctx.restore();
+        }
+    };
+    Chart.register(diameterQuotaPlugin);
     // Registered globally so it applies to the chart without any CDN dependency.
     const gotoposLinePlugin = {
         id: 'gotoposLine',
