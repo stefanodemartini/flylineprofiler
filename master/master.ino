@@ -9,9 +9,9 @@
 // ===============================
 // FW
 // ===============================
-#define FIRMWARE_VERSION "0.4.5"
+#define FIRMWARE_VERSION "0.4.6"
 #define FIRMWARE_DATE "2026-05-27"
-#define FIRMWARE_FEATURES "WiFi Manager + EMA + 0.01mm + UART Motor + Scan timer + Autostop + RicezioneON/OFF + GOTOPOS + Caliper timeout + Atomic encoder + Watchdog fixes + Scan state sync on connect + GOTOPOS chart overlay + encoder init fix + non-blocking caliper buffer + GOTOPOS overshoot safety guard"
+#define FIRMWARE_FEATURES "WiFi Manager + EMA + 0.01mm + UART Motor + Scan timer + Autostop + RicezioneON/OFF + GOTOPOS + Caliper timeout + Atomic encoder + Watchdog fixes + Scan state sync on connect + GOTOPOS chart overlay + encoder init fix + non-blocking caliper buffer + GOTOPOS overshoot safety guard + mirrored profile chart"
 
 // -----------------------------
 #define ENCODER_DATA_PIN 12
@@ -886,21 +886,35 @@ void setup() {
         chart = new Chart(ctx, {
             type: 'line',
             data: {
-                datasets: [{
-                    label: 'Diametro Compensato (mm)',
-                    data: dataPoints,
-                    borderColor: '#007bff',
-                    backgroundColor: 'rgba(0, 123, 255, 0.1)',
-                    borderWidth: 2,
-                    tension: 0.4,
-                    cubicInterpolationMode: 'monotone',
-                    fill: true,
-                    pointRadius: 1,
-                    pointHoverRadius: 4,
-                    pointBackgroundColor: '#007bff',
-                    pointBorderColor: '#007bff',
-                    pointBorderWidth: 0
-                }]
+                datasets: [
+                    {   // index 0: live scan top profile
+                        label: 'Diametro Compensato (mm)',
+                        data: dataPoints,
+                        borderColor: '#007bff',
+                        backgroundColor: 'rgba(0, 123, 255, 0.15)',
+                        borderWidth: 2,
+                        tension: 0.4,
+                        cubicInterpolationMode: 'monotone',
+                        fill: '+1',
+                        pointRadius: 1,
+                        pointHoverRadius: 4,
+                        pointBackgroundColor: '#007bff',
+                        pointBorderColor: '#007bff',
+                        pointBorderWidth: 0
+                    },
+                    {   // index 1: live scan mirror (always paired with index 0)
+                        label: '__mirror__Diametro Compensato (mm)',
+                        data: [],
+                        borderColor: '#007bff',
+                        backgroundColor: 'rgba(0, 123, 255, 0.15)',
+                        borderWidth: 2,
+                        tension: 0.4,
+                        cubicInterpolationMode: 'monotone',
+                        fill: false,
+                        pointRadius: 0,
+                        pointHoverRadius: 0
+                    }
+                ]
             },
             options: {
                 responsive: true,
@@ -913,19 +927,24 @@ void setup() {
                         grid: { color: 'rgba(0,0,0,0.1)' }
                     },
                     y: {
-                        title: { display: true, text: 'Diametro Compensato (mm)', font: { size: 14, weight: 'bold' } },
+                        title: { display: true, text: 'Diametro (mm)', font: { size: 14, weight: 'bold' } },
                         grid: { color: 'rgba(0,0,0,0.1)' },
                         ticks: {
                             stepSize: 0.5,
-                            callback: v => v.toFixed(1) + ' mm'
+                            callback: v => Math.abs(v).toFixed(1) + ' mm'
                         }
                     }
                 },
                 plugins: {
-                    legend: { display: true, position: 'top' },
+                    legend: {
+                        display: true,
+                        position: 'top',
+                        labels: { filter: item => !item.text.startsWith('__mirror__') }
+                    },
                     tooltip: {
                         mode: 'index',
                         intersect: false,
+                        filter: item => !item.dataset.label.startsWith('__mirror__'),
                         callbacks: {
                             label: function(context) {
                                 return `${context.dataset.label}: ${context.parsed.y.toFixed(3)} mm a ${context.parsed.x} cm`;
@@ -1051,16 +1070,29 @@ void setup() {
             label: dataset.name,
             data: smoothed,
             borderColor: dataset.color,
-            backgroundColor: dataset.color + '1A',
+            backgroundColor: dataset.color + '26',
             borderWidth: 2,
             tension: 0.4,
             cubicInterpolationMode: 'monotone',
-            fill: false,
+            fill: '+1',
             pointRadius: 1,
             pointHoverRadius: 4,
             pointBackgroundColor: dataset.color,
             pointBorderColor: dataset.color,
             pointBorderWidth: 0,
+            hidden: !dataset.visible
+        });
+        chart.data.datasets.push({
+            label: '__mirror__' + dataset.name,
+            data: mirrorData(smoothed),
+            borderColor: dataset.color,
+            backgroundColor: dataset.color + '26',
+            borderWidth: 2,
+            tension: 0.4,
+            cubicInterpolationMode: 'monotone',
+            fill: false,
+            pointRadius: 0,
+            pointHoverRadius: 0,
             hidden: !dataset.visible
         });
         chart.update();
@@ -1096,6 +1128,8 @@ void setup() {
             dataset.visible = !dataset.visible;
             const chartDataset = chart.data.datasets.find(ds => ds.label === dataset.name);
             if (chartDataset) chartDataset.hidden = !dataset.visible;
+            const mirrorDs = chart.data.datasets.find(ds => ds.label === '__mirror__' + dataset.name);
+            if (mirrorDs) mirrorDs.hidden = !dataset.visible;
             chart.update();
             updateDatasetList();
         }
@@ -1105,6 +1139,9 @@ void setup() {
         const datasetIndex = uploadedDatasets.findIndex(ds => ds.id === datasetId);
         if (datasetIndex !== -1) {
             const dataset = uploadedDatasets[datasetIndex];
+            // Remove mirror first (splice shifts indices), then the top dataset
+            const mirrorIdx = chart.data.datasets.findIndex(ds => ds.label === '__mirror__' + dataset.name);
+            if (mirrorIdx !== -1) chart.data.datasets.splice(mirrorIdx, 1);
             const chartDatasetIndex = chart.data.datasets.findIndex(ds => ds.label === dataset.name);
             if (chartDatasetIndex !== -1) chart.data.datasets.splice(chartDatasetIndex, 1);
             uploadedDatasets.splice(datasetIndex, 1);
@@ -1117,7 +1154,8 @@ void setup() {
     function clearAllDatasets() {
         if (uploadedDatasets.length === 0) { showCommandStatus('Nessun dataset da rimuovere', true); return; }
         if (confirm('Sei sicuro di voler rimuovere tutti i dataset caricati?')) {
-            chart.data.datasets = [chart.data.datasets[0]];
+            // Keep indices 0 (live scan) and 1 (its mirror); remove all others
+            chart.data.datasets = [chart.data.datasets[0], chart.data.datasets[1]];
             uploadedDatasets = [];
             chart.update();
             updateDatasetList();
@@ -1149,7 +1187,9 @@ void setup() {
             }
             dataPoints.sort((a, b) => a.x - b.x);
             const level = parseInt(document.getElementById('smoothAlpha').value) || 0;
-            chart.data.datasets[0].data = dataPoints.length > 1 ? smoothKalman(dataPoints, level) : dataPoints;
+            const smoothed = dataPoints.length > 1 ? smoothKalman(dataPoints, level) : dataPoints;
+            chart.data.datasets[0].data = smoothed;
+            chart.data.datasets[1].data = mirrorData(smoothed);
             document.getElementById('dataPointsCount').textContent = dataPoints.length;
             if (autoScaleEnabled) fitToData(); else chart.update();
             showCommandStatus('Storico caricato: ' + (dataPoints.length - 1) + ' punti', false);
@@ -1260,7 +1300,9 @@ void setup() {
         }
         dataPoints.sort((a, b) => a.x - b.x);
         const level = parseInt(document.getElementById('smoothAlpha').value) || 0;
-        chart.data.datasets[0].data = dataPoints.length > 1 ? smoothKalman(dataPoints, level) : dataPoints;
+        const smoothed = dataPoints.length > 1 ? smoothKalman(dataPoints, level) : dataPoints;
+        chart.data.datasets[0].data = smoothed;
+        chart.data.datasets[1].data = mirrorData(smoothed);
         document.getElementById('dataPointsCount').textContent = dataPoints.length;
         if (autoScaleEnabled) fitToData();
         else chart.update('none');
@@ -1269,7 +1311,9 @@ void setup() {
     function redrawLiveSmoothing() {
         if (dataPoints.length < 2) return;
         const level = parseInt(document.getElementById('smoothAlpha').value) || 0;
-        chart.data.datasets[0].data = smoothKalman(dataPoints, level);
+        const smoothed = smoothKalman(dataPoints, level);
+        chart.data.datasets[0].data = smoothed;
+        chart.data.datasets[1].data = mirrorData(smoothed);
         chart.update('none');
     }
 
@@ -1280,6 +1324,10 @@ void setup() {
         userHasZoomed = false;
         chart.resetZoom();
         if (autoScaleEnabled) fitToData();
+    }
+
+    function mirrorData(data) {
+        return data.map(p => ({ x: p.x, y: -p.y }));
     }
 
     function fitToData() {
@@ -1295,17 +1343,19 @@ void setup() {
         let maxY = Math.max(...yValues);
         const xRange = maxX - minX;
         if (xRange === 0) { minX -= 10; maxX += 10; } else { minX -= xRange * 0.05; maxX += xRange * 0.05; }
-        // Y always starts at 0: variation is shown proportional to actual diameter
+        // Y is symmetric around 0 to show full mirrored cross-section profile
         chart.options.scales.x.min = minX;
         chart.options.scales.x.max = maxX;
-        chart.options.scales.y.min = 0;
-        chart.options.scales.y.max = Math.max(maxY * 1.15, 0.1);
+        const halfY = Math.max(maxY * 1.15, 0.1);
+        chart.options.scales.y.min = -halfY;
+        chart.options.scales.y.max =  halfY;
         chart.update();
     }
 
     function resetChart() {
         dataPoints = [];
         chart.data.datasets[0].data = dataPoints;
+        chart.data.datasets[1].data = [];
         if (autoScaleEnabled) fitToData(); else chart.update();
         document.getElementById('dataPointsCount').textContent = 0;
         showCommandStatus('Grafico resettato');
@@ -1341,6 +1391,7 @@ void setup() {
             if (command === 'reset') {
                 dataPoints = [];
                 chart.data.datasets[0].data = dataPoints;
+                chart.data.datasets[1].data = [];
                 if (autoScaleEnabled) fitToData(); else chart.update();
                 document.getElementById('dataPointsCount').textContent = 0;
                 stopTimer();
