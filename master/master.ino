@@ -9,9 +9,9 @@
 // ===============================
 // FW
 // ===============================
-#define FIRMWARE_VERSION "0.4.7"
-#define FIRMWARE_DATE "2026-05-27"
-#define FIRMWARE_FEATURES "WiFi Manager + EMA + 0.01mm + UART Motor + Scan timer + Autostop + RicezioneON/OFF + GOTOPOS + Caliper timeout + Atomic encoder + Watchdog fixes + Scan state sync on connect + GOTOPOS chart overlay + encoder init fix + non-blocking caliper buffer + GOTOPOS overshoot safety guard + mirrored profile chart"
+#define FIRMWARE_VERSION "0.4.8"
+#define FIRMWARE_DATE "2026-05-28"
+#define FIRMWARE_FEATURES "WiFi Manager + EMA + 0.01mm + UART Motor + Scan timer + Autostop + RicezioneON/OFF + GOTOPOS + Caliper timeout + Atomic encoder + Watchdog fixes + Scan state sync on connect + GOTOPOS chart overlay + encoder init fix + non-blocking caliper buffer + GOTOPOS overshoot safety guard + mirrored profile chart + encoder-diameter position correction"
 
 // -----------------------------
 #define ENCODER_DATA_PIN 12
@@ -72,7 +72,8 @@ bool goToEncoderReached = false;  // set when encoder reaches target; used to se
 static unsigned long lastPosSentMs = 0;  // throttle POS:<steps> updates to slave
 
 struct DataPoint {
-  int cm;
+  int cm;         // corrected actual position (encoder-diameter compensated), cm
+  int encoderCm;  // raw encoder position (used by GOTOPOS for slave command lookup)
   float diameter;
   float rawDisplay;
   DataPoint* next;
@@ -97,6 +98,14 @@ volatile unsigned long calRiseUs = 0;
 float caliperZeroOffset = 0.0;
 float displayZeroValue = 0.0;
 int lastCm = -1;
+
+// Encoder-diameter position correction accumulator.
+// Each encoder-cm tick advances actualPositionCm by (C_eff/20) where
+// C_eff = 20 - π × d_mm/10  (larger line diameter → smaller effective circumference → less actual travel).
+float actualPositionCm = 0.0f;
+
+// Encoder-based cm target kept for the GOTOPOS overshoot guard (raw encoder units).
+float goToTargetEncoderCm = 0.0f;
 
 // Rolling caliper buffer — filled non-blocking every main loop iteration.
 // Replaces blocking readCaliperMedian: no loop stall, no missed cm steps.
@@ -123,7 +132,7 @@ float readCaliperDisplay();
 void handleCommand(String cmd);
 void sendParamsToClients();
 void calculateSpeed();
-void addDataPoint(int cm, float diameter, float rawDisplay);
+void addDataPoint(int cm, int encoderCm, float diameter, float rawDisplay);
 void clearAllData();
 int getTotalDataPoints();
 void setDisplayZero();
@@ -136,10 +145,11 @@ void goToPosition(float targetCm);
 void checkGoToStatus();
 
 // -----------------------------
-void addDataPoint(int cm, float diameter, float rawDisplay) {
+void addDataPoint(int cm, int encoderCm, float diameter, float rawDisplay) {
   DataPoint* newPoint = new DataPoint();
   if (!newPoint) { Serial.println("[OOM] DataPoint alloc failed"); return; }  // FW-11
   newPoint->cm = cm;
+  newPoint->encoderCm = encoderCm;
   newPoint->diameter = roundf(diameter * 100.0f) / 100.0f;  // clamp to caliper precision: 0.01 mm
   newPoint->rawDisplay = rawDisplay;
   newPoint->next = nullptr;
@@ -187,6 +197,7 @@ void clearAllData() {
   smoothedDiameter = 0.0;
   calRollingCount = 0;
   calRollingIdx   = 0;
+  actualPositionCm = 0.0f;
 }
 
 int getTotalDataPoints() {
@@ -367,7 +378,7 @@ void goToPosition(float targetCm) {
     return;
   }
 
-  float currentCm = (encoderValue / (float)PULSES_PER_CM) - 2;
+  float currentCm = actualPositionCm;  // actual (corrected) position
   
   // Se già a target
   if (abs(targetCm - currentCm) < 0.1) {
@@ -384,11 +395,34 @@ void goToPosition(float targetCm) {
   // Determina la direzione
   bool direction = (targetCm > currentCm);
   
-  // Send GOTOPOS to slave. Target is (targetCm + 2) to account for the 20mm
-  // offset between encoder wheel and caliper. Include current encoder value so
-  // slave knows the exact distance from step 0 and can start at the correct speed.
+  // Look up encoder-based position for the target actual-cm.
+  // Scan data stores both: cm (actual, corrected) and encoderCm (raw encoder ticks / PULSES_PER_CM).
+  // Default fallback: treat targetCm as encoder cm (works when no data or first use).
+  float targetEncoderCm = targetCm;
+  if (firstDataPoint != nullptr) {
+    DataPoint* best = firstDataPoint;
+    float bestDiff = abs((float)best->cm - targetCm);
+    for (DataPoint* p = firstDataPoint->next; p != nullptr; p = p->next) {
+      float diff = abs((float)p->cm - targetCm);
+      if (diff < bestDiff) {
+        bestDiff = diff;
+        best = p;
+      }
+    }
+    targetEncoderCm = (float)best->encoderCm;
+    Serial.print("GOTOPOS lookup: actual ");
+    Serial.print(targetCm, 1);
+    Serial.print(" cm → encoder ");
+    Serial.print(targetEncoderCm, 1);
+    Serial.println(" cm");
+  }
+
+  // goToTargetEncoderCm is used by the overshoot guard (floatCm is encoder-based)
+  goToTargetEncoderCm = targetEncoderCm;
+
+  // Send GOTOPOS to slave. Add the +2 cm encoder offset (encoder wheel is 20 mm behind caliper).
   noInterrupts(); long encNow = encoderValue; interrupts();
-  String cmd = "GOTOPOS:" + String(targetCm + 2.0f, 2) + ":" + String(MOTOR_FAST_HZ) + ":" + String(encNow) + ":" + (direction ? "F" : "B");
+  String cmd = "GOTOPOS:" + String(targetEncoderCm + 2.0f, 2) + ":" + String(MOTOR_FAST_HZ) + ":" + String(encNow) + ":" + (direction ? "F" : "B");
   motorQueueTx(cmd);
   
   goToTargetCm = targetCm;
@@ -1627,13 +1661,22 @@ void loop() {
 
     float compensatedDiameter = displayValue - displayZeroValue - caliperZeroOffset;
     compensatedDiameter = roundf(compensatedDiameter * 100.0f) / 100.0f;  // 0.01 mm precision
-    addDataPoint(currentCm, compensatedDiameter, displayValue);
 
-    String json = "{\"cm\":" + String(currentCm) + ",\"diameter\":" + String(compensatedDiameter, 2) + 
+    // Encoder-diameter correction: as line diameter increases, the encoder wheel rolls
+    // on a larger effective radius → it over-counts actual linear distance.
+    // C_eff = 20 - π × d_mm/10  → corrFactor = C_eff / 20
+    float dMm = max(0.0f, compensatedDiameter);
+    float corrFactor = constrain((20.0f - (float)M_PI * dMm / 10.0f) / 20.0f, 0.5f, 1.0f);
+    actualPositionCm += corrFactor;
+    int actualCm = (int)lroundf(actualPositionCm);
+
+    addDataPoint(actualCm, currentCm, compensatedDiameter, displayValue);
+
+    String json = "{\"cm\":" + String(actualCm) + ",\"diameter\":" + String(compensatedDiameter, 2) + 
                   ",\"rawDisplay\":" + String(displayValue, 2) + ",\"totalPoints\":" + String(getTotalDataPoints()) + "}";
     webSocket.broadcastTXT(json);
 
-    Serial.print(currentCm);
+    Serial.print(actualCm);
     Serial.print(",");
     Serial.print(compensatedDiameter, 2);
     Serial.print(",");
@@ -1643,7 +1686,7 @@ void loop() {
 
     // Safety-only overshoot guard: if encoder went MORE than 1 cm past target, force stop.
     // Under normal operation the slave's natural deceleration stops the motor before this fires.
-    if (!goToEncoderReached && (goToFwd ? (floatCm > goToTargetCm + 1.0f) : (floatCm < goToTargetCm - 1.0f))) {
+    if (!goToEncoderReached && (goToFwd ? (floatCm > goToTargetEncoderCm + 1.0f) : (floatCm < goToTargetEncoderCm - 1.0f))) {
       goToEncoderReached = true;
       motorQueueTx("STOP");
       Serial.println("⚠ GOTOPOS: overshoot safety stop");
@@ -1853,6 +1896,7 @@ void handleCommand(String cmd) {
     // Reset only the encoder position (display → 0); does NOT clear measurement data.
     encoderValue = 2 * PULSES_PER_CM;
     lastCm = -1;
+    actualPositionCm = 0.0f;
     Serial.println("Posizione azzerata.");
     sendParamsToClients();
     return;
