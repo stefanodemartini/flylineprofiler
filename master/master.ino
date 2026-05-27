@@ -9,7 +9,7 @@
 // ===============================
 // FW
 // ===============================
-#define FIRMWARE_VERSION "0.4.9"
+#define FIRMWARE_VERSION "0.4.10"
 #define FIRMWARE_DATE "2026-05-27"
 #define FIRMWARE_FEATURES "WiFi Manager + EMA + 0.01mm + UART Motor + Scan timer + Autostop + RicezioneON/OFF + GOTOPOS + Caliper timeout + Atomic encoder + Watchdog fixes + Scan state sync on connect + GOTOPOS chart overlay + encoder init fix + non-blocking caliper buffer + GOTOPOS overshoot safety guard + mirrored profile chart + encoder-diameter position correction"
 
@@ -982,7 +982,8 @@ void setup() {
                         filter: item => !item.dataset.label.startsWith('__mirror__'),
                         callbacks: {
                             label: function(context) {
-                                return `${context.dataset.label}: ${context.parsed.y.toFixed(3)} mm a ${context.parsed.x} cm`;
+                                const diam = (Math.abs(context.parsed.y) * 2).toFixed(3);
+                                return `${context.dataset.label}: Ø${diam} mm a ${context.parsed.x} cm`;
                             }
                         }
                     },
@@ -1101,9 +1102,10 @@ void setup() {
 
     function addDatasetToChart(dataset) {
         const smoothed = smoothKalman(dataset.data, parseInt(document.getElementById('smoothAlpha').value) || 5);
+        const half = toHalfY(smoothed);
         chart.data.datasets.push({
             label: dataset.name,
-            data: smoothed,
+            data: half,
             borderColor: dataset.color,
             backgroundColor: dataset.color + '26',
             borderWidth: 2,
@@ -1119,7 +1121,7 @@ void setup() {
         });
         chart.data.datasets.push({
             label: '__mirror__' + dataset.name,
-            data: mirrorData(smoothed),
+            data: mirrorData(half),
             borderColor: dataset.color,
             backgroundColor: dataset.color + '26',
             borderWidth: 2,
@@ -1223,8 +1225,8 @@ void setup() {
             dataPoints.sort((a, b) => a.x - b.x);
             const level = parseInt(document.getElementById('smoothAlpha').value) || 0;
             const smoothed = dataPoints.length > 1 ? smoothKalman(dataPoints, level) : dataPoints;
-            chart.data.datasets[0].data = smoothed;
-            chart.data.datasets[1].data = mirrorData(smoothed);
+            chart.data.datasets[0].data = toHalfY(smoothed);
+            chart.data.datasets[1].data = mirrorData(toHalfY(smoothed));
             document.getElementById('dataPointsCount').textContent = dataPoints.length;
             if (autoScaleEnabled) fitToData(); else chart.update();
             showCommandStatus('Storico caricato: ' + (dataPoints.length - 1) + ' punti', false);
@@ -1336,8 +1338,8 @@ void setup() {
         dataPoints.sort((a, b) => a.x - b.x);
         const level = parseInt(document.getElementById('smoothAlpha').value) || 0;
         const smoothed = dataPoints.length > 1 ? smoothKalman(dataPoints, level) : dataPoints;
-        chart.data.datasets[0].data = smoothed;
-        chart.data.datasets[1].data = mirrorData(smoothed);
+        chart.data.datasets[0].data = toHalfY(smoothed);
+        chart.data.datasets[1].data = mirrorData(toHalfY(smoothed));
         document.getElementById('dataPointsCount').textContent = dataPoints.length;
         if (autoScaleEnabled) fitToData();
         else chart.update('none');
@@ -1347,8 +1349,8 @@ void setup() {
         if (dataPoints.length < 2) return;
         const level = parseInt(document.getElementById('smoothAlpha').value) || 0;
         const smoothed = smoothKalman(dataPoints, level);
-        chart.data.datasets[0].data = smoothed;
-        chart.data.datasets[1].data = mirrorData(smoothed);
+        chart.data.datasets[0].data = toHalfY(smoothed);
+        chart.data.datasets[1].data = mirrorData(toHalfY(smoothed));
         chart.update('none');
     }
 
@@ -1359,6 +1361,12 @@ void setup() {
         userHasZoomed = false;
         chart.resetZoom();
         if (autoScaleEnabled) fitToData();
+    }
+
+    // Convert diameter values to radius for chart display so the full mirrored
+    // profile height equals the actual line diameter (not 2×).
+    function toHalfY(data) {
+        return data.map(p => ({ x: p.x, y: p.y / 2 }));
     }
 
     function mirrorData(data) {
@@ -1375,7 +1383,7 @@ void setup() {
         const yValues = allChartData.map(p => p.y);
         let minX = Math.min(...xValues);
         let maxX = Math.max(...xValues);
-        let maxY = Math.max(...yValues);
+        let maxY = Math.max(...yValues) / 2;  // yValues are diameters; chart uses radius
         const xRange = maxX - minX;
         if (xRange === 0) { minX -= 10; maxX += 10; } else { minX -= xRange * 0.05; maxX += xRange * 0.05; }
         // Y is symmetric around 0 to show full mirrored cross-section profile
