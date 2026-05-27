@@ -9,7 +9,7 @@
 // ===============================
 // FW
 // ===============================
-#define FIRMWARE_VERSION "0.4.11"
+#define FIRMWARE_VERSION "0.4.12"
 #define FIRMWARE_DATE "2026-05-27"
 #define FIRMWARE_FEATURES "WiFi Manager + EMA + 0.01mm + UART Motor + Scan timer + Autostop + RicezioneON/OFF + GOTOPOS + Caliper timeout + Atomic encoder + Watchdog fixes + Scan state sync on connect + GOTOPOS chart overlay + encoder init fix + non-blocking caliper buffer + GOTOPOS overshoot safety guard + mirrored profile chart + encoder-diameter position correction"
 
@@ -989,6 +989,93 @@ void setup() {
     };
     Chart.register(gotoposLinePlugin);
 
+    // Custom plugin: replaces the default tooltip box with a canvas-drawn
+    // dimension annotation (same style as diameterQuotaPlugin) at the hovered point.
+    const hoverQuotaPlugin = {
+        id: 'hoverQuota',
+        afterDraw(chart) {
+            const tp = chart.tooltip;
+            if (!tp || !tp._active || tp._active.length === 0) return;
+
+            // Pick the first active element that belongs to a real (non-mirror) dataset
+            const active = tp._active.find(
+                el => !chart.data.datasets[el.datasetIndex].label.startsWith('__mirror__')
+            );
+            if (!active) return;
+
+            const dp = chart.data.datasets[active.datasetIndex].data[active.index];
+            if (!dp) return;
+
+            const xScale = chart.scales.x;
+            const yScale = chart.scales.y;
+
+            // dp.y is radius (toHalfY applied); dp.x is corrected cm
+            const radius = Math.abs(dp.y);
+            const diam   = radius * 2;
+            if (diam <= 0) return;
+
+            const xDataPixel = xScale.getPixelForValue(dp.x);
+            const yTopPixel  = yScale.getPixelForValue( radius);
+            const yBotPixel  = yScale.getPixelForValue(-radius);
+            const yMid       = (yTopPixel + yBotPixel) / 2;
+
+            // Flip annotation left if near right edge
+            const offsetX = 22;
+            const x = xDataPixel + offsetX > xScale.right - 60
+                    ? xDataPixel - offsetX
+                    : xDataPixel + offsetX;
+
+            const ctx = chart.ctx;
+            ctx.save();
+
+            const color     = 'rgba(40, 40, 40, 0.85)';
+            const arrowH    = 7, arrowW = 4, tickHalf = 7, textHalfH = 9;
+
+            ctx.strokeStyle = color;
+            ctx.fillStyle   = color;
+            ctx.lineWidth   = 1.5;
+
+            // Horizontal ticks at ±radius
+            ctx.beginPath();
+            ctx.moveTo(x - tickHalf, yTopPixel); ctx.lineTo(x + tickHalf, yTopPixel);
+            ctx.moveTo(x - tickHalf, yBotPixel); ctx.lineTo(x + tickHalf, yBotPixel);
+            ctx.stroke();
+
+            // Vertical lines split around the diameter label
+            ctx.beginPath();
+            ctx.moveTo(x, yTopPixel + arrowH);  ctx.lineTo(x, yMid - textHalfH);
+            ctx.moveTo(x, yMid + textHalfH);    ctx.lineTo(x, yBotPixel - arrowH);
+            ctx.stroke();
+
+            // Top arrow ▲
+            ctx.beginPath();
+            ctx.moveTo(x,          yTopPixel);
+            ctx.lineTo(x - arrowW, yTopPixel + arrowH);
+            ctx.lineTo(x + arrowW, yTopPixel + arrowH);
+            ctx.closePath(); ctx.fill();
+
+            // Bottom arrow ▼
+            ctx.beginPath();
+            ctx.moveTo(x,          yBotPixel);
+            ctx.lineTo(x - arrowW, yBotPixel - arrowH);
+            ctx.lineTo(x + arrowW, yBotPixel - arrowH);
+            ctx.closePath(); ctx.fill();
+
+            // Diameter label centered between arrows
+            ctx.font         = 'bold 11px sans-serif';
+            ctx.textAlign    = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('Ø ' + diam.toFixed(2) + ' mm', x, yMid);
+
+            // Length label above the top tick
+            ctx.font = '10px sans-serif';
+            ctx.fillText(dp.x.toFixed(1) + ' cm', x, yTopPixel - 11);
+
+            ctx.restore();
+        }
+    };
+    Chart.register(hoverQuotaPlugin);
+
     function initializeChart() {
         const ctx = document.getElementById('lineChart').getContext('2d');
         initializeColorPalette();
@@ -1051,15 +1138,10 @@ void setup() {
                         labels: { filter: item => !item.text.startsWith('__mirror__') }
                     },
                     tooltip: {
+                        enabled: false,
                         mode: 'index',
                         intersect: false,
                         filter: item => !item.dataset.label.startsWith('__mirror__'),
-                        callbacks: {
-                            label: function(context) {
-                                const diam = (Math.abs(context.parsed.y) * 2).toFixed(3);
-                                return `${context.dataset.label}: Ø${diam} mm a ${context.parsed.x} cm`;
-                            }
-                        }
                     },
                     zoom: {
                         pan: { enabled: true, mode: 'xy', modifierKey: 'ctrl' },
