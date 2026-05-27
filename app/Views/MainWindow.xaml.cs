@@ -78,7 +78,12 @@ public partial class MainWindow : Fluent.RibbonWindow, INotifyPropertyChanged
             SetupPlot();
             _autoFitEnabled = _vm.Settings.Chart.AutoFit;
             _vm.Points.CollectionChanged += Points_CollectionChanged;
-            _vm.PropertyChanged += (_, _) => RefreshStatusBar();
+            _vm.PropertyChanged += (s, e) =>
+            {
+                RefreshStatusBar();
+                if (e.PropertyName == nameof(MainViewModel.ScanReceiving))
+                    RefreshPlot();
+            };
             await _vm.InitializeAsync();
             RefreshPlot();
             RefreshStatusBar();
@@ -143,38 +148,93 @@ public partial class MainWindow : Fluent.RibbonWindow, INotifyPropertyChanged
         plot.Clear();
 
         var pts = _vm.Points.OrderBy(p => p.X).ToList();
-        var displayedYs = GetDisplayedSeries(pts);
+        var displayedYs = GetDisplayedSeries(pts);  // full diameters
 
         if (pts.Count > 0)
         {
             double[] xs = pts.Select(p => p.X).ToArray();
 
+            // Symmetric profile: top = +radius, bottom = -radius (mirrors the web UI)
             if (_vm.Settings.Chart.ShowFilteredSeries)
             {
-                var filtered = plot.Add.Scatter(xs, displayedYs);
-                filtered.LegendText = "Filtered";
-                filtered.LineWidth  = _vm.Settings.Chart.LineWidth;
-                filtered.MarkerSize = 0;
-                filtered.Color      = Colors.Blue.WithAlpha((float)Math.Clamp(_vm.Settings.Chart.FilteredOpacity, 0.0, 1.0));
+                var alpha = (float)Math.Clamp(_vm.Settings.Chart.FilteredOpacity, 0.0, 1.0);
+                var col   = Colors.Blue.WithAlpha(alpha);
+                int lw    = _vm.Settings.Chart.LineWidth;
+
+                double[] topYs = displayedYs.Select(y => y / 2.0).ToArray();
+                double[] botYs = displayedYs.Select(y => -y / 2.0).ToArray();
+
+                var top = plot.Add.Scatter(xs, topYs);
+                top.LegendText = "Profilo";
+                top.LineWidth  = lw;
+                top.MarkerSize = 0;
+                top.Color      = col;
+
+                var bot = plot.Add.Scatter(xs, botYs);
+                bot.LineWidth  = lw;
+                bot.MarkerSize = 0;
+                bot.Color      = col;
             }
 
+            // Optional raw series (also mirrored)
             if (_vm.Settings.Chart.ShowRawSeries)
             {
-                var raw = plot.Add.Scatter(xs, pts.Select(p => p.RawY).ToArray());
-                raw.LegendText = "Raw";
-                raw.LineWidth  = 1;
-                raw.MarkerSize = 0;
-                raw.Color      = Colors.Orange.WithAlpha((float)Math.Clamp(_vm.Settings.Chart.RawOpacity, 0.0, 1.0));
+                var rawAlpha = (float)Math.Clamp(_vm.Settings.Chart.RawOpacity, 0.0, 1.0);
+                var rawCol   = Colors.Orange.WithAlpha(rawAlpha);
+                double[] rxs = xs;
+
+                var rawTop = plot.Add.Scatter(rxs, pts.Select(p =>  p.RawY / 2.0).ToArray());
+                rawTop.LegendText = "Raw";
+                rawTop.LineWidth  = 1;
+                rawTop.MarkerSize = 0;
+                rawTop.Color      = rawCol;
+
+                var rawBot = plot.Add.Scatter(rxs, pts.Select(p => -p.RawY / 2.0).ToArray());
+                rawBot.LineWidth  = 1;
+                rawBot.MarkerSize = 0;
+                rawBot.Color      = rawCol;
+            }
+
+            // Centre axis
+            var hline = plot.Add.HorizontalLine(0);
+            hline.Color     = Colors.Gray.WithAlpha(0.4f);
+            hline.LineWidth = 0.8f;
+
+            // Live scan annotation: dimension label at the latest received point
+            if (_vm.ScanReceiving && displayedYs.Length > 0)
+            {
+                double lastX    = pts[^1].X;
+                double lastDiam = displayedYs[^1];
+                var ann = plot.Add.Text($"Ø {lastDiam:0.00} mm\n{lastX:0.0} cm",
+                                        lastX, lastDiam / 2.0);
+                ann.LabelFontSize        = 11;
+                ann.LabelBold            = true;
+                ann.LabelFontColor       = Colors.DarkRed;
+                ann.LabelBackgroundColor = Colors.White.WithAlpha(0.90f);
+                ann.LabelBorderColor     = Colors.DarkRed;
+                ann.LabelBorderWidth     = 1f;
+                ann.LabelPadding         = 4;
+                ann.OffsetX              = 10;
+                ann.OffsetY              = -10;
             }
         }
 
+        // Imported comparison series — also mirrored
         foreach (var series in _importedSeries)
         {
-            var imp = plot.Add.Scatter(series.Xs, series.Ys);
-            imp.LegendText = series.Name;
-            imp.LineWidth  = 2;
-            imp.MarkerSize = 0;
-            imp.Color      = series.Color;
+            double[] halfYs = series.Ys.Select(y =>  y / 2.0).ToArray();
+            double[] negYs  = series.Ys.Select(y => -y / 2.0).ToArray();
+
+            var top = plot.Add.Scatter(series.Xs, halfYs);
+            top.LegendText = series.Name;
+            top.LineWidth  = 2;
+            top.MarkerSize = 0;
+            top.Color      = series.Color;
+
+            var bot = plot.Add.Scatter(series.Xs, negYs);
+            bot.LineWidth  = 2;
+            bot.MarkerSize = 0;
+            bot.Color      = series.Color;
         }
 
         RenderSegmentOverlay(plot);
@@ -337,7 +397,7 @@ public partial class MainWindow : Fluent.RibbonWindow, INotifyPropertyChanged
             .First()
             .index;
 
-        HoverCoordsStatus = $"↖  {orderedPoints[nearestIndex].X:0} cm  |  {displayedYs[nearestIndex]:0.000} mm";
+        HoverCoordsStatus = $"Ø {displayedYs[nearestIndex]:0.000} mm  @  {orderedPoints[nearestIndex].X:0.0} cm";
     }
 
     private void PlotControl_PreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
@@ -797,13 +857,13 @@ public partial class MainWindow : Fluent.RibbonWindow, INotifyPropertyChanged
         if (dlg.ShowDialog() != true) return;
 
         var sb = new StringBuilder();
-        sb.AppendLine("Lunghezza cm,Raw mm,Filtered mm");
+        sb.AppendLine("Lunghezza cm,Diametro mm");
         var orderedPoints = _vm.Points.OrderBy(p => p.X).ToList();
         var displayedYs = GetDisplayedSeries(orderedPoints);
         for (int i = 0; i < orderedPoints.Count; i++)
         {
             var p = orderedPoints[i];
-            sb.AppendLine($"{p.X:0.0},{p.RawY:0.000},{displayedYs[i]:0.000}");
+            sb.AppendLine($"{p.X:0.0},{displayedYs[i]:0.000}");
         }
 
         File.WriteAllText(dlg.FileName, sb.ToString());
@@ -995,25 +1055,46 @@ public partial class MainWindow : Fluent.RibbonWindow, INotifyPropertyChanged
         var xs = new List<double>();
         var ys = new List<double>();
 
-        string[] lines = File.ReadAllLines(fileName);
-        foreach (var rawLine in lines)
+        string[] rawLines = File.ReadAllLines(fileName);
+
+        // Detect column layout from the first non-empty line
+        // Supported formats:
+        //   Lunghezza cm,Diametro mm                     → xCol=0, yCol=1
+        //   Dataset,Lunghezza cm,Diametro mm,Display mm  → xCol=1, yCol=2
+        //   ,x,y,...  (multi-dataset, data rows)         → xCol=1, yCol=2
+        int xCol = 0, yCol = 1, startRow = 0;
+        for (int i = 0; i < rawLines.Length; i++)
+        {
+            var line = rawLines[i].Trim();
+            if (string.IsNullOrWhiteSpace(line)) continue;
+            var lower = line.ToLowerInvariant();
+            if (lower.StartsWith("dataset") || lower.StartsWith(","))
+            {
+                xCol = 1; yCol = 2;
+                startRow = i + 1;
+            }
+            else if (char.IsLetter(line[0]))
+            {
+                xCol = 0; yCol = 1;
+                startRow = i + 1;
+            }
+            // else: no header, start from row i (startRow stays 0)
+            break;
+        }
+
+        foreach (var rawLine in rawLines.Skip(startRow))
         {
             if (string.IsNullOrWhiteSpace(rawLine)) continue;
-            var line = rawLine.Trim();
-            if (char.IsLetter(line[0])) continue;
+            var parts = rawLine.Trim()
+                               .Split(new[] { ';', ',', '\t' }, StringSplitOptions.None)
+                               .Select(p => p.Trim().Trim('"')).ToArray();
 
-            var parts = line.Split(new[] { ';', ',', '\t' }, StringSplitOptions.None)
-                            .Select(p => p.Trim()).ToArray();
-            if (parts.Length < 2) continue;
+            if (parts.Length <= Math.Max(xCol, yCol)) continue;
+            if (!TryParseDouble(parts[xCol], out double x)) continue;
+            if (!TryParseDouble(parts[yCol], out double y)) continue;
 
-            bool okX = TryParseDouble(parts[0], out double x);
-            bool okY = false;
-            double y = 0;
-
-            if (parts.Length >= 3) okY = TryParseDouble(parts[2], out y);
-            if (!okY) okY = TryParseDouble(parts[1], out y);
-
-            if (okX && okY) { xs.Add(x); ys.Add(y); }
+            xs.Add(x);
+            ys.Add(y);
         }
 
         if (xs.Count == 0)
