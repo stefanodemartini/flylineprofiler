@@ -9,7 +9,7 @@
 // ===============================
 // FW
 // ===============================
-#define FIRMWARE_VERSION "0.4.15"
+#define FIRMWARE_VERSION "0.4.16"
 #define FIRMWARE_DATE "2026-05-27"
 #define FIRMWARE_FEATURES "WiFi Manager + EMA + 0.01mm + UART Motor + Scan timer + Autostop + RicezioneON/OFF + GOTOPOS + Caliper timeout + Atomic encoder + Watchdog fixes + Scan state sync on connect + GOTOPOS chart overlay + encoder init fix + non-blocking caliper buffer + GOTOPOS overshoot safety guard + mirrored profile chart + encoder-diameter position correction"
 
@@ -1090,6 +1090,49 @@ void setup() {
     };
     Chart.register(hoverQuotaPlugin);
 
+    // Gradient fill plugin — runs before every draw so the fill area between the top
+    // and mirror datasets looks like a solid cylindrical cross-section:
+    // dark body colour at the outer edges fading to a bright specular highlight
+    // at the centre (y = 0 axis), then back to dark at the opposite edge.
+    const gradientFillPlugin = {
+        id: 'gradientFill',
+        beforeDraw(chart) {
+            const yScale = chart.scales.y;
+            if (!yScale) return;
+            const ctx = chart.ctx;
+            const yTop = yScale.getPixelForValue(yScale.max);
+            const yBot = yScale.getPixelForValue(yScale.min);
+            if (!isFinite(yTop) || !isFinite(yBot) || Math.abs(yBot - yTop) < 4) return;
+
+            chart.data.datasets.forEach(ds => {
+                // Only top-profile datasets (non-mirror, with fill toward +1 enabled)
+                if (!ds.label || ds.label.startsWith('__mirror__')) return;
+                if (ds.fill === false || ds.fill === undefined || ds.fill === null) return;
+
+                // Parse hex borderColor (#RRGGBB) to r,g,b components
+                const hex = (typeof ds.borderColor === 'string' && ds.borderColor.startsWith('#'))
+                            ? ds.borderColor : '#007bff';
+                const r = parseInt(hex.slice(1, 3), 16);
+                const g = parseInt(hex.slice(3, 5), 16);
+                const b = parseInt(hex.slice(5, 7), 16);
+                const rgb = `${r},${g},${b}`;
+
+                // Vertical gradient symmetric around y=0 (centre of the profile band)
+                const grad = ctx.createLinearGradient(0, yTop, 0, yBot);
+                grad.addColorStop(0.00, `rgba(${rgb},0.72)`);      // dark outer edge — top
+                grad.addColorStop(0.28, `rgba(${rgb},0.44)`);      // mid tone
+                grad.addColorStop(0.45, `rgba(255,255,255,0.18)`); // near-centre brightening
+                grad.addColorStop(0.50, `rgba(255,255,255,0.30)`); // centre gloss (specular)
+                grad.addColorStop(0.55, `rgba(255,255,255,0.18)`); // near-centre brightening
+                grad.addColorStop(0.72, `rgba(${rgb},0.44)`);      // mid tone
+                grad.addColorStop(1.00, `rgba(${rgb},0.72)`);      // dark outer edge — bottom
+
+                ds.backgroundColor = grad;
+            });
+        }
+    };
+    Chart.register(gradientFillPlugin);
+
     function initializeChart() {
         const ctx = document.getElementById('lineChart').getContext('2d');
         initializeColorPalette();
@@ -1101,7 +1144,7 @@ void setup() {
                         label: 'Diametro Compensato (mm)',
                         data: dataPoints,
                         borderColor: '#007bff',
-                        backgroundColor: 'rgba(0, 123, 255, 0.15)',
+                        backgroundColor: 'rgba(0,123,255,0.15)', // overridden by gradientFillPlugin
                         borderWidth: 2,
                         tension: 0.4,
                         cubicInterpolationMode: 'monotone',
@@ -1116,7 +1159,7 @@ void setup() {
                         label: '__mirror__Diametro Compensato (mm)',
                         data: [],
                         borderColor: '#007bff',
-                        backgroundColor: 'rgba(0, 123, 255, 0.15)',
+                        backgroundColor: 'rgba(0,123,255,0.15)',
                         borderWidth: 2,
                         tension: 0.4,
                         cubicInterpolationMode: 'monotone',
@@ -1276,11 +1319,7 @@ void setup() {
             label: dataset.name,
             data: half,
             borderColor: dataset.color,
-            backgroundColor: dataset.color + '26',
-            borderWidth: 2,
-            tension: 0.4,
-            cubicInterpolationMode: 'monotone',
-            fill: '+1',
+            backgroundColor: dataset.color + '26', // overridden by gradientFillPlugin
             pointRadius: 1,
             pointHoverRadius: 4,
             pointBackgroundColor: dataset.color,
