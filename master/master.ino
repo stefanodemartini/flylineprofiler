@@ -9,7 +9,7 @@
 // ===============================
 // FW
 // ===============================
-#define FIRMWARE_VERSION "0.4.14"
+#define FIRMWARE_VERSION "0.4.15"
 #define FIRMWARE_DATE "2026-05-27"
 #define FIRMWARE_FEATURES "WiFi Manager + EMA + 0.01mm + UART Motor + Scan timer + Autostop + RicezioneON/OFF + GOTOPOS + Caliper timeout + Atomic encoder + Watchdog fixes + Scan state sync on connect + GOTOPOS chart overlay + encoder init fix + non-blocking caliper buffer + GOTOPOS overshoot safety guard + mirrored profile chart + encoder-diameter position correction"
 
@@ -487,7 +487,9 @@ void setup() {
   Serial.println("\nWiFi OK! IP: " + WiFi.localIP().toString());
 
   server.on("/", []() {
-    String html = R"rawliteral(
+    server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+    server.send(200, "text/html", "");
+    server.sendContent(R"rawliteral(
 <!DOCTYPE html>
 <html>
 <head>
@@ -738,12 +740,15 @@ void setup() {
         <hr style="border:none;border-top:1px solid #ddd;margin:15px 0;">
         <p style="font-size:0.85em;color:#999;">
             <strong>Sistema Monitoraggio Diametro Linea</strong><br>
-            Versione <strong>)rawliteral"
-                  + String(FIRMWARE_VERSION) + R"rawliteral(</strong> |
-            Build <strong>)rawliteral"
-                  + String(FIRMWARE_DATE) + R"rawliteral(</strong> |
-            <strong>)rawliteral"
-                  + String(FIRMWARE_FEATURES) + R"rawliteral(</strong>
+            Versione <strong>)rawliteral");
+    server.sendContent(FIRMWARE_VERSION);
+    server.sendContent(R"rawliteral(</strong> |
+            Build <strong>)rawliteral");
+    server.sendContent(FIRMWARE_DATE);
+    server.sendContent(R"rawliteral(</strong> |
+            <strong>)rawliteral");
+    server.sendContent(FIRMWARE_FEATURES);
+    server.sendContent(R"rawliteral(</strong>
         </p>
     </div>
 </div>
@@ -1723,8 +1728,7 @@ void setup() {
 </script>
 </body>
 </html>
-)rawliteral";
-    server.send(200, "text/html", html);
+)rawliteral");
   });
 
   server.on("/export", HTTP_GET, []() {
