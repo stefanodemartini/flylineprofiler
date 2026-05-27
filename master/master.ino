@@ -9,7 +9,7 @@
 // ===============================
 // FW
 // ===============================
-#define FIRMWARE_VERSION "0.4.13"
+#define FIRMWARE_VERSION "0.4.14"
 #define FIRMWARE_DATE "2026-05-27"
 #define FIRMWARE_FEATURES "WiFi Manager + EMA + 0.01mm + UART Motor + Scan timer + Autostop + RicezioneON/OFF + GOTOPOS + Caliper timeout + Atomic encoder + Watchdog fixes + Scan state sync on connect + GOTOPOS chart overlay + encoder init fix + non-blocking caliper buffer + GOTOPOS overshoot safety guard + mirrored profile chart + encoder-diameter position correction"
 
@@ -992,20 +992,29 @@ void setup() {
 
     // Custom plugin: replaces the default tooltip box with a canvas-drawn
     // dimension annotation (same style as diameterQuotaPlugin) at the hovered point.
+    // Uses afterEvent to capture the hovered data point, then draws in afterDraw.
     const hoverQuotaPlugin = {
         id: 'hoverQuota',
+        _dp: null,
+        afterEvent(chart, args) {
+            const t = args.event.type;
+            if (t === 'mousemove') {
+                const native = args.event.native;
+                if (native) {
+                    const els = chart.getElementsAtEventForMode(native, 'nearest', { intersect: false }, false);
+                    const el = els.find(a => a.datasetIndex < chart.data.datasets.length &&
+                        !chart.data.datasets[a.datasetIndex].label.startsWith('__mirror__'));
+                    this._dp = el ? chart.data.datasets[el.datasetIndex].data[el.index] : null;
+                }
+                args.changed = true;
+            } else if (t === 'mouseout') {
+                this._dp = null;
+                args.changed = true;
+            }
+        },
         afterDraw(chart) {
-            const tp = chart.tooltip;
-            if (!tp || !tp._active || tp._active.length === 0) return;
-
-            // Pick the first active element that belongs to a real (non-mirror) dataset
-            const active = tp._active.find(
-                el => !chart.data.datasets[el.datasetIndex].label.startsWith('__mirror__')
-            );
-            if (!active) return;
-
-            const dp = chart.data.datasets[active.datasetIndex].data[active.index];
-            if (!dp) return;
+            const dp = this._dp;
+            if (!dp || dp.y == null || dp.y <= 0) return;
 
             const xScale = chart.scales.x;
             const yScale = chart.scales.y;
@@ -1013,7 +1022,6 @@ void setup() {
             // dp.y is radius (toHalfY applied); dp.x is corrected cm
             const radius = Math.abs(dp.y);
             const diam   = radius * 2;
-            if (diam <= 0) return;
 
             const xDataPixel = xScale.getPixelForValue(dp.x);
             const yTopPixel  = yScale.getPixelForValue( radius);
@@ -1048,14 +1056,14 @@ void setup() {
             ctx.moveTo(x, yMid + textHalfH);    ctx.lineTo(x, yBotPixel - arrowH);
             ctx.stroke();
 
-            // Top arrow ▲
+            // Top arrow
             ctx.beginPath();
             ctx.moveTo(x,          yTopPixel);
             ctx.lineTo(x - arrowW, yTopPixel + arrowH);
             ctx.lineTo(x + arrowW, yTopPixel + arrowH);
             ctx.closePath(); ctx.fill();
 
-            // Bottom arrow ▼
+            // Bottom arrow
             ctx.beginPath();
             ctx.moveTo(x,          yBotPixel);
             ctx.lineTo(x - arrowW, yBotPixel - arrowH);
@@ -1140,9 +1148,8 @@ void setup() {
                     },
                     tooltip: {
                         enabled: false,
-                        mode: 'index',
+                        mode: 'nearest',
                         intersect: false,
-                        filter: item => !item.dataset.label.startsWith('__mirror__'),
                     },
                     zoom: {
                         pan: { enabled: true, mode: 'xy', modifierKey: 'ctrl' },
