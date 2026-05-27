@@ -9,8 +9,8 @@
 // ===============================
 // FW
 // ===============================
-#define FIRMWARE_VERSION "0.4.8"
-#define FIRMWARE_DATE "2026-05-28"
+#define FIRMWARE_VERSION "0.4.9"
+#define FIRMWARE_DATE "2026-05-27"
 #define FIRMWARE_FEATURES "WiFi Manager + EMA + 0.01mm + UART Motor + Scan timer + Autostop + RicezioneON/OFF + GOTOPOS + Caliper timeout + Atomic encoder + Watchdog fixes + Scan state sync on connect + GOTOPOS chart overlay + encoder init fix + non-blocking caliper buffer + GOTOPOS overshoot safety guard + mirrored profile chart + encoder-diameter position correction"
 
 // -----------------------------
@@ -1662,11 +1662,11 @@ void loop() {
     float compensatedDiameter = displayValue - displayZeroValue - caliperZeroOffset;
     compensatedDiameter = roundf(compensatedDiameter * 100.0f) / 100.0f;  // 0.01 mm precision
 
-    // Encoder-diameter correction: as line diameter increases, the encoder wheel rolls
-    // on a larger effective radius → it over-counts actual linear distance.
-    // C_eff = 20 - π × d_mm/10  → corrFactor = C_eff / 20
+    // Encoder-diameter correction: flat wheel sinking into soft line coating reduces
+    // effective rolling radius by line radius (r = d/2), not full diameter.
+    // C_eff = 20 - π × r_mm/10 = 20 - π × d_mm/20  → corrFactor = C_eff / 20
     float dMm = max(0.0f, compensatedDiameter);
-    float corrFactor = constrain((20.0f - (float)M_PI * dMm / 10.0f) / 20.0f, 0.5f, 1.0f);
+    float corrFactor = constrain((20.0f - (float)M_PI * dMm / 20.0f) / 20.0f, 0.5f, 1.0f);
     actualPositionCm += corrFactor;
     int actualCm = (int)lroundf(actualPositionCm);
 
