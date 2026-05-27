@@ -3,9 +3,9 @@
 // ===============================
 // FW SLAVE - Controllo Motore Passo-Passo
 // ===============================
-#define FIRMWARE_VERSION "0.5.0"
-#define FIRMWARE_DATE "2026-05-22"
-#define FIRMWARE_FEATURES "UART Control + GOTOPOS FastAccelStepper trapezoidal profile + encoder forceStop"
+#define FIRMWARE_VERSION "0.5.1"
+#define FIRMWARE_DATE "2026-05-27"
+#define FIRMWARE_FEATURES "UART Control + GOTOPOS two-phase (fast approach + 400Hz creep) + encoder forceStop + non-blocking caliper buffer"
 
 // -----------------------------
 // Pin definitions
@@ -28,10 +28,15 @@ const uint32_t SCAN_HZ = 1500;       // Initial estimate for 2.0 cm/s; closed-lo
 const uint32_t FAST_HZ = 12000;
 const uint32_t GOTOPOS_MAX_HZ = (uint32_t)(FAST_HZ * 0.70f);  // 8400 Hz — 30% slower than FAST
 const uint32_t ACCEL = 1500;
-const uint32_t GOTOPOS_ACCEL = 800;  // Accel/decel for GOTOPOS — low value = long gradual decel (~58cm from 8400 Hz, starts ~30cm before target)
+const uint32_t GOTOPOS_ACCEL       = 800;    // gentle accel/decel for phase-1 long approach
+const uint32_t GOTOPOS_CREEP_HZ    = 400;    // phase-2 creep speed ≈ 0.5 cm/s (precise final approach)
+const uint32_t GOTOPOS_CREEP_ACCEL = 5000;   // fast decel/accel inside creep zone
+const int32_t  GOTOPOS_CREEP_DIST_ENC = 120; // enter creep zone 4 cm before target (120 enc pulses)
 const uint32_t FAST_STOP_DECEL = 24000;
 const uint32_t MIN_SPEED_HZ = 300;
-const uint32_t STEPS_PER_ENC = 25;   // Stepper steps per encoder pulse
+const uint32_t STEPS_PER_ENC = 25;           // stepper steps per encoder pulse
+// Encoder stop threshold: forceStop safety net when motor is nearly stopped at creep speed
+const int32_t  GOTOPOS_STOP_ENC_STEPS = 3;   // ≈ 1 mm
 
 // -----------------------------
 // Conversion constants (deve corrispondere al master)
@@ -49,6 +54,8 @@ uint32_t currentDynamicSpeed = 0;
 // Encoder-fed position: updated by POS:<steps> messages from master.
 int32_t encoderFedPos = 0;
 bool encoderPosReceived = false;
+// GOTOPOS two-phase state: false = phase-1 fast approach, true = phase-2 creep
+bool gotoPhase2 = false;
 
 // -----------------------------
 // FastAccelStepper objects
@@ -154,6 +161,7 @@ void stopMotion() {
   posActive = false;
   currentDynamicSpeed = 0;
   encoderPosReceived = false;
+  gotoPhase2 = false;
   Serial.println("Motore STOP");
 }
 
@@ -171,7 +179,7 @@ void checkPositionReached() {
   bool overshot = fwd ? (signedDist < 0) : (signedDist > 0);
   int32_t distanceToGo = abs(signedDist);
 
-  if (overshot || distanceToGo <= 5) {
+  if (overshot || distanceToGo <= GOTOPOS_STOP_ENC_STEPS) {
     if (overshot) Serial.println("⚠ Overshoot rilevato — stop forzato");
     // forceStop() cuts power immediately — no deceleration ramp.
     // Safe here because we are already at MIN_SPEED_HZ (300 Hz ≈ 0.5 cm/s).
@@ -300,19 +308,24 @@ void processCommand(const char* command) {
     posActive = true;
     currentDynamicSpeed = GOTOPOS_MAX_HZ;
 
-    // Physics-based step calculation:
-    // Decel distance (steps) = v² / (2 * a) = GOTOPOS_MAX_HZ² / (2 * GOTOPOS_ACCEL)
-    // = 8400² / (2 * 6000) ≈ 5880 steps ≈ 7.8 cm
-    // We aim to hit the encoder target halfway through the decel zone.
-    // So the move() endpoint = encoder_target + decelSteps/2 steps past it.
-    // This guarantees the motor is already decelerating before the encoder fires forceStop().
-    int32_t baseSteps  = initialDist * (int32_t)STEPS_PER_ENC;
-    int32_t decelSteps = (int32_t)((float)GOTOPOS_MAX_HZ * (float)GOTOPOS_MAX_HZ
-                                   / (2.0f * (float)GOTOPOS_ACCEL));
-    int32_t steps = baseSteps + decelSteps / 2;
-    stepper->setSpeedInHz(GOTOPOS_MAX_HZ);
-    stepper->setAcceleration(GOTOPOS_ACCEL);
-    stepper->move(fwd ? steps : -steps);
+    if (initialDist > GOTOPOS_CREEP_DIST_ENC) {
+      // Phase 1: fast trapezoidal approach — stop naturally at the creep-zone entry,
+      // i.e. GOTOPOS_CREEP_DIST_ENC encoder pulses (4 cm) short of the final target.
+      gotoPhase2 = false;
+      int32_t phase1Steps = (initialDist - GOTOPOS_CREEP_DIST_ENC) * (int32_t)STEPS_PER_ENC;
+      stepper->setSpeedInHz(GOTOPOS_MAX_HZ);
+      stepper->setAcceleration(GOTOPOS_ACCEL);
+      stepper->move(fwd ? phase1Steps : -phase1Steps);
+      Serial.println("→ GOTOPOS fase 1 (approccio veloce)");
+    } else {
+      // Short move or already within 4 cm: go straight to creep speed.
+      gotoPhase2 = true;
+      int32_t phase2Steps = initialDist * (int32_t)STEPS_PER_ENC;
+      stepper->setSpeedInHz(GOTOPOS_CREEP_HZ);
+      stepper->setAcceleration(GOTOPOS_CREEP_ACCEL);
+      stepper->move(fwd ? phase2Steps : -phase2Steps);
+      Serial.println("→ GOTOPOS fase 2 diretta (distanza breve)");
+    }
 
     sendStatus();
     return;
@@ -472,6 +485,33 @@ void loop() {
   // Gestione movimento GOTOPOS
   if (mode == GOTOPOS && posActive) {
     checkPositionReached();
+
+    if (mode == GOTOPOS && !stepper->isRunning()) {
+      if (!gotoPhase2) {
+        // Phase 1 finished — motor stopped at creep-zone entry.
+        // Start phase 2: slow precise creep to the final target.
+        gotoPhase2 = true;
+        int32_t dist2 = encoderPosReceived ? getDistanceToGo() : 0;
+        Serial.print("→ GOTOPOS fase 2 (creep), dist rimanente=");
+        Serial.println(dist2);
+        if (dist2 <= GOTOPOS_STOP_ENC_STEPS) {
+          // Already close enough (encoder confirms arrival during phase 1).
+          stopMotion();
+          sendStatus();
+          Serial.println("✓ GOTOPOS completato (alla fine della fase 1)");
+        } else {
+          int32_t phase2Steps = dist2 * (int32_t)STEPS_PER_ENC;
+          stepper->setSpeedInHz(GOTOPOS_CREEP_HZ);
+          stepper->setAcceleration(GOTOPOS_CREEP_ACCEL);
+          stepper->move(fwd ? phase2Steps : -phase2Steps);
+        }
+      } else {
+        // Phase 2 finished naturally — motor stopped at or very near the target.
+        stopMotion();
+        sendStatus();
+        Serial.println("✓ GOTOPOS completato (fase 2 naturale)");
+      }
+    }
     
     // Monitoraggio posizione per debug (ogni 500ms)
     unsigned long now = millis();

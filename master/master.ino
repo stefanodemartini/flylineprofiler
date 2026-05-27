@@ -9,9 +9,9 @@
 // ===============================
 // FW
 // ===============================
-#define FIRMWARE_VERSION "0.4.4"
-#define FIRMWARE_DATE "2026-05-22"
-#define FIRMWARE_FEATURES "WiFi Manager + EMA + 0.01mm + UART Motor + Scan timer + Autostop + RicezioneON/OFF + GOTOPOS + Caliper timeout + Atomic encoder + Watchdog fixes + Scan state sync on connect + GOTOPOS chart overlay + encoder init fix"
+#define FIRMWARE_VERSION "0.4.5"
+#define FIRMWARE_DATE "2026-05-27"
+#define FIRMWARE_FEATURES "WiFi Manager + EMA + 0.01mm + UART Motor + Scan timer + Autostop + RicezioneON/OFF + GOTOPOS + Caliper timeout + Atomic encoder + Watchdog fixes + Scan state sync on connect + GOTOPOS chart overlay + encoder init fix + non-blocking caliper buffer + GOTOPOS overshoot safety guard"
 
 // -----------------------------
 #define ENCODER_DATA_PIN 12
@@ -66,6 +66,7 @@ const uint32_t SCAN_HZ_MAX  = 4000;            // headroom for spool growth comp
 uint32_t currentScanHz = SCAN_HZ_INIT;
 bool isGoToActive = false;
 float goToTargetCm = 0;
+bool goToFwd = true;                  // direction of current GOTOPOS move (saved for overshoot guard)
 unsigned long lastGoToStatusCheck = 0;
 bool goToEncoderReached = false;  // set when encoder reaches target; used to send completed:true
 static unsigned long lastPosSentMs = 0;  // throttle POS:<steps> updates to slave
@@ -391,6 +392,7 @@ void goToPosition(float targetCm) {
   motorQueueTx(cmd);
   
   goToTargetCm = targetCm;
+  goToFwd = direction;
   isGoToActive = true;
   goToEncoderReached = false;
   lastGoToStatusCheck = 0;
@@ -1544,11 +1546,14 @@ void loop() {
     Serial.print(",");
     Serial.println(displayValue, 2);
   } else if (isGoToActive) {
-    // Encoder-based GOTOPOS tracking — authoritative stop trigger
     float floatCm = (float)encSnap / PULSES_PER_CM - 2.0f;
-    if (!goToEncoderReached && abs(floatCm - goToTargetCm) <= 0.5f) {
+
+    // Safety-only overshoot guard: if encoder went MORE than 1 cm past target, force stop.
+    // Under normal operation the slave's natural deceleration stops the motor before this fires.
+    if (!goToEncoderReached && (goToFwd ? (floatCm > goToTargetCm + 1.0f) : (floatCm < goToTargetCm - 1.0f))) {
       goToEncoderReached = true;
-      motorQueueTx("STOP");  // encoder says we're there — stop the motor
+      motorQueueTx("STOP");
+      Serial.println("⚠ GOTOPOS: overshoot safety stop");
     }
 
     // Stream encoder position to slave every 100 ms so slave uses encoder
