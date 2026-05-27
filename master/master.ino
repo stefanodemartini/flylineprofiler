@@ -9,7 +9,7 @@
 // ===============================
 // FW
 // ===============================
-#define FIRMWARE_VERSION "0.4.12"
+#define FIRMWARE_VERSION "0.4.13"
 #define FIRMWARE_DATE "2026-05-27"
 #define FIRMWARE_FEATURES "WiFi Manager + EMA + 0.01mm + UART Motor + Scan timer + Autostop + RicezioneON/OFF + GOTOPOS + Caliper timeout + Atomic encoder + Watchdog fixes + Scan state sync on connect + GOTOPOS chart overlay + encoder init fix + non-blocking caliper buffer + GOTOPOS overshoot safety guard + mirrored profile chart + encoder-diameter position correction"
 
@@ -671,6 +671,7 @@ void setup() {
             <button onclick="resetChart()">Reset Grafico</button>
             <button onclick="exportCurrentScan()">Esporta Scansione</button>
             <button onclick="exportAllDatasets()">Esporta Tutti i Dataset</button>
+            <button onclick="exportChartPng()">Esporta PNG</button>
             <button onclick="toggleAutoScale()">Auto-Fit: <span id="autoScaleStatus">ON</span></button>
             <button class="danger" onclick="sendCommand('reset')">Reset Lunghezza e Dati</button>
         </div>
@@ -1615,6 +1616,17 @@ void setup() {
         document.body.appendChild(a); a.click();
         document.body.removeChild(a);
         window.URL.revokeObjectURL(url);
+    }
+
+    function exportChartPng() {
+        if (!chart) { showCommandStatus('Grafico non disponibile', true); return; }
+        const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        const a = document.createElement('a');
+        a.href = chart.toBase64Image('image/png', 1.0);
+        a.download = `profilo_${ts}.png`;
+        document.body.appendChild(a); a.click();
+        document.body.removeChild(a);
+        showCommandStatus('Immagine esportata');
     }
 
     function toggleAutoScale() {
