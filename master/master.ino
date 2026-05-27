@@ -9,7 +9,7 @@
 // ===============================
 // FW
 // ===============================
-#define FIRMWARE_VERSION "0.4.6"
+#define FIRMWARE_VERSION "0.4.7"
 #define FIRMWARE_DATE "2026-05-27"
 #define FIRMWARE_FEATURES "WiFi Manager + EMA + 0.01mm + UART Motor + Scan timer + Autostop + RicezioneON/OFF + GOTOPOS + Caliper timeout + Atomic encoder + Watchdog fixes + Scan state sync on connect + GOTOPOS chart overlay + encoder init fix + non-blocking caliper buffer + GOTOPOS overshoot safety guard + mirrored profile chart"
 
@@ -635,7 +635,8 @@ void setup() {
             <span id="alphaVal">0</span>
             </label>
             <button onclick="resetChart()">Reset Grafico</button>
-            <button onclick="exportAllData()">Esporta Tutti i Dati CSV</button>
+            <button onclick="exportCurrentScan()">Esporta Scansione</button>
+            <button onclick="exportAllDatasets()">Esporta Tutti i Dataset</button>
             <button onclick="toggleAutoScale()">Auto-Fit: <span id="autoScaleStatus">ON</span></button>
             <button class="danger" onclick="sendCommand('reset')">Reset Lunghezza e Dati</button>
         </div>
@@ -1361,18 +1362,59 @@ void setup() {
         showCommandStatus('Grafico resettato');
     }
 
-    function exportAllData() {
-        let csv = "Lunghezza cm,Diametro mm (grafico)\n";
-        dataPoints.forEach(point => {
-            csv += point.x.toFixed(1) + "," + point.y.toFixed(3) + "\n";
+    // Export live scan only (raw dataPoints, positive values, no mirror)
+    function exportCurrentScan() {
+        if (dataPoints.length === 0) { showCommandStatus('Nessun dato da esportare', true); return; }
+        let csv = "Lunghezza cm,Diametro mm\n";
+        dataPoints.forEach(p => { csv += p.x.toFixed(1) + "," + p.y.toFixed(3) + "\n"; });
+        triggerDownload(csv, 'scansione.csv');
+        showCommandStatus('Scansione esportata (' + dataPoints.length + ' punti)');
+    }
+
+    // Export all visible datasets in aligned columns — one row per unique x position.
+    // Positions missing in a dataset are left blank.
+    function exportAllDatasets() {
+        // Collect visible sources: live scan + uploaded datasets that are visible
+        const sources = [];
+        if (dataPoints.length > 0) sources.push({ name: 'Diametro Compensato (mm)', data: dataPoints });
+        uploadedDatasets.forEach(ds => {
+            if (ds.visible) sources.push({ name: ds.name, data: ds.data });
         });
-        const blob = new Blob([csv], { type: 'text/csv' });
+        if (sources.length === 0) { showCommandStatus('Nessun dataset visibile da esportare', true); return; }
+
+        // Build sorted union of all x values
+        const xSet = new Set();
+        sources.forEach(s => s.data.forEach(p => xSet.add(p.x)));
+        const xValues = Array.from(xSet).sort((a, b) => a - b);
+
+        // Build lookup maps {x → y} for each source
+        const maps = sources.map(s => {
+            const m = new Map();
+            s.data.forEach(p => m.set(p.x, p.y));
+            return m;
+        });
+
+        // Header
+        let csv = "Lunghezza cm," + sources.map(s => `"${s.name}"`).join(",") + "\n";
+
+        // Rows — blank cell when a dataset has no point at that x
+        xValues.forEach(x => {
+            const row = [x.toFixed(1)];
+            maps.forEach(m => row.push(m.has(x) ? m.get(x).toFixed(3) : ''));
+            csv += row.join(",") + "\n";
+        });
+
+        const ts = new Date().toISOString().slice(0,16).replace('T','_').replace(':','h');
+        triggerDownload(csv, `profilo_${ts}.csv`);
+        showCommandStatus(`Esportati ${sources.length} dataset, ${xValues.length} posizioni`);
+    }
+
+    function triggerDownload(content, filename) {
+        const blob = new Blob([content], { type: 'text/csv' });
         const url = window.URL.createObjectURL(blob);
         const a = document.createElement('a');
-        a.href = url;
-        a.download = 'diametrolinea_grafico.csv';
-        document.body.appendChild(a);
-        a.click();
+        a.href = url; a.download = filename;
+        document.body.appendChild(a); a.click();
         document.body.removeChild(a);
         window.URL.revokeObjectURL(url);
     }
