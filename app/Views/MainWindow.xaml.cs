@@ -164,6 +164,9 @@ public partial class MainWindow : Fluent.RibbonWindow, INotifyPropertyChanged
                 double[] topYs = displayedYs.Select(y => y / 2.0).ToArray();
                 double[] botYs = displayedYs.Select(y => -y / 2.0).ToArray();
 
+                // Filled gradient band simulating a round solid cross-section
+                DrawLineFill(plot, xs, topYs, botYs, col);
+
                 var top = plot.Add.Scatter(xs, topYs);
                 top.LegendText = "Profilo";
                 top.LineWidth  = lw;
@@ -219,11 +222,13 @@ public partial class MainWindow : Fluent.RibbonWindow, INotifyPropertyChanged
             }
         }
 
-        // Imported comparison series — also mirrored
+        // Imported comparison series — also mirrored with fill
         foreach (var series in _importedSeries)
         {
             double[] halfYs = series.Ys.Select(y =>  y / 2.0).ToArray();
             double[] negYs  = series.Ys.Select(y => -y / 2.0).ToArray();
+
+            DrawLineFill(plot, series.Xs, halfYs, negYs, series.Color);
 
             var top = plot.Add.Scatter(series.Xs, halfYs);
             top.LegendText = series.Name;
@@ -247,6 +252,42 @@ public partial class MainWindow : Fluent.RibbonWindow, INotifyPropertyChanged
         if (_autoFitEnabled) plot.Axes.AutoScale();
         PlotControl.Refresh();
         RefreshStatusBar();
+    }
+
+    /// <summary>
+    /// Draws a filled band between topYs and botYs with a layered gradient that
+    /// simulates the cross-section of a round solid (fly line), giving a "sfumatura"
+    /// cylindrical appearance: darker body at the edges, lighter highlight at centre.
+    /// </summary>
+    private static void DrawLineFill(ScottPlot.Plot plot,
+                                     double[] xs, double[] topYs, double[] botYs,
+                                     ScottPlot.Color bodyColor)
+    {
+        if (xs.Length < 2) return;
+
+        // Build a closed polygon for a given fraction of the full radius on each side.
+        ScottPlot.Coordinates[] Band(double fraction)
+        {
+            var top = xs.Select((x, i) => new ScottPlot.Coordinates(x,  topYs[i] * fraction));
+            var bot = xs.Select((x, i) => new ScottPlot.Coordinates(x,  botYs[i] * fraction))
+                        .Reverse();
+            return top.Concat(bot).ToArray();
+        }
+
+        // Layer 1 — full extent: body colour, semi-transparent (dark edges implied by absence of highlight)
+        var body = plot.Add.Polygon(Band(1.0));
+        body.FillColor = bodyColor.WithAlpha(0.50f);
+        body.LineWidth = 0;
+
+        // Layer 2 — inner 60% of radius: lighter tint, softens the mid-zone
+        var mid = plot.Add.Polygon(Band(0.60));
+        mid.FillColor = Colors.White.WithAlpha(0.14f);
+        mid.LineWidth = 0;
+
+        // Layer 3 — inner 25% of radius: stronger highlight simulating specular top surface
+        var hi = plot.Add.Polygon(Band(0.25));
+        hi.FillColor = Colors.White.WithAlpha(0.22f);
+        hi.LineWidth = 0;
     }
 
     private double[] GetDisplayedSeries(IReadOnlyList<MeasurementPoint> points)
