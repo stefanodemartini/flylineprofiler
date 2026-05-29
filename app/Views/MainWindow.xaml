@@ -657,7 +657,7 @@
                 </StackPanel>
             </Expander.Header>
 
-            <Grid Height="190" Margin="0,2,0,0">
+            <Grid Height="200" Margin="0,2,0,0">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="240"/>
                     <ColumnDefinition Width="*"/>
@@ -688,7 +688,7 @@
                     </DataGrid>
                 </Border>
 
-                <!-- Read-only segments table -->
+                <!-- Segment table -->
                 <Border Grid.Column="1"
                         BorderBrush="{StaticResource BorderBrush2}"
                         BorderThickness="1">
@@ -696,37 +696,49 @@
                               Style="{StaticResource DarkGrid}"
                               ItemsSource="{Binding ElementName=MainWin, Path=ProjectSegments}"
                               AutoGenerateColumns="False"
-                              IsReadOnly="True"
+                              IsReadOnly="False"
                               CanUserAddRows="False"
-                              CanUserDeleteRows="False">
+                              CanUserDeleteRows="False"
+                              RowEditEnding="SegmentsDataGrid_RowEditEnding">
                         <DataGrid.Columns>
                             <DataGridTextColumn Header="#"
                                                Binding="{Binding Index}"
-                                               Width="30"/>
-                            <DataGridTextColumn Header="Start cm"
-                                               Binding="{Binding StartCm, StringFormat='0.0'}"
-                                               Width="65"/>
-                            <DataGridTextColumn Header="End cm"
-                                               Binding="{Binding EndCm, StringFormat='0.0'}"
-                                               Width="65"/>
-                            <DataGridTextColumn Header="Length cm"
-                                               Binding="{Binding LengthCm, StringFormat='0.0'}"
-                                               Width="70"/>
-                            <DataGridTextColumn Header="Start mm"
+                                               Width="28"
+                                               IsReadOnly="True"/>
+                            <DataGridTextColumn Header="Name"
+                                               Binding="{Binding Name, UpdateSourceTrigger=PropertyChanged}"
+                                               Width="90"/>
+                            <DataGridTextColumn Header="Start Ø (mm)"
                                                Binding="{Binding StartDiameterMm, StringFormat='0.000'}"
-                                               Width="70"/>
-                            <DataGridTextColumn Header="End mm"
+                                               Width="88"
+                                               IsReadOnly="True"/>
+                            <DataGridTextColumn Header="End Ø (mm)"
                                                Binding="{Binding EndDiameterMm, StringFormat='0.000'}"
-                                               Width="70"/>
+                                               Width="80"
+                                               IsReadOnly="True"/>
+                            <DataGridTextColumn Header="Length (cm)"
+                                               Binding="{Binding LengthCm, StringFormat='0.0'}"
+                                               Width="80"
+                                               IsReadOnly="True"/>
                             <DataGridTextColumn Header="Shape"
                                                Binding="{Binding Shape}"
-                                               Width="70"/>
-                            <DataGridTextColumn Header="Taper mm/m"
+                                               Width="65"
+                                               IsReadOnly="True"/>
+                            <DataGridTextColumn Header="Taper (mm/m)"
                                                Binding="{Binding TaperText}"
-                                               Width="90"/>
-                            <DataGridTextColumn Header="Volume cm3"
+                                               Width="90"
+                                               IsReadOnly="True"/>
+                            <DataGridTextColumn Header="Volume (cm³)"
                                                Binding="{Binding VolumeText}"
-                                               Width="80"/>
+                                               Width="82"
+                                               IsReadOnly="True"/>
+                            <DataGridTextColumn Header="Sp.W. (g/cm³)"
+                                               Binding="{Binding SpecWeightGCm3, StringFormat='0.000', UpdateSourceTrigger=PropertyChanged}"
+                                               Width="95"/>
+                            <DataGridTextColumn Header="Mass (g)"
+                                               Binding="{Binding MassText}"
+                                               Width="70"
+                                               IsReadOnly="True"/>
                         </DataGrid.Columns>
                     </DataGrid>
                 </Border>

@@ -12,9 +12,11 @@ public class FlyLineProject
     public DateTime ModifiedAt { get; set; } = DateTime.UtcNow;
     public string   Notes      { get; set; } = string.Empty;
 
-    public List<MeasurementPoint>      ScanPoints     { get; set; } = new();
-    public List<ProjectImportedSeries> ImportedSeries { get; set; } = new();
-    public List<ProjectDesignNode>     DesignNodes    { get; set; } = new();
+    public List<MeasurementPoint>      ScanPoints      { get; set; } = new();
+    public List<ProjectImportedSeries> ImportedSeries  { get; set; } = new();
+    public List<ProjectDesignNode>     DesignNodes     { get; set; } = new();
+    /// <summary>Persists user-edited segment names and specific weights across saves.</summary>
+    public List<ProjectSegmentMeta>    SegmentMetadata { get; set; } = new();
 }
 
 public class ProjectImportedSeries
@@ -30,4 +32,12 @@ public class ProjectDesignNode
 {
     public double X { get; set; }   // position in cm
     public double Y { get; set; }   // full diameter in mm
+}
+
+public class ProjectSegmentMeta
+{
+    public double StartCm    { get; set; }
+    public double EndCm      { get; set; }
+    public string Name       { get; set; } = string.Empty;
+    public double SpecWeight { get; set; } = 0.0;
 }

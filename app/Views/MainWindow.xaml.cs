@@ -53,6 +53,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private string  _projectName        = "Untitled";
     private DateTime _projectCreatedAt  = DateTime.UtcNow;
 
+    // Persists user-edited segment names and specific weights across RefreshSegmentTable() calls.
+    // Key: (StartCm, EndCm) — survives as long as the segment boundaries don't move.
+    private readonly Dictionary<(double, double), (string Name, double SpecWeight)> _segmentMetadata = new();
+
     public event PropertyChangedEventHandler? PropertyChanged;
 
     public string UiStatus
@@ -338,6 +342,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _importedSeries.Clear();
         _segmentNodes.Clear();
         _segmentUndoStack.Clear();
+        _segmentMetadata.Clear();
         ProjectSegments.Clear();
         DesignNodes.Clear();
         TotalVolumeText = string.Empty;
@@ -367,7 +372,16 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             DesignNodes = _segmentNodes
                             .OrderBy(n => n.X)
                             .Select(n => new ProjectDesignNode { X = n.X, Y = n.Y })
-                            .ToList()
+                            .ToList(),
+            SegmentMetadata = ProjectSegments
+                                .Select(s => new ProjectSegmentMeta
+                                {
+                                    StartCm    = s.StartCm,
+                                    EndCm      = s.EndCm,
+                                    Name       = s.Name,
+                                    SpecWeight = s.SpecWeightGCm3
+                                })
+                                .ToList()
         };
 
         ProjectService.Save(project, path);
@@ -400,6 +414,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         foreach (var n in project.DesignNodes)
             _segmentNodes.Add((n.X, n.Y));
+
+        // Restore segment metadata (names, spec weights)
+        _segmentMetadata.Clear();
+        foreach (var m in project.SegmentMetadata)
+            _segmentMetadata[(m.StartCm, m.EndCm)] = (m.Name, m.SpecWeight);
 
         _projectName        = project.Name;
         _projectCreatedAt   = project.CreatedAt;
@@ -682,24 +701,46 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     /// </summary>
     private void RefreshSegmentTable()
     {
+        // Save current user edits (name, spec weight) before clearing
+        foreach (var seg in ProjectSegments)
+            _segmentMetadata[(seg.StartCm, seg.EndCm)] = (seg.Name, seg.SpecWeightGCm3);
+
         ProjectSegments.Clear();
 
         var sorted = _segmentNodes.OrderBy(n => n.X).ToList();
         for (int i = 0; i < sorted.Count - 1; i++)
         {
-            ProjectSegments.Add(new ProjectSegment
+            var seg = new ProjectSegment
             {
-                Index            = i + 1,
-                StartCm          = sorted[i].X,
-                EndCm            = sorted[i + 1].X,
-                StartDiameterMm  = sorted[i].Y,
-                EndDiameterMm    = sorted[i + 1].Y,
-            });
+                Index           = i + 1,
+                StartCm         = sorted[i].X,
+                EndCm           = sorted[i + 1].X,
+                StartDiameterMm = sorted[i].Y,
+                EndDiameterMm   = sorted[i + 1].Y,
+            };
+
+            // Restore name and spec weight from metadata dict
+            if (_segmentMetadata.TryGetValue((seg.StartCm, seg.EndCm), out var meta))
+            {
+                seg.Name            = meta.Name;
+                seg.SpecWeightGCm3  = meta.SpecWeight;
+            }
+            else
+            {
+                seg.Name = $"S{i + 1}";
+            }
+
+            ProjectSegments.Add(seg);
         }
 
-        double totalCm3 = ProjectSegments.Sum(s => s.VolumeMm3) / 1000.0;
+        double totalCm3  = ProjectSegments.Sum(s => s.VolumeCm3);
+        bool   hasMass   = ProjectSegments.Count > 0 && ProjectSegments.All(s => s.SpecWeightGCm3 > 0);
+        double totalMassG = hasMass ? ProjectSegments.Sum(s => s.MassG) : 0;
+
         TotalVolumeText = ProjectSegments.Count > 0
-            ? $"Total volume: {totalCm3:0.00} cm\u00b3  ({ProjectSegments.Count} segments)"
+            ? hasMass
+                ? $"Total: {totalCm3:0.00} cm³  |  {totalMassG:0.00} g  |  {ProjectSegments.Count} segments"
+                : $"Total: {totalCm3:0.00} cm³  |  {ProjectSegments.Count} segments"
             : string.Empty;
 
         // Keep the editable node DataGrid in sync
@@ -1503,6 +1544,25 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private void FitView_Click(object sender, RoutedEventArgs e)
     {
         FitAfterRefresh();
+    }
+
+    private void SegmentsDataGrid_RowEditEnding(object sender, DataGridRowEditEndingEventArgs e)
+    {
+        // Refresh totals after the binding commits (on next dispatcher cycle)
+        Dispatcher.BeginInvoke(() =>
+        {
+            double totalCm3  = ProjectSegments.Sum(s => s.VolumeCm3);
+            bool   hasMass   = ProjectSegments.Count > 0 && ProjectSegments.All(s => s.SpecWeightGCm3 > 0);
+            double totalMassG = hasMass ? ProjectSegments.Sum(s => s.MassG) : 0;
+
+            TotalVolumeText = ProjectSegments.Count > 0
+                ? hasMass
+                    ? $"Total: {totalCm3:0.00} cm³  |  {totalMassG:0.00} g  |  {ProjectSegments.Count} segments"
+                    : $"Total: {totalCm3:0.00} cm³  |  {ProjectSegments.Count} segments"
+                : string.Empty;
+
+            MarkDirty();
+        });
     }
 
     private void Settings_Click(object sender, RoutedEventArgs e)
