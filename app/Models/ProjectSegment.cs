@@ -13,11 +13,23 @@ public class ProjectSegment : INotifyPropertyChanged
     private void Notify(string name) =>
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 
-    public int    Index            { get; init; }
-    public double StartCm         { get; init; }
-    public double EndCm           { get; init; }
-    public double StartDiameterMm { get; init; }
-    public double EndDiameterMm   { get; init; }
+    public int    Index   { get; init; }
+    public double StartCm { get; init; }
+    public double EndCm   { get; init; }
+
+    private double _startDiameterMm;
+    public double StartDiameterMm
+    {
+        get => _startDiameterMm;
+        set { if (Math.Abs(_startDiameterMm - value) > 1e-9) { _startDiameterMm = value; Notify(nameof(StartDiameterMm)); Notify(nameof(VolumeCm3)); Notify(nameof(VolumeText)); Notify(nameof(MassG)); Notify(nameof(MassText)); Notify(nameof(Shape)); Notify(nameof(TaperText)); } }
+    }
+
+    private double _endDiameterMm;
+    public double EndDiameterMm
+    {
+        get => _endDiameterMm;
+        set { if (Math.Abs(_endDiameterMm - value) > 1e-9) { _endDiameterMm = value; Notify(nameof(EndDiameterMm)); Notify(nameof(VolumeCm3)); Notify(nameof(VolumeText)); Notify(nameof(MassG)); Notify(nameof(MassText)); Notify(nameof(Shape)); Notify(nameof(TaperText)); } }
+    }
 
     private string _name = string.Empty;
     public string Name
