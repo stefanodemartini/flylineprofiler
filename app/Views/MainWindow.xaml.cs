@@ -274,15 +274,19 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         plot.YLabel("Diametro (mm)");
         plot.ShowLegend();
 
-        // ScottPlot 5: first Refresh() processes plottable extents,
-        // then AutoScale() can correctly compute bounds, then a second Refresh() applies them.
+        if (_autoFitEnabled) plot.Axes.AutoScale();
         PlotControl.Refresh();
-        if (_autoFitEnabled)
-        {
-            plot.Axes.AutoScale();
-            PlotControl.Refresh();
-        }
         RefreshStatusBar();
+    }
+
+    // ScottPlot 5 WPF: Refresh() dispatches async via InvalidateVisual, so AutoScale()
+    // called inside RefreshPlot doesn't always compute correct bounds before the render.
+    // Call this after RefreshPlot() in operations that must guarantee the view fits the data.
+    private void FitAfterRefresh()
+    {
+        if (!_autoFitEnabled) return;
+        PlotControl.Plot.Axes.AutoScale();
+        PlotControl.Refresh();
     }
 
     /// <summary>
@@ -528,6 +532,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _segmentUndoStack.Push(snappedX);
 
         RefreshPlot();
+        FitAfterRefresh();
         RefreshSegmentTable();
         var hint = (Keyboard.IsKeyDown(Key.LeftShift) || Keyboard.IsKeyDown(Key.RightShift))
                    ? "  [SHIFT — level]" : string.Empty;
@@ -555,6 +560,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _draggingNodeX = newX;
 
         RefreshPlot();
+        FitAfterRefresh();
         RefreshSegmentTable();
         UiStatus = $"Node: {newX:0} cm  Ø {newDiameter:0.000} mm";
         e.Handled = true;
@@ -1083,6 +1089,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             _lastImportedFile = Path.GetFileName(dlg.FileName);
             UiStatus = $"CSV imported: {series.Name} ({series.Xs.Length} points)";
             RefreshPlot();
+            FitAfterRefresh();
             MessageBox.Show($"CSV imported: {series.Name} ({series.Xs.Length} points)", "Import CSV");
         }
         catch (Exception ex)
