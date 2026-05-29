@@ -519,6 +519,22 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
     }
 
+    private void CloseProject_Click(object sender, RoutedEventArgs e)
+    {
+        if (!ConfirmDiscardIfDirty()) return;
+
+        ClearProjectState();
+        _projectName        = "Untitled";
+        _projectCreatedAt   = DateTime.UtcNow;
+        _currentProjectPath = null;
+        _isDirty            = false;
+
+        RefreshPlot();
+        RefreshStatusBar();
+        UpdateProjectTitle();
+        UiStatus = "Project closed";
+    }
+
     private void SaveProjectAs_Click(object sender, RoutedEventArgs e)
     {
         Directory.CreateDirectory(ProjectService.DefaultProjectFolder);

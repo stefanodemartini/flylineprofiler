@@ -244,6 +244,10 @@
                             Style="{StaticResource BtnGhost}"
                             Click="SaveProjectAs_Click"
                             ToolTip="Save project as…"/>
+                    <Button Content="Close"
+                            Style="{StaticResource BtnGhost}"
+                            Click="CloseProject_Click"
+                            ToolTip="Close project"/>
                     <Separator Style="{StaticResource ToolSep}"/>
                     <TextBlock x:Name="ProjectNameText"
                                FontSize="13" FontWeight="SemiBold"
