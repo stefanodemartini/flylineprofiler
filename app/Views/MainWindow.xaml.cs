@@ -301,18 +301,21 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         // Layer 1 — full extent: body colour, semi-transparent (dark edges implied by absence of highlight)
         var body = plot.Add.Polygon(Band(1.0));
-        body.FillColor = bodyColor.WithAlpha(0.50f);
-        body.LineWidth = 0;
+        body.FillColor  = bodyColor.WithAlpha(0.50f);
+        body.LineWidth  = 0;
+        body.LineColor  = Colors.Transparent;
 
         // Layer 2 — inner 60% of radius: lighter tint, softens the mid-zone
         var mid = plot.Add.Polygon(Band(0.60));
         mid.FillColor = Colors.White.WithAlpha(0.14f);
         mid.LineWidth = 0;
+        mid.LineColor = Colors.Transparent;
 
         // Layer 3 — inner 25% of radius: stronger highlight simulating specular top surface
         var hi = plot.Add.Polygon(Band(0.25));
         hi.FillColor = Colors.White.WithAlpha(0.22f);
         hi.LineWidth = 0;
+        hi.LineColor = Colors.Transparent;
     }
 
     private double[] GetDisplayedSeries(IReadOnlyList<MeasurementPoint> points)
