@@ -140,6 +140,56 @@
             <Setter Property="Foreground" Value="{StaticResource Accent}"/>
         </Style>
 
+        <!-- Dark DataGrid shared style -->
+        <Style x:Key="DarkGrid" TargetType="DataGrid">
+            <Setter Property="Background"              Value="{StaticResource PanelBg}"/>
+            <Setter Property="Foreground"              Value="{StaticResource TextPrimary}"/>
+            <Setter Property="BorderBrush"             Value="{StaticResource BorderBrush2}"/>
+            <Setter Property="BorderThickness"         Value="1"/>
+            <Setter Property="RowBackground"           Value="{StaticResource PanelBg}"/>
+            <Setter Property="AlternatingRowBackground" Value="{StaticResource CardBg}"/>
+            <Setter Property="GridLinesVisibility"     Value="Horizontal"/>
+            <Setter Property="HorizontalGridLinesBrush" Value="#2E3548"/>
+            <Setter Property="ColumnHeaderHeight"      Value="26"/>
+            <Setter Property="FontSize"                Value="11"/>
+            <Setter Property="FontFamily"              Value="Consolas"/>
+            <Setter Property="SelectionMode"           Value="Single"/>
+            <Setter Property="SelectionUnit"           Value="FullRow"/>
+            <Setter Property="VerticalScrollBarVisibility"   Value="Auto"/>
+            <Setter Property="HorizontalScrollBarVisibility" Value="Auto"/>
+        </Style>
+
+        <Style TargetType="DataGridColumnHeader">
+            <Setter Property="Background"     Value="{StaticResource CardBg}"/>
+            <Setter Property="Foreground"     Value="{StaticResource TextMuted}"/>
+            <Setter Property="FontWeight"     Value="SemiBold"/>
+            <Setter Property="FontSize"       Value="11"/>
+            <Setter Property="Padding"        Value="6,4"/>
+            <Setter Property="BorderBrush"    Value="{StaticResource BorderBrush2}"/>
+            <Setter Property="BorderThickness" Value="0,0,1,1"/>
+        </Style>
+
+        <Style TargetType="DataGridRow">
+            <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
+            <Style.Triggers>
+                <Trigger Property="IsSelected" Value="True">
+                    <Setter Property="Background" Value="{StaticResource AccentDim}"/>
+                    <Setter Property="Foreground" Value="White"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style TargetType="DataGridCell">
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding"         Value="6,3"/>
+            <Style.Triggers>
+                <Trigger Property="IsSelected" Value="True">
+                    <Setter Property="Background" Value="Transparent"/>
+                    <Setter Property="Foreground" Value="White"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
     </Window.Resources>
 
     <Grid>
@@ -148,6 +198,7 @@
             <RowDefinition Height="52"/>
             <RowDefinition Height="72"/>
             <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="28"/>
         </Grid.RowDefinitions>
@@ -309,6 +360,19 @@
                     <Button Content="Export Seg. CSV"
                             Style="{StaticResource BtnGhost}"
                             Click="ExportSegmentsCsv_Click"/>
+
+                    <Separator Style="{StaticResource ToolSep}"/>
+
+                    <ToggleButton x:Name="ShowScanToggle"
+                                  Content="Show Scan"
+                                  Style="{StaticResource ToggleBase}"
+                                  IsChecked="True"
+                                  Click="ShowScanLayer_Click"/>
+                    <ToggleButton x:Name="ShowDesignToggle"
+                                  Content="Show Design"
+                                  Style="{StaticResource ToggleBase}"
+                                  IsChecked="True"
+                                  Click="ShowDesignLayer_Click"/>
 
                     <Separator Style="{StaticResource ToolSep}"/>
 
@@ -536,8 +600,102 @@
             </Border>
         </Expander>
 
+        <!-- Project panel: Design nodes + Segment table with volumes -->
+        <Expander Grid.Row="5"
+                  Margin="12,4,12,0"
+                  IsExpanded="False">
+            <Expander.Header>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Text="Design Project"
+                               FontSize="12" FontWeight="SemiBold"
+                               Foreground="{StaticResource TextMuted}"
+                               VerticalAlignment="Center"
+                               Margin="0,0,20,0"/>
+                    <TextBlock Text="{Binding ElementName=MainWin, Path=TotalVolumeText}"
+                               FontSize="11" FontWeight="SemiBold"
+                               Foreground="{StaticResource Success}"
+                               VerticalAlignment="Center"/>
+                </StackPanel>
+            </Expander.Header>
+
+            <Grid Height="190" Margin="0,2,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="240"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+
+                <!-- Editable nodes DataGrid -->
+                <Border Grid.Column="0"
+                        BorderBrush="{StaticResource BorderBrush2}"
+                        BorderThickness="1"
+                        Margin="0,0,4,0">
+                    <DataGrid x:Name="NodesDataGrid"
+                              Style="{StaticResource DarkGrid}"
+                              ItemsSource="{Binding ElementName=MainWin, Path=DesignNodes}"
+                              AutoGenerateColumns="False"
+                              CanUserAddRows="True"
+                              CanUserDeleteRows="True"
+                              CellEditEnding="NodesDataGrid_CellEditEnding"
+                              PreviewKeyDown="NodesDataGrid_PreviewKeyDown"
+                              ToolTip="Double-click chart nodes to edit. Or type here directly.">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Position (cm)"
+                                               Binding="{Binding PositionCm, StringFormat='0.0'}"
+                                               Width="*"/>
+                            <DataGridTextColumn Header="Diameter (mm)"
+                                               Binding="{Binding DiameterMm, StringFormat='0.000'}"
+                                               Width="*"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </Border>
+
+                <!-- Read-only segments table -->
+                <Border Grid.Column="1"
+                        BorderBrush="{StaticResource BorderBrush2}"
+                        BorderThickness="1">
+                    <DataGrid x:Name="SegmentsDataGrid"
+                              Style="{StaticResource DarkGrid}"
+                              ItemsSource="{Binding ElementName=MainWin, Path=ProjectSegments}"
+                              AutoGenerateColumns="False"
+                              IsReadOnly="True"
+                              CanUserAddRows="False"
+                              CanUserDeleteRows="False">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="#"
+                                               Binding="{Binding Index}"
+                                               Width="30"/>
+                            <DataGridTextColumn Header="Start cm"
+                                               Binding="{Binding StartCm, StringFormat='0.0'}"
+                                               Width="65"/>
+                            <DataGridTextColumn Header="End cm"
+                                               Binding="{Binding EndCm, StringFormat='0.0'}"
+                                               Width="65"/>
+                            <DataGridTextColumn Header="Length cm"
+                                               Binding="{Binding LengthCm, StringFormat='0.0'}"
+                                               Width="70"/>
+                            <DataGridTextColumn Header="Start mm"
+                                               Binding="{Binding StartDiameterMm, StringFormat='0.000'}"
+                                               Width="70"/>
+                            <DataGridTextColumn Header="End mm"
+                                               Binding="{Binding EndDiameterMm, StringFormat='0.000'}"
+                                               Width="70"/>
+                            <DataGridTextColumn Header="Shape"
+                                               Binding="{Binding Shape}"
+                                               Width="70"/>
+                            <DataGridTextColumn Header="Taper mm/m"
+                                               Binding="{Binding TaperText}"
+                                               Width="90"/>
+                            <DataGridTextColumn Header="Volume cm3"
+                                               Binding="{Binding VolumeText}"
+                                               Width="80"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </Border>
+            </Grid>
+        </Expander>
+
         <!-- Status bar -->
-        <Border Grid.Row="5"
+        <Border Grid.Row="6"
                 Background="{StaticResource PanelBg}"
                 BorderBrush="{StaticResource BorderBrush2}"
                 BorderThickness="0,1,0,0"

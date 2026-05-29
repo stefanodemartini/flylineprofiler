@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Globalization;
@@ -23,12 +24,23 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private bool _chartControlsInitialized = false;
     private readonly List<ImportedSeries> _importedSeries = new();
     private string _lastImportedFile = "-";
-    private string _uiStatus = "Pronto";
+    private string _uiStatus = "Ready";
 
-    // Segment drawing
+    // Layer visibility
+    private bool _showScanLayer   = true;
+    private bool _showDesignLayer = true;
+
+    // Segment drawing — node.Y stores FULL DIAMETER in mm (not radius)
     private readonly List<(double X, double Y)> _segmentNodes = new();
     private readonly Stack<double> _segmentUndoStack = new();
     private bool _segmentDrawMode = false;
+
+    // Segment table (bound to Project DataGrid in XAML)
+    public ObservableCollection<ProjectSegment> ProjectSegments { get; } = new();
+
+    // Node table — editable DataGrid in Project panel (also bound in XAML)
+    public ObservableCollection<DesignNode> DesignNodes { get; } = new();
+    private bool _syncingNodes = false;
 
     // Drag state — null when not dragging
     private double? _draggingNodeX = null;   // original X of the node being dragged
@@ -160,7 +172,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         var pts = _vm.Points.OrderBy(p => p.X).ToList();
         var displayedYs = GetDisplayedSeries(pts);  // full diameters
 
-        if (pts.Count > 0)
+        if (_showScanLayer && pts.Count > 0)
         {
             double[] xs = pts.Select(p => p.X).ToArray();
 
@@ -178,7 +190,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 DrawLineFill(plot, xs, topYs, botYs, col);
 
                 var top = plot.Add.Scatter(xs, topYs);
-                top.LegendText = "Profilo";
+                top.LegendText = "Scan";
                 top.LineWidth  = lw;
                 top.MarkerSize = 0;
                 top.Color      = col;
@@ -194,15 +206,14 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             {
                 var rawAlpha = (float)Math.Clamp(_vm.Settings.Chart.RawOpacity, 0.0, 1.0);
                 var rawCol   = Colors.Orange.WithAlpha(rawAlpha);
-                double[] rxs = xs;
 
-                var rawTop = plot.Add.Scatter(rxs, pts.Select(p =>  p.RawY / 2.0).ToArray());
+                var rawTop = plot.Add.Scatter(xs, pts.Select(p =>  p.RawY / 2.0).ToArray());
                 rawTop.LegendText = "Raw";
                 rawTop.LineWidth  = 1;
                 rawTop.MarkerSize = 0;
                 rawTop.Color      = rawCol;
 
-                var rawBot = plot.Add.Scatter(rxs, pts.Select(p => -p.RawY / 2.0).ToArray());
+                var rawBot = plot.Add.Scatter(xs, pts.Select(p => -p.RawY / 2.0).ToArray());
                 rawBot.LineWidth  = 1;
                 rawBot.MarkerSize = 0;
                 rawBot.Color      = rawCol;
@@ -233,26 +244,30 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
 
         // Imported comparison series — also mirrored with fill
-        foreach (var series in _importedSeries)
+        if (_showScanLayer)
         {
-            double[] halfYs = series.Ys.Select(y =>  y / 2.0).ToArray();
-            double[] negYs  = series.Ys.Select(y => -y / 2.0).ToArray();
+            foreach (var series in _importedSeries)
+            {
+                double[] halfYs = series.Ys.Select(y =>  y / 2.0).ToArray();
+                double[] negYs  = series.Ys.Select(y => -y / 2.0).ToArray();
 
-            DrawLineFill(plot, series.Xs, halfYs, negYs, series.Color);
+                DrawLineFill(plot, series.Xs, halfYs, negYs, series.Color);
 
-            var top = plot.Add.Scatter(series.Xs, halfYs);
-            top.LegendText = series.Name;
-            top.LineWidth  = 2;
-            top.MarkerSize = 0;
-            top.Color      = series.Color;
+                var top = plot.Add.Scatter(series.Xs, halfYs);
+                top.LegendText = series.Name;
+                top.LineWidth  = 2;
+                top.MarkerSize = 0;
+                top.Color      = series.Color;
 
-            var bot = plot.Add.Scatter(series.Xs, negYs);
-            bot.LineWidth  = 2;
-            bot.MarkerSize = 0;
-            bot.Color      = series.Color;
+                var bot = plot.Add.Scatter(series.Xs, negYs);
+                bot.LineWidth  = 2;
+                bot.MarkerSize = 0;
+                bot.Color      = series.Color;
+            }
         }
 
-        RenderSegmentOverlay(plot);
+        if (_showDesignLayer)
+            RenderSegmentOverlay(plot);
 
         plot.Title("Profilo diametro linea");
         plot.XLabel("Lunghezza (cm)");
@@ -323,44 +338,141 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     }
 
     // Segment overlay rendering
+    // node.Y stores full diameter in mm; chart Y axis is radius (diameter/2)
     private void RenderSegmentOverlay(Plot plot)
     {
         if (_segmentNodes.Count == 0) return;
 
         var sorted = _segmentNodes.OrderBy(n => n.X).ToList();
-        double[] xs = sorted.Select(n => n.X).ToArray();
-        double[] ys = sorted.Select(n => n.Y).ToArray();
+        double[] xs       = sorted.Select(n => n.X).ToArray();
+        double[] halfYs   = sorted.Select(n =>  n.Y / 2.0).ToArray();   // +radius
+        double[] negHalfYs = sorted.Select(n => -n.Y / 2.0).ToArray(); // -radius (mirror)
+
+        var designColor = new ScottColor(220, 50, 50); // red
 
         if (sorted.Count >= 2)
         {
-            var line = plot.Add.Scatter(xs, ys);
-            line.LegendText = $"Segmenti ({sorted.Count} nodi)";
-            line.Color      = Colors.Red;
-            line.LineWidth  = 2;
-            line.MarkerSize = 0;
+            // Gradient fill like the scan profile
+            DrawLineFill(plot, xs, halfYs, negHalfYs, designColor);
+
+            var topLine = plot.Add.Scatter(xs, halfYs);
+            topLine.LegendText = $"Design ({sorted.Count} nodes)";
+            topLine.Color      = designColor;
+            topLine.LineWidth  = 2;
+            topLine.MarkerSize = 0;
+
+            var botLine = plot.Add.Scatter(xs, negHalfYs);
+            botLine.Color      = designColor;
+            botLine.LineWidth  = 2;
+            botLine.MarkerSize = 0;
         }
 
-        var markers = plot.Add.Scatter(xs, ys);
-        markers.LegendText = "";
-        markers.Color      = Colors.Red;
+        // Markers at node positions (on the top profile line)
+        var markers = plot.Add.Scatter(xs, halfYs);
+        markers.Color      = designColor;
         markers.LineWidth  = 0;
         markers.MarkerSize = 8;
 
-        // Label each node with its absolute position
+        // Label each node: diameter (full value), position
         foreach (var node in sorted)
         {
-            var lbl = plot.Add.Text($"{node.X:0} cm\n{node.Y:0.000} mm", node.X, node.Y);
-            lbl.LabelFontSize        = 11;
+            double chartY = node.Y / 2.0;
+            var lbl = plot.Add.Text($"Ø {node.Y:0.000} mm\n{node.X:0.0} cm", node.X, chartY);
+            lbl.LabelFontSize        = 10;
             lbl.LabelBold            = true;
             lbl.LabelFontColor       = Colors.DarkRed;
             lbl.LabelAlignment       = Alignment.LowerLeft;
             lbl.LabelBackgroundColor = Colors.White.WithAlpha(0.93f);
             lbl.LabelBorderColor     = Colors.DarkRed;
             lbl.LabelBorderWidth     = 1.5f;
-            lbl.LabelPadding         = 4;
+            lbl.LabelPadding         = 3;
             lbl.OffsetX              = 8;
             lbl.OffsetY              = -8;
         }
+    }
+
+    /// <summary>
+    /// Builds ProjectSegments from the current sorted node list and refreshes the
+    /// bound DataGrid + the total-volume label.
+    /// </summary>
+    private void RefreshSegmentTable()
+    {
+        ProjectSegments.Clear();
+
+        var sorted = _segmentNodes.OrderBy(n => n.X).ToList();
+        for (int i = 0; i < sorted.Count - 1; i++)
+        {
+            ProjectSegments.Add(new ProjectSegment
+            {
+                Index            = i + 1,
+                StartCm          = sorted[i].X,
+                EndCm            = sorted[i + 1].X,
+                StartDiameterMm  = sorted[i].Y,
+                EndDiameterMm    = sorted[i + 1].Y,
+            });
+        }
+
+        double totalCm3 = ProjectSegments.Sum(s => s.VolumeMm3) / 1000.0;
+        TotalVolumeText = ProjectSegments.Count > 0
+            ? $"Total volume: {totalCm3:0.00} cm\u00b3  ({ProjectSegments.Count} segments)"
+            : string.Empty;
+
+        // Keep the editable node DataGrid in sync
+        SyncDesignNodesToList();
+    }
+
+    /// <summary>Rebuild DesignNodes from the canonical _segmentNodes list.</summary>
+    private void SyncDesignNodesToList()
+    {
+        if (_syncingNodes) return;
+        _syncingNodes = true;
+        try
+        {
+            DesignNodes.Clear();
+            foreach (var n in _segmentNodes.OrderBy(n => n.X))
+                DesignNodes.Add(new DesignNode { PositionCm = n.X, DiameterMm = n.Y });
+        }
+        finally { _syncingNodes = false; }
+    }
+
+    /// <summary>Rebuild _segmentNodes from the DesignNodes DataGrid (after user edits a cell).</summary>
+    private void SyncListFromDesignNodes()
+    {
+        _segmentNodes.Clear();
+        foreach (var dn in DesignNodes)
+            _segmentNodes.Add((Math.Round(dn.PositionCm, 1), Math.Round(dn.DiameterMm, 3)));
+    }
+
+    // DataGrid event handlers for the editable nodes grid
+    private void NodesDataGrid_CellEditEnding(object sender, DataGridCellEditEndingEventArgs e)
+    {
+        if (e.EditAction == DataGridEditAction.Cancel) return;
+        // Defer so DataGrid can commit the edited value before we read it
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            SyncListFromDesignNodes();
+            RefreshPlot();
+            RefreshSegmentTable();
+        }), System.Windows.Threading.DispatcherPriority.Background);
+    }
+
+    private void NodesDataGrid_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Delete) return;
+        if (NodesDataGrid.SelectedItem is not DesignNode dn) return;
+        DesignNodes.Remove(dn);
+        SyncListFromDesignNodes();
+        _segmentUndoStack.Clear(); // undo stack no longer valid after direct delete
+        RefreshPlot();
+        RefreshSegmentTable();
+        e.Handled = true;
+    }
+
+    private string _totalVolumeText = string.Empty;
+    public string TotalVolumeText
+    {
+        get => _totalVolumeText;
+        set { _totalVolumeText = value; OnPropertyChanged(nameof(TotalVolumeText)); }
     }
 
     // Segment drawing mouse handlers
@@ -377,36 +489,40 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         {
             _draggingNodeX = hit.Value.X;
             PlotControl.CaptureMouse();
-            UiStatus = $"Trascina nodo {hit.Value.X:0} cm";
+            UiStatus = $"Drag node at {hit.Value.X:0} cm";
             e.Handled = true;
             return;
         }
 
         // No nearby node → add new node
-        double snappedX = Math.Round(coords.X);
+        // coords.Y is in radius (chart Y = diameter/2), so diameter = coords.Y * 2
+        double snappedX  = Math.Round(coords.X);
+        double diameter;
 
-        // Shift held: lock Y to the nearest preceding (or following) node's Y → horizontal segment
-        double y;
         if (Keyboard.IsKeyDown(Key.LeftShift) || Keyboard.IsKeyDown(Key.RightShift))
         {
+            // Shift: lock diameter to nearest existing node → level (cylinder) segment
             var anchor = _segmentNodes
                 .OrderBy(n => Math.Abs(n.X - snappedX))
                 .FirstOrDefault();
-            y = anchor == default ? Math.Round(coords.Y, 3) : anchor.Y;
+            diameter = anchor == default
+                ? Math.Round(Math.Abs(coords.Y) * 2.0, 3)
+                : anchor.Y;
         }
         else
         {
-            y = Math.Round(coords.Y, 3);
+            diameter = Math.Round(Math.Abs(coords.Y) * 2.0, 3);
         }
 
         _segmentNodes.RemoveAll(n => n.X == snappedX);
-        _segmentNodes.Add((snappedX, y));
+        _segmentNodes.Add((snappedX, diameter));
         _segmentUndoStack.Push(snappedX);
 
         RefreshPlot();
+        RefreshSegmentTable();
         var hint = (Keyboard.IsKeyDown(Key.LeftShift) || Keyboard.IsKeyDown(Key.RightShift))
-                   ? "  [SHIFT — collimato]" : string.Empty;
-        UiStatus = $"Nodo aggiunto: {snappedX:0} cm = {y:0.000} mm  (totale {_segmentNodes.Count}){hint}";
+                   ? "  [SHIFT — level]" : string.Empty;
+        UiStatus = $"Node added: {snappedX:0} cm  Ø {diameter:0.000} mm  ({_segmentNodes.Count} nodes){hint}";
         e.Handled = true;
     }
 
@@ -420,18 +536,18 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         if (!_segmentDrawMode || _draggingNodeX == null) return;
 
-        double newX = Math.Round(coords.X);
-        double newY = Math.Round(coords.Y, 3);
+        double newX        = Math.Round(coords.X);
+        double newDiameter = Math.Round(Math.Abs(coords.Y) * 2.0, 3);
 
         // Update the dragged node in-place
         _segmentNodes.RemoveAll(n => n.X == _draggingNodeX.Value);
-        // If there's already a node at newX (different from the one being dragged), remove it
         _segmentNodes.RemoveAll(n => n.X == newX);
-        _segmentNodes.Add((newX, newY));
+        _segmentNodes.Add((newX, newDiameter));
         _draggingNodeX = newX;
 
         RefreshPlot();
-        UiStatus = $"Nodo: {newX:0} cm = {newY:0.000} mm";
+        RefreshSegmentTable();
+        UiStatus = $"Node: {newX:0} cm  Ø {newDiameter:0.000} mm";
         e.Handled = true;
     }
 
@@ -455,7 +571,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     {
         if (_draggingNodeX == null) return;
         PlotControl.ReleaseMouseCapture();
-        UiStatus = $"Nodo posizionato: {_draggingNodeX.Value:0} cm  (totale {_segmentNodes.Count})";
+        RefreshSegmentTable();
+        UiStatus = $"Node placed at {_draggingNodeX.Value:0} cm  ({_segmentNodes.Count} nodes total)";
         _draggingNodeX = null;
         e.Handled = true;
     }
@@ -472,7 +589,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _segmentNodes.Remove(closest);
 
         RefreshPlot();
-        UiStatus = $"Nodo rimosso: {closest.X:0} cm  (rimanenti: {_segmentNodes.Count})";
+        RefreshSegmentTable();
+        UiStatus = $"Node removed at {closest.X:0} cm  ({_segmentNodes.Count} remaining)";
         e.Handled = true;
     }
 
@@ -482,8 +600,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _segmentDrawMode = MenuDrawSegments.IsChecked ?? false;
         PlotControl.Cursor = _segmentDrawMode ? Cursors.Cross : Cursors.Arrow;
         UiStatus = _segmentDrawMode
-            ? "Modalita disegno ON  —  clic sx = aggiungi nodo, clic dx = rimuovi nodo"
-            : "Modalita disegno OFF";
+            ? "Draw mode ON  —  left click = add node,  right click = remove node,  SHIFT = level segment"
+            : "Draw mode OFF";
         RefreshStatusBar();
     }
 
@@ -493,24 +611,28 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         double lastX = _segmentUndoStack.Pop();
         _segmentNodes.RemoveAll(n => n.X == lastX);
         RefreshPlot();
-        UiStatus = $"Annullato nodo a {lastX:0} cm  (rimanenti: {_segmentNodes.Count})";
+        RefreshSegmentTable();
+        UiStatus = $"Undone node at {lastX:0} cm  ({_segmentNodes.Count} remaining)";
     }
 
     private void ClearSegments_Click(object sender, RoutedEventArgs e)
     {
         _segmentNodes.Clear();
         _segmentUndoStack.Clear();
+        ProjectSegments.Clear();
+        DesignNodes.Clear();
+        TotalVolumeText = string.Empty;
         RefreshPlot();
-        UiStatus = "Segmenti cancellati";
+        UiStatus = "Design cleared";
     }
 
-    // Export segments as CSV
+    // Export segments: full segment table with geometry
     private void ExportSegmentsCsv_Click(object sender, RoutedEventArgs e)
     {
-        if (_segmentNodes.Count == 0)
+        if (ProjectSegments.Count == 0)
         {
-            MessageBox.Show("Nessun nodo da esportare.",
-                            "Attenzione", MessageBoxButton.OK, MessageBoxImage.Warning);
+            MessageBox.Show("No segments to export. Add at least two nodes.",
+                            "Warning", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
 
@@ -518,55 +640,57 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         {
             Filter     = "CSV files (*.csv)|*.csv",
             DefaultExt = ".csv",
-            FileName   = "segmenti_profilo.csv"
+            FileName   = "flyline_design.csv"
         };
         if (dlg.ShowDialog() != true) return;
 
-        var sorted = _segmentNodes.OrderBy(n => n.X).ToList();
-
         var sb = new StringBuilder();
-        sb.AppendLine("Lunghezza cm,Diametro mm");
-        foreach (var node in sorted)
-            sb.AppendLine($"{node.X:0},{node.Y:0.000}");
+        sb.AppendLine("Segment,Start cm,End cm,Length cm,Start dia mm,End dia mm,Shape,Taper mm/m,Volume cm3");
+        foreach (var seg in ProjectSegments)
+            sb.AppendLine(FormattableString.Invariant(
+                $"{seg.Index},{seg.StartCm:0.0},{seg.EndCm:0.0},{seg.LengthCm:0.0},{seg.StartDiameterMm:0.000},{seg.EndDiameterMm:0.000},{seg.Shape},{seg.TaperMmPerMeter:0.000},{seg.VolumeMm3 / 1000.0:0.00}"));
+
+        double totalCm3 = ProjectSegments.Sum(s => s.VolumeMm3) / 1000.0;
+        sb.AppendLine(FormattableString.Invariant($"TOTAL,,,,,,,,{totalCm3:0.00}"));
 
         File.WriteAllText(dlg.FileName, sb.ToString(), Encoding.UTF8);
-        UiStatus = "Segmenti esportati";
-        MessageBox.Show($"Esportati {sorted.Count} nodi.\n{dlg.FileName}", "Export segmenti");
+        UiStatus = $"Design exported: {ProjectSegments.Count} segments";
+        MessageBox.Show($"Exported {ProjectSegments.Count} segments.\n{dlg.FileName}", "Export Design");
     }
 
     private void SaveNodes_Click(object sender, RoutedEventArgs e)
     {
         if (_segmentNodes.Count == 0)
         {
-            MessageBox.Show("Nessun nodo da salvare.", "Attenzione",
+            MessageBox.Show("No nodes to save.", "Warning",
                             MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
 
         var dlg = new SaveFileDialog
         {
-            Filter     = "Nodi segmenti (*.nodes.csv)|*.nodes.csv|CSV files (*.csv)|*.csv",
+            Filter     = "Node files (*.nodes.csv)|*.nodes.csv|CSV files (*.csv)|*.csv",
             DefaultExt = ".nodes.csv",
-            FileName   = "sessione_nodi.nodes.csv"
+            FileName   = "flyline_nodes.nodes.csv"
         };
         if (dlg.ShowDialog() != true) return;
 
         var sorted = _segmentNodes.OrderBy(n => n.X).ToList();
         var sb = new StringBuilder();
-        sb.AppendLine("Lunghezza cm,Diametro mm");
+        sb.AppendLine("Position cm,Diameter mm");
         foreach (var node in sorted)
-            sb.AppendLine($"{node.X:0},{node.Y:0.000}");
+            sb.AppendLine(FormattableString.Invariant($"{node.X:0.0},{node.Y:0.000}"));
 
         File.WriteAllText(dlg.FileName, sb.ToString(), Encoding.UTF8);
-        UiStatus = $"Nodi salvati ({sorted.Count})";
+        UiStatus = $"Nodes saved ({sorted.Count})";
     }
 
     private void LoadNodes_Click(object sender, RoutedEventArgs e)
     {
         var dlg = new OpenFileDialog
         {
-            Filter = "Nodi segmenti (*.nodes.csv;*.csv)|*.nodes.csv;*.csv",
-            Title  = "Carica nodi segmenti"
+            Filter = "Node files (*.nodes.csv;*.csv)|*.nodes.csv;*.csv",
+            Title  = "Load design nodes"
         };
         if (dlg.ShowDialog() != true) return;
 
@@ -574,25 +698,23 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         {
             var lines = File.ReadAllLines(dlg.FileName, Encoding.UTF8)
                             .Where(l => !string.IsNullOrWhiteSpace(l))
-                            .Skip(1)  // header
+                            .Skip(1)  // skip header
                             .ToList();
 
-            var sep = System.Globalization.CultureInfo.CurrentCulture.NumberFormat.NumberDecimalSeparator;
             var loaded = new List<(double X, double Y)>();
 
             foreach (var line in lines)
             {
                 var parts = line.Split(',');
                 if (parts.Length < 2) continue;
-                var xStr = parts[0].Trim().Replace(".", sep).Replace(",", sep);
-                var yStr = parts[1].Trim().Replace(".", sep).Replace(",", sep);
-                if (double.TryParse(xStr, out double x) && double.TryParse(yStr, out double y))
+                if (double.TryParse(parts[0].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double x) &&
+                    double.TryParse(parts[1].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double y))
                     loaded.Add((x, y));
             }
 
             if (loaded.Count == 0)
             {
-                MessageBox.Show("Nessun nodo valido trovato nel file.", "Attenzione",
+                MessageBox.Show("No valid nodes found in file.", "Warning",
                                 MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
@@ -600,8 +722,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             if (_segmentNodes.Count > 0)
             {
                 var res = MessageBox.Show(
-                    $"Sostituire i {_segmentNodes.Count} nodi esistenti con i {loaded.Count} nodi caricati?",
-                    "Carica nodi", MessageBoxButton.YesNo, MessageBoxImage.Question);
+                    $"Replace the {_segmentNodes.Count} existing nodes with the {loaded.Count} loaded nodes?",
+                    "Load Nodes", MessageBoxButton.YesNo, MessageBoxImage.Question);
                 if (res != MessageBoxResult.Yes) return;
             }
 
@@ -610,11 +732,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             _segmentNodes.AddRange(loaded);
 
             RefreshPlot();
-            UiStatus = $"Nodi caricati: {loaded.Count}  da {Path.GetFileName(dlg.FileName)}";
+            RefreshSegmentTable();
+            UiStatus = $"Loaded {loaded.Count} nodes from {Path.GetFileName(dlg.FileName)}";
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"Errore lettura file:\n{ex.Message}", "Errore",
+            MessageBox.Show($"Error reading file:\n{ex.Message}", "Error",
                             MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
@@ -625,7 +748,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         foreach (var node in _segmentNodes)
         {
-            Pixel nodePx = PlotControl.Plot.GetPixel(new Coordinates(node.X, node.Y));
+            // node.Y is diameter; chart plots it at radius = Y/2
+            Pixel nodePx = PlotControl.Plot.GetPixel(new Coordinates(node.X, node.Y / 2.0));
             double dx = nodePx.X - screenPos.X;
             double dy = nodePx.Y - screenPos.Y;
             double dist = Math.Sqrt(dx * dx + dy * dy);
@@ -658,12 +782,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         if (result == null) { e.Handled = true; return; }
 
         _segmentNodes.RemoveAll(n => n.X == hit.Value.X);
-        // If another node already occupies the new X, remove it first
         _segmentNodes.RemoveAll(n => n.X == result.Value.cm);
         _segmentNodes.Add((result.Value.cm, result.Value.mm));
 
         RefreshPlot();
-        UiStatus = $"Nodo modificato: {result.Value.cm:0} cm = {result.Value.mm:0.000} mm  (totale {_segmentNodes.Count})";
+        RefreshSegmentTable();
+        UiStatus = $"Node edited: {result.Value.cm:0.0} cm  Ø {result.Value.mm:0.000} mm  ({_segmentNodes.Count} nodes)";
         e.Handled = true;
     }
 
@@ -672,7 +796,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     {
         var win = new Window
         {
-            Title  = "Modifica nodo",
+            Title  = "Edit Node",
             Width  = 260,
             Height = 145,
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
@@ -713,20 +837,20 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             return tb;
         };
 
-        addLabel("Lunghezza (cm):", 0);
-        var txtCm = addBox(currentCm.ToString("0"), 0);
+        addLabel("Position (cm):", 0);
+        var txtCm = addBox(currentCm.ToString("0.0", CultureInfo.InvariantCulture), 0);
 
-        addLabel("Diametro (mm):", 1);
-        var txtMm = addBox(currentMm.ToString("0.000"), 1);
+        addLabel("Diameter (mm):", 1);
+        var txtMm = addBox(currentMm.ToString("0.000", CultureInfo.InvariantCulture), 1);
 
         var btnPanel = new StackPanel
         {
             Orientation = System.Windows.Controls.Orientation.Horizontal,
             HorizontalAlignment = System.Windows.HorizontalAlignment.Right
         };
-        var btnOk     = new Button { Content = "OK",      Width = 64, IsDefault = true,
+        var btnOk     = new Button { Content = "OK",     Width = 64, IsDefault = true,
                                      Margin = new Thickness(0, 0, 6, 0) };
-        var btnCancel = new Button { Content = "Annulla", Width = 64, IsCancel = true };
+        var btnCancel = new Button { Content = "Cancel", Width = 64, IsCancel = true };
         btnPanel.Children.Add(btnOk);
         btnPanel.Children.Add(btnCancel);
         Grid.SetRow(btnPanel, 3); Grid.SetColumnSpan(btnPanel, 2);
@@ -743,18 +867,14 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         if (!confirmed) return null;
 
-        var sep = System.Globalization.CultureInfo.CurrentCulture.NumberFormat.NumberDecimalSeparator;
-        var txtMmNorm = txtMm.Text.Replace(".", sep).Replace(",", sep);
-        var txtCmNorm = txtCm.Text.Replace(".", sep).Replace(",", sep);
-
-        if (!double.TryParse(txtCmNorm, out double cm) ||
-            !double.TryParse(txtMmNorm, out double mm))
+        if (!double.TryParse(txtCm.Text.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double cm) ||
+            !double.TryParse(txtMm.Text.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double mm))
         {
-            MessageBox.Show("Valori non validi.", "Errore", MessageBoxButton.OK, MessageBoxImage.Warning);
+            MessageBox.Show("Invalid values.", "Error", MessageBoxButton.OK, MessageBoxImage.Warning);
             return null;
         }
 
-        return (Math.Round(cm), Math.Round(mm, 3));
+        return (Math.Round(cm, 1), Math.Round(mm, 3));
     }
 
     private static double InterpolateSegment(List<(double X, double Y)> nodes, double x)
@@ -774,97 +894,97 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private async Task Send(string cmd) => await _vm.SendCommandAsync(cmd);
 
-    // Connessione
+    // Connection
     private async void Connect_Click(object sender, RoutedEventArgs e)
     {
-        UiStatus = "Connessione in corso...";
+        UiStatus = "Connecting...";
         await _vm.ConnectAsync(initiatedByUser: true);
-        UiStatus = "Connessione richiesta";
+        UiStatus = "Connection requested";
     }
 
     private async void Disconnect_Click(object sender, RoutedEventArgs e)
     {
         await _vm.DisconnectAsync();
-        UiStatus = "Disconnesso";
+        UiStatus = "Disconnected";
     }
 
-    // Comandi motore / scan
+    // Motor / scan commands
     private async void StartScan_Click(object sender, RoutedEventArgs e)
     {
         await Send("motor scan");
         await Send("scan_on");
-        UiStatus = "SCAN inviato";
+        UiStatus = "SCAN sent";
     }
 
     private async void Stop_Click(object sender, RoutedEventArgs e)
     {
         await Send("motor stop");
         await Send("scan_off");
-        UiStatus = "STOP inviato";
+        UiStatus = "STOP sent";
     }
 
     private async void ScanOn_Click(object sender, RoutedEventArgs e)
     {
         await Send("scan_on");
-        UiStatus = "Ricezione ON";
+        UiStatus = "Receiving ON";
     }
 
     private async void ScanOff_Click(object sender, RoutedEventArgs e)
     {
         await Send("scan_off");
-        UiStatus = "Ricezione OFF";
+        UiStatus = "Receiving OFF";
     }
 
     private async void FastS_Click(object sender, RoutedEventArgs e)
     {
         await Send("motor fast_s");
-        UiStatus = "FAST stessa direzione";
+        UiStatus = "FAST same direction";
     }
 
     private async void FastO_Click(object sender, RoutedEventArgs e)
     {
         await Send("motor fast_o");
-        UiStatus = "FAST direzione opposta";
+        UiStatus = "FAST opposite direction";
     }
 
     private async void MotorStatus_Click(object sender, RoutedEventArgs e)
     {
         await Send("motor status");
-        UiStatus = "Stato motore richiesto";
+        UiStatus = "Motor status requested";
     }
 
-    // Strumenti
+    // Tools
     private async void Reset_Click(object sender, RoutedEventArgs e)
     {
         await Send("reset");
         _vm.ClearAllData();
-        UiStatus = "Posizione azzerata e grafico cancellato";
+        UiStatus = "Position zeroed and chart cleared";
     }
 
     private async void ReadRaw_Click(object sender, RoutedEventArgs e)
     {
         await Send("readraw");
-        _vm.AppendLog("Nota: la risposta readraw appare sulla console seriale del dispositivo");
-        UiStatus = "Lettura raw richiesta";
+        _vm.AppendLog("Note: readraw response appears on the device serial console");
+        UiStatus = "Raw read requested";
     }
 
     private async void SetDisplayZero_Click(object sender, RoutedEventArgs e)
     {
         await Send("setdisplayzero");
-        UiStatus = "Zero display impostato";
+        UiStatus = "Display zero set";
     }
 
     private async void ResetOffset_Click(object sender, RoutedEventArgs e)
     {
         await Send("resetoffset");
-        UiStatus = "Offset resettato";
+        UiStatus = "Offset reset";
     }
 
     private async void SetOffset_Click(object sender, RoutedEventArgs e)
     {
         var input = Microsoft.VisualBasic.Interaction.InputBox(
-            "Inserisci valore offset in mm (usa punto come separatore decimale):",
-            "Imposta Offset",
+            "Enter offset value in mm (use dot as decimal separator):",
+            "Set Offset",
             "0.00");
 
         if (string.IsNullOrWhiteSpace(input)) return;
@@ -872,12 +992,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         if (TryParseDouble(input, out var offset))
         {
             await Send($"setoffset {offset.ToString("0.000", CultureInfo.InvariantCulture)}");
-            UiStatus = $"Offset impostato: {offset:0.000} mm";
+            UiStatus = $"Offset set: {offset:0.000} mm";
         }
         else
         {
-            MessageBox.Show("Valore non valido. Usa il punto come separatore decimale (es. 0.25).",
-                            "Errore", MessageBoxButton.OK, MessageBoxImage.Warning);
+            MessageBox.Show("Invalid value. Use dot as decimal separator (e.g. 0.25).",
+                            "Error", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
     }
 
@@ -885,14 +1005,14 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private async void Goto_Click(object sender, RoutedEventArgs e)
     {
         var input = Microsoft.VisualBasic.Interaction.InputBox(
-            "Inserisci la posizione target in cm:",
-            "Vai a posizione",
+            "Enter target position in cm:",
+            "Go To Position",
             "150");
 
         if (TryParseDouble(input, out var cm) && cm >= 0)
         {
             await Send($"goto {cm.ToString("0.0", CultureInfo.InvariantCulture)}");
-            UiStatus = $"Goto richiesto a {cm:0.0} cm";
+            UiStatus = $"Goto requested: {cm:0.0} cm";
         }
     }
 
@@ -903,7 +1023,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         {
             Filter      = "CSV files (*.csv)|*.csv",
             DefaultExt  = ".csv",
-            FileName    = "diametrolinea_export.csv"
+            FileName    = "flyline_scan_export.csv"
         };
         if (dlg.ShowDialog() != true) return;
 
@@ -914,12 +1034,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         for (int i = 0; i < orderedPoints.Count; i++)
         {
             var p = orderedPoints[i];
-            sb.AppendLine($"{p.X:0.0},{displayedYs[i]:0.000}");
+            sb.AppendLine(FormattableString.Invariant($"{p.X:0.0},{displayedYs[i]:0.000}"));
         }
 
         File.WriteAllText(dlg.FileName, sb.ToString());
-        UiStatus = "CSV esportato";
-        MessageBox.Show($"CSV esportato in:\n{dlg.FileName}");
+        UiStatus = "CSV exported";
+        MessageBox.Show($"CSV exported to:\n{dlg.FileName}");
     }
 
     private void ExportPng_Click(object sender, RoutedEventArgs e)
@@ -928,13 +1048,13 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         {
             Filter     = "PNG files (*.png)|*.png",
             DefaultExt = ".png",
-            FileName   = "diametrolinea_plot.png"
+            FileName   = "flyline_plot.png"
         };
         if (dlg.ShowDialog() != true) return;
 
         PlotControl.Plot.SavePng(dlg.FileName, 1400, 800);
-        UiStatus = "PNG esportato";
-        MessageBox.Show($"PNG esportato in:\n{dlg.FileName}");
+        UiStatus = "PNG exported";
+        MessageBox.Show($"PNG exported to:\n{dlg.FileName}");
     }
 
     private void ImportCsv_Click(object sender, RoutedEventArgs e)
@@ -943,7 +1063,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         {
             Filter      = "CSV files (*.csv)|*.csv|Text files (*.txt)|*.txt|All files (*.*)|*.*",
             Multiselect = false,
-            Title       = "Importa CSV confronto"
+            Title       = "Import comparison CSV"
         };
         if (dlg.ShowDialog() != true) return;
 
@@ -952,23 +1072,23 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             var series = LoadImportedSeries(dlg.FileName);
             _importedSeries.Add(series);
             _lastImportedFile = Path.GetFileName(dlg.FileName);
-            UiStatus = $"CSV importato: {series.Name}";
+            UiStatus = $"CSV imported: {series.Name}";
             RefreshPlot();
-            MessageBox.Show($"CSV importato: {series.Name}", "Import CSV");
+            MessageBox.Show($"CSV imported: {series.Name}", "Import CSV");
         }
         catch (Exception ex)
         {
-            UiStatus = "Errore import CSV";
-            MessageBox.Show("Errore import CSV:\n" + ex.Message, "Errore");
+            UiStatus = "CSV import error";
+            MessageBox.Show("CSV import error:\n" + ex.Message, "Error");
         }
     }
 
-    // Grafico
+    // Chart controls
     private void FitPlot_Click(object sender, RoutedEventArgs e)
     {
         PlotControl.Plot.Axes.AutoScale();
         PlotControl.Refresh();
-        UiStatus = "Assi adattati";
+        UiStatus = "Axes fitted";
     }
 
     private void ClearImported_Click(object sender, RoutedEventArgs e)
@@ -976,7 +1096,21 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _importedSeries.Clear();
         _lastImportedFile = "-";
         RefreshPlot();
-        UiStatus = "Serie importate cancellate";
+        UiStatus = "Imported series cleared";
+    }
+
+    private void ShowScanLayer_Click(object sender, RoutedEventArgs e)
+    {
+        _showScanLayer = ShowScanToggle.IsChecked ?? true;
+        RefreshPlot();
+        UiStatus = _showScanLayer ? "Scan layer visible" : "Scan layer hidden";
+    }
+
+    private void ShowDesignLayer_Click(object sender, RoutedEventArgs e)
+    {
+        _showDesignLayer = ShowDesignToggle.IsChecked ?? true;
+        RefreshPlot();
+        UiStatus = _showDesignLayer ? "Design layer visible" : "Design layer hidden";
     }
 
     private void AutoFitToggle_Click(object sender, RoutedEventArgs e)
@@ -994,7 +1128,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         bool enabled = SmoothingToggle.IsChecked ?? true;
         _vm.SmoothingEnabled = enabled;
         RefreshPlot();
-        UiStatus = enabled ? "Smoothing EMA ON" : "Smoothing EMA OFF — dati grezzi";
+        UiStatus = enabled ? "Smoothing EMA ON" : "Smoothing EMA OFF";
     }
 
     private void SmoothingAlphaSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
@@ -1016,7 +1150,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private void ResetSmoothingAlpha_Click(object sender, RoutedEventArgs e)
     {
         SmoothingAlphaSlider.Value = 0.10;
-        UiStatus = "Smoothing alpha ripristinato a 0.10";
+        UiStatus = "Smoothing alpha reset to 0.10";
     }
 
     private void LineWidthSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
@@ -1032,7 +1166,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _vm.SaveSettings();
         RefreshStatusBar();
         RefreshPlot();
-        UiStatus = $"Spessore linea = {lineWidth}";
+        UiStatus = $"Line width = {lineWidth}";
     }
 
     private void FilteredOpacitySlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
@@ -1048,7 +1182,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _vm.SaveSettings();
         RefreshStatusBar();
         RefreshPlot();
-        UiStatus = $"Opacita filtro = {opacity:0.00}";
+        UiStatus = $"Filtered opacity = {opacity:0.00}";
     }
 
     private void RawOpacitySlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
@@ -1064,10 +1198,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _vm.SaveSettings();
         RefreshStatusBar();
         RefreshPlot();
-        UiStatus = $"Opacita raw = {opacity:0.00}";
+        UiStatus = $"Raw opacity = {opacity:0.00}";
     }
 
-    // Impostazioni
+    // Settings
     private void Settings_Click(object sender, RoutedEventArgs e)
     {
         var copy = _vm.CloneSettings();
@@ -1077,8 +1211,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             _vm.ApplySettings(win.EditableSettings);
             _autoFitEnabled = _vm.Settings.Chart.AutoFit;
             RefreshPlot();
-            UiStatus = "Impostazioni salvate";
-            MessageBox.Show("Impostazioni salvate.", "Settings");
+            UiStatus = "Settings saved";
+            MessageBox.Show("Settings saved.", "Settings");
         }
     }
 
