@@ -274,8 +274,14 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         plot.YLabel("Diametro (mm)");
         plot.ShowLegend();
 
-        if (_autoFitEnabled) plot.Axes.AutoScale();
+        // ScottPlot 5: first Refresh() processes plottable extents,
+        // then AutoScale() can correctly compute bounds, then a second Refresh() applies them.
         PlotControl.Refresh();
+        if (_autoFitEnabled)
+        {
+            plot.Axes.AutoScale();
+            PlotControl.Refresh();
+        }
         RefreshStatusBar();
     }
 
@@ -1075,11 +1081,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             var series = LoadImportedSeries(dlg.FileName);
             _importedSeries.Add(series);
             _lastImportedFile = Path.GetFileName(dlg.FileName);
-            UiStatus = $"CSV imported: {series.Name}";
+            UiStatus = $"CSV imported: {series.Name} ({series.Xs.Length} points)";
             RefreshPlot();
-            // ScottPlot 5 requires an explicit Refresh() after AutoScale() for limits to take effect
-            PlotControl.Plot.Axes.AutoScale();
-            PlotControl.Refresh();
             MessageBox.Show($"CSV imported: {series.Name} ({series.Xs.Length} points)", "Import CSV");
         }
         catch (Exception ex)
