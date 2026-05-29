@@ -225,6 +225,34 @@
                                VerticalAlignment="Center"/>
                 </StackPanel>
 
+                <!-- Project bar (centre) -->
+                <StackPanel Grid.Column="1" Orientation="Horizontal"
+                            HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <Button Content="New"
+                            Style="{StaticResource BtnGhost}"
+                            Click="NewProject_Click"
+                            ToolTip="New project"/>
+                    <Button Content="Open"
+                            Style="{StaticResource BtnGhost}"
+                            Click="OpenProject_Click"
+                            ToolTip="Open project (.flp)"/>
+                    <Button Content="Save"
+                            Style="{StaticResource BtnSecondary}"
+                            Click="SaveProject_Click"
+                            ToolTip="Save project"/>
+                    <Button Content="Save As"
+                            Style="{StaticResource BtnGhost}"
+                            Click="SaveProjectAs_Click"
+                            ToolTip="Save project as…"/>
+                    <Separator Style="{StaticResource ToolSep}"/>
+                    <TextBlock x:Name="ProjectNameText"
+                               FontSize="13" FontWeight="SemiBold"
+                               Foreground="{StaticResource TextPrimary}"
+                               VerticalAlignment="Center"
+                               Margin="8,0,0,0"
+                               Text="Untitled"/>
+                </StackPanel>
+
                 <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
                     <Ellipse x:Name="ConnLed"
                              Width="10" Height="10"

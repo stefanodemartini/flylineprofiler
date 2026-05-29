@@ -11,6 +11,7 @@ using WpfColor    = System.Windows.Media.Color;
 using ScottColor  = ScottPlot.Color;
 using Microsoft.Win32;
 using DiametroLineaDesktop.Models;
+using DiametroLineaDesktop.Services;
 using DiametroLineaDesktop.ViewModels;
 using ScottPlot;
 
@@ -45,6 +46,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     // Drag state — null when not dragging
     private double? _draggingNodeX = null;   // original X of the node being dragged
     private const double DragHitRadiusPx = 12.0;
+
+    // Project state
+    private string? _currentProjectPath = null;
+    private bool    _isDirty            = false;
+    private string  _projectName        = "Untitled";
+    private DateTime _projectCreatedAt  = DateTime.UtcNow;
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -109,7 +116,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             await _vm.InitializeAsync();
             RefreshPlot();
             RefreshStatusBar();
+            UpdateProjectTitle();
         };
+
+        Closing += MainWindow_Closing;
     }
 
     private void InitializeChartControls()
@@ -160,7 +170,14 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     }
 
     private void Points_CollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
-        => Dispatcher.Invoke(RefreshPlot);
+    {
+        Dispatcher.Invoke(() =>
+        {
+            RefreshPlot();
+            if (e.Action == NotifyCollectionChangedAction.Add)
+                MarkDirty();
+        });
+    }
 
     private void RefreshPlot()
     {
@@ -287,6 +304,245 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     {
         PlotControl.Plot.Axes.AutoScale();
         PlotControl.Refresh();
+    }
+
+    // ── Project helpers ──────────────────────────────────────────────────────
+
+    private void UpdateProjectTitle()
+    {
+        var star = _isDirty ? " *" : string.Empty;
+        Title = $"FlyLine Profiler — {_projectName}{star}";
+        if (ProjectNameText != null)
+            ProjectNameText.Text = $"{_projectName}{star}";
+    }
+
+    private void MarkDirty()
+    {
+        _isDirty = true;
+        UpdateProjectTitle();
+    }
+
+    private bool ConfirmDiscardIfDirty()
+    {
+        if (!_isDirty) return true;
+        var r = MessageBox.Show(
+            $"Project \"{_projectName}\" has unsaved changes.\nDiscard and continue?",
+            "Unsaved Changes", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+        return r == MessageBoxResult.Yes;
+    }
+
+    private void ClearProjectState()
+    {
+        _vm.Points.CollectionChanged -= Points_CollectionChanged;
+        _vm.ClearAllData();
+        _importedSeries.Clear();
+        _segmentNodes.Clear();
+        _segmentUndoStack.Clear();
+        ProjectSegments.Clear();
+        DesignNodes.Clear();
+        TotalVolumeText = string.Empty;
+        _lastImportedFile = "-";
+        _vm.Points.CollectionChanged += Points_CollectionChanged;
+    }
+
+    private void SaveProjectToFile(string path)
+    {
+        var project = new FlyLineProject
+        {
+            Name       = _projectName,
+            CreatedAt  = _projectCreatedAt,
+            ScanPoints = _vm.Points
+                           .OrderBy(p => p.X)
+                           .Select(p => new MeasurementPoint { X = p.X, RawY = p.RawY, FilteredY = p.FilteredY })
+                           .ToList(),
+            ImportedSeries = _importedSeries
+                               .Select(s => new ProjectImportedSeries
+                               {
+                                   Name     = s.Name,
+                                   Xs       = s.Xs,
+                                   Ys       = s.Ys,
+                                   ColorHex = $"#{s.Color.R:X2}{s.Color.G:X2}{s.Color.B:X2}"
+                               })
+                               .ToList(),
+            DesignNodes = _segmentNodes
+                            .OrderBy(n => n.X)
+                            .Select(n => new ProjectDesignNode { X = n.X, Y = n.Y })
+                            .ToList()
+        };
+
+        ProjectService.Save(project, path);
+        _currentProjectPath = path;
+        _isDirty            = false;
+        UpdateProjectTitle();
+        UiStatus = $"Project saved: {Path.GetFileName(path)}";
+    }
+
+    private void LoadProjectFromFile(string path)
+    {
+        var project = ProjectService.Load(path);
+
+        ClearProjectState();
+
+        _vm.Points.CollectionChanged -= Points_CollectionChanged;
+        foreach (var pt in project.ScanPoints)
+            _vm.Points.Add(new MeasurementPoint { X = pt.X, RawY = pt.RawY, FilteredY = pt.FilteredY });
+
+        foreach (var s in project.ImportedSeries)
+        {
+            _importedSeries.Add(new ImportedSeries
+            {
+                Name  = s.Name,
+                Xs    = s.Xs,
+                Ys    = s.Ys,
+                Color = ParseColorHex(s.ColorHex, _importedSeries.Count)
+            });
+        }
+
+        foreach (var n in project.DesignNodes)
+            _segmentNodes.Add((n.X, n.Y));
+
+        _projectName        = project.Name;
+        _projectCreatedAt   = project.CreatedAt;
+        _currentProjectPath = path;
+        _isDirty            = false;
+        _lastImportedFile   = _importedSeries.Count > 0 ? _importedSeries[^1].Name : "-";
+
+        _vm.Points.CollectionChanged += Points_CollectionChanged;
+
+        RefreshPlot();
+        FitAfterRefresh();
+        RefreshSegmentTable();
+        RefreshStatusBar();
+        UpdateProjectTitle();
+        UiStatus = $"Project loaded: {project.Name}  ({project.ScanPoints.Count} scan pts, {project.ImportedSeries.Count} series, {project.DesignNodes.Count} nodes)";
+    }
+
+    private static ScottColor ParseColorHex(string hex, int fallbackIndex)
+    {
+        try
+        {
+            hex = hex.TrimStart('#');
+            if (hex.Length == 6)
+            {
+                byte r = Convert.ToByte(hex[..2], 16);
+                byte g = Convert.ToByte(hex[2..4], 16);
+                byte b = Convert.ToByte(hex[4..6], 16);
+                return new ScottColor(r, g, b);
+            }
+        }
+        catch { /* fall through to default */ }
+        return PickImportColor(fallbackIndex);
+    }
+
+    private void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
+    {
+        if (_isDirty)
+        {
+            var r = MessageBox.Show(
+                $"Project \"{_projectName}\" has unsaved changes.\nSave before closing?",
+                "Unsaved Changes",
+                MessageBoxButton.YesNoCancel,
+                MessageBoxImage.Warning);
+
+            if (r == MessageBoxResult.Cancel)
+            {
+                e.Cancel = true;
+                return;
+            }
+            if (r == MessageBoxResult.Yes)
+                SaveProject_Click(this, new RoutedEventArgs());
+        }
+    }
+
+    // ── Project button handlers ───────────────────────────────────────────────
+
+    private void NewProject_Click(object sender, RoutedEventArgs e)
+    {
+        if (!ConfirmDiscardIfDirty()) return;
+
+        // Ask for project name
+        var name = Microsoft.VisualBasic.Interaction.InputBox(
+            "Enter a name for the new project:",
+            "New Project",
+            "Untitled");
+        if (string.IsNullOrWhiteSpace(name)) return;
+
+        ClearProjectState();
+        _projectName        = name.Trim();
+        _projectCreatedAt   = DateTime.UtcNow;
+        _currentProjectPath = null;
+        _isDirty            = false;
+
+        RefreshPlot();
+        RefreshStatusBar();
+        UpdateProjectTitle();
+        UiStatus = $"New project: {_projectName}";
+    }
+
+    private void OpenProject_Click(object sender, RoutedEventArgs e)
+    {
+        if (!ConfirmDiscardIfDirty()) return;
+
+        var dlg = new OpenFileDialog
+        {
+            Filter      = ProjectService.FileFilter,
+            Title       = "Open FlyLine Project",
+            InitialDirectory = ProjectService.DefaultProjectFolder
+        };
+        if (dlg.ShowDialog() != true) return;
+
+        try
+        {
+            LoadProjectFromFile(dlg.FileName);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Could not open project:\n{ex.Message}", "Error",
+                            MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void SaveProject_Click(object sender, RoutedEventArgs e)
+    {
+        if (_currentProjectPath != null)
+        {
+            try { SaveProjectToFile(_currentProjectPath); }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Save failed:\n{ex.Message}", "Error",
+                                MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+        else
+        {
+            SaveProjectAs_Click(sender, e);
+        }
+    }
+
+    private void SaveProjectAs_Click(object sender, RoutedEventArgs e)
+    {
+        Directory.CreateDirectory(ProjectService.DefaultProjectFolder);
+
+        var dlg = new SaveFileDialog
+        {
+            Filter           = ProjectService.FileFilter,
+            DefaultExt       = ProjectService.FileExtension,
+            FileName         = _projectName,
+            InitialDirectory = ProjectService.DefaultProjectFolder,
+            Title            = "Save FlyLine Project As"
+        };
+        if (dlg.ShowDialog() != true) return;
+
+        // Use the file name (without extension) as the project name if untitled
+        if (_projectName == "Untitled")
+            _projectName = Path.GetFileNameWithoutExtension(dlg.FileName);
+
+        try { SaveProjectToFile(dlg.FileName); }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Save failed:\n{ex.Message}", "Error",
+                            MessageBoxButton.OK, MessageBoxImage.Error);
+        }
     }
 
     /// <summary>
@@ -534,6 +790,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         RefreshPlot();
         FitAfterRefresh();
         RefreshSegmentTable();
+        MarkDirty();
         var hint = (Keyboard.IsKeyDown(Key.LeftShift) || Keyboard.IsKeyDown(Key.RightShift))
                    ? "  [SHIFT — level]" : string.Empty;
         UiStatus = $"Node added: {snappedX:0} cm  Ø {diameter:0.000} mm  ({_segmentNodes.Count} nodes){hint}";
@@ -587,6 +844,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         if (_draggingNodeX == null) return;
         PlotControl.ReleaseMouseCapture();
         RefreshSegmentTable();
+        MarkDirty();
         UiStatus = $"Node placed at {_draggingNodeX.Value:0} cm  ({_segmentNodes.Count} nodes total)";
         _draggingNodeX = null;
         e.Handled = true;
@@ -605,6 +863,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         RefreshPlot();
         RefreshSegmentTable();
+        MarkDirty();
         UiStatus = $"Node removed at {closest.X:0} cm  ({_segmentNodes.Count} remaining)";
         e.Handled = true;
     }
@@ -627,6 +886,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _segmentNodes.RemoveAll(n => n.X == lastX);
         RefreshPlot();
         RefreshSegmentTable();
+        MarkDirty();
         UiStatus = $"Undone node at {lastX:0} cm  ({_segmentNodes.Count} remaining)";
     }
 
@@ -638,6 +898,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         DesignNodes.Clear();
         TotalVolumeText = string.Empty;
         RefreshPlot();
+        MarkDirty();
         UiStatus = "Design cleared";
     }
 
@@ -747,7 +1008,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             _segmentNodes.AddRange(loaded);
 
             RefreshPlot();
+            FitAfterRefresh();
             RefreshSegmentTable();
+            MarkDirty();
             UiStatus = $"Loaded {loaded.Count} nodes from {Path.GetFileName(dlg.FileName)}";
         }
         catch (Exception ex)
@@ -973,6 +1236,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     {
         await Send("reset");
         _vm.ClearAllData();
+        MarkDirty();
         UiStatus = "Position zeroed and chart cleared";
     }
 
@@ -1090,6 +1354,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             UiStatus = $"CSV imported: {series.Name} ({series.Xs.Length} points)";
             RefreshPlot();
             FitAfterRefresh();
+            MarkDirty();
             MessageBox.Show($"CSV imported: {series.Name} ({series.Xs.Length} points)", "Import CSV");
         }
         catch (Exception ex)
@@ -1112,6 +1377,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _importedSeries.Clear();
         _lastImportedFile = "-";
         RefreshPlot();
+        MarkDirty();
         UiStatus = "Imported series cleared";
     }
 
