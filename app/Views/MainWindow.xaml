@@ -376,6 +376,13 @@
 
                     <Separator Style="{StaticResource ToolSep}"/>
 
+                    <Button Content="Fit View"
+                            Style="{StaticResource BtnGhost}"
+                            Click="FitView_Click"
+                            ToolTip="Fit chart to all visible data"/>
+
+                    <Separator Style="{StaticResource ToolSep}"/>
+
                     <Button Content="Settings"
                             Style="{StaticResource BtnGhost}"
                             Click="Settings_Click"

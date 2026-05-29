@@ -282,9 +282,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     // ScottPlot 5 WPF: Refresh() dispatches async via InvalidateVisual, so AutoScale()
     // called inside RefreshPlot doesn't always compute correct bounds before the render.
     // Call this after RefreshPlot() in operations that must guarantee the view fits the data.
+    // Note: always forces a fit regardless of _autoFitEnabled (that flag only gates live-scan updates).
     private void FitAfterRefresh()
     {
-        if (!_autoFitEnabled) return;
         PlotControl.Plot.Axes.AutoScale();
         PlotControl.Refresh();
     }
@@ -1218,6 +1218,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     }
 
     // Settings
+    private void FitView_Click(object sender, RoutedEventArgs e)
+    {
+        FitAfterRefresh();
+    }
+
     private void Settings_Click(object sender, RoutedEventArgs e)
     {
         var copy = _vm.CloneSettings();
