@@ -1077,7 +1077,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             _lastImportedFile = Path.GetFileName(dlg.FileName);
             UiStatus = $"CSV imported: {series.Name}";
             RefreshPlot();
-            MessageBox.Show($"CSV imported: {series.Name}", "Import CSV");
+            // ScottPlot 5 requires an explicit Refresh() after AutoScale() for limits to take effect
+            PlotControl.Plot.Axes.AutoScale();
+            PlotControl.Refresh();
+            MessageBox.Show($"CSV imported: {series.Name} ({series.Xs.Length} points)", "Import CSV");
         }
         catch (Exception ex)
         {
