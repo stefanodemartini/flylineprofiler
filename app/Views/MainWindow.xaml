@@ -294,13 +294,13 @@
                     <Separator Style="{StaticResource ToolSep}"/>
 
                     <!-- Dati -->
-                    <Button Content="ðŸ“¥ Import CSV"
+                    <Button Content="ðŸ“¥Import CSV"
                             Style="{StaticResource BtnSecondary}"
                             Click="ImportCsv_Click"/>
-                    <Button Content="ðŸ“¤ Export CSV"
+                    <Button Content="ðŸ“¤Export CSV"
                             Style="{StaticResource BtnSecondary}"
                             Click="ExportCsv_Click"/>
-                    <Button Content="ðŸ–¼ PNG"
+                    <Button Content="ðŸ–¼PNG"
                             Style="{StaticResource BtnSecondary}"
                             Click="ExportPng_Click"/>
                     <Button Content="âœ• Importati"
@@ -322,13 +322,13 @@
                     <Button Content="âœ• Nodi"
                             Style="{StaticResource BtnGhost}"
                             Click="ClearSegments_Click"/>
-                    <Button Content="ðŸ’¾ Salva nodi"
+                    <Button Content="ðŸ’¾Salva nodi"
                             Style="{StaticResource BtnGhost}"
                             Click="SaveNodes_Click"/>
-                    <Button Content="ðŸ“‚ Carica nodi"
+                    <Button Content="ðŸ“‚Carica nodi"
                             Style="{StaticResource BtnGhost}"
                             Click="LoadNodes_Click"/>
-                    <Button Content="ðŸ“¤ Seg. CSV"
+                    <Button Content="ðŸ“¤Seg. CSV"
                             Style="{StaticResource BtnGhost}"
                             Click="ExportSegmentsCsv_Click"/>
 
@@ -629,3 +629,4 @@
 
 
 </Window>
+
