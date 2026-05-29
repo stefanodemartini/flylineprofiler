@@ -6,6 +6,8 @@ using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using WpfColor    = System.Windows.Media.Color;
+using ScottColor  = ScottPlot.Color;
 using Microsoft.Win32;
 using DiametroLineaDesktop.Models;
 using DiametroLineaDesktop.ViewModels;
@@ -13,7 +15,7 @@ using ScottPlot;
 
 namespace DiametroLineaDesktop.Views;
 
-public partial class MainWindow : Fluent.RibbonWindow, INotifyPropertyChanged
+public partial class MainWindow : Window, INotifyPropertyChanged
 {
     private readonly MainViewModel _vm = new();
     private bool _plotInitialized = false;
@@ -83,6 +85,14 @@ public partial class MainWindow : Fluent.RibbonWindow, INotifyPropertyChanged
                 RefreshStatusBar();
                 if (e.PropertyName == nameof(MainViewModel.ScanReceiving))
                     RefreshPlot();
+                if (e.PropertyName == nameof(MainViewModel.ConnectionStatus))
+                {
+                    bool connected = _vm.ConnectionStatus.Contains("Connesso", StringComparison.OrdinalIgnoreCase)
+                                  || _vm.ConnectionStatus.Contains("OK",       StringComparison.OrdinalIgnoreCase);
+                    ConnLed.Fill = connected
+                        ? new System.Windows.Media.SolidColorBrush((WpfColor)System.Windows.Media.ColorConverter.ConvertFromString("#28C996"))
+                        : new System.Windows.Media.SolidColorBrush((WpfColor)System.Windows.Media.ColorConverter.ConvertFromString("#E85454"));
+                }
             };
             await _vm.InitializeAsync();
             RefreshPlot();
@@ -971,11 +981,8 @@ public partial class MainWindow : Fluent.RibbonWindow, INotifyPropertyChanged
 
     private void AutoFitToggle_Click(object sender, RoutedEventArgs e)
     {
-        bool? isChecked = sender is Fluent.ToggleButton ftb ? ftb.IsChecked
-                        : sender is MenuItem mi             ? mi.IsChecked
-                        : null;
-        if (isChecked == null) return;
-        _autoFitEnabled = isChecked.Value;
+        bool isChecked = AutoFitToggle.IsChecked ?? true;
+        _autoFitEnabled = isChecked;
         _vm.Settings.Chart.AutoFit = _autoFitEnabled;
         _vm.SaveSettings();
         RefreshPlot();
@@ -1154,17 +1161,17 @@ public partial class MainWindow : Fluent.RibbonWindow, INotifyPropertyChanged
         double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out value) ||
         double.TryParse(text, NumberStyles.Float, CultureInfo.GetCultureInfo("it-IT"), out value);
 
-    private static Color PickImportColor(int index)
+    private static ScottColor PickImportColor(int index)
     {
-        Color[] palette = { Colors.Green, Colors.Red, Colors.Purple, Colors.Brown, Colors.Cyan, Colors.Magenta };
+        ScottColor[] palette = { Colors.Green, Colors.Red, Colors.Purple, Colors.Brown, Colors.Cyan, Colors.Magenta };
         return palette[index % palette.Length];
     }
 
     private class ImportedSeries
     {
-        public string   Name  { get; set; } = "";
-        public double[] Xs    { get; set; } = Array.Empty<double>();
-        public double[] Ys    { get; set; } = Array.Empty<double>();
-        public Color    Color { get; set; } = Colors.Green;
+        public string     Name  { get; set; } = "";
+        public double[]   Xs    { get; set; } = Array.Empty<double>();
+        public double[]   Ys    { get; set; } = Array.Empty<double>();
+        public ScottColor Color { get; set; } = Colors.Green;
     }
 }

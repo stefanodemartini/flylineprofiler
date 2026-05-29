@@ -1,482 +1,631 @@
-<Fluent:RibbonWindow
+﻿<Window
         x:Class="DiametroLineaDesktop.Views.MainWindow"
         x:Name="MainWin"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        xmlns:Fluent="urn:fluent-ribbon"
         xmlns:ScottPlot="clr-namespace:ScottPlot.WPF;assembly=ScottPlot.WPF"
         mc:Ignorable="d"
-        Title="Diametro Linea Desktop"
-        Height="920"
-        Width="1450"
-        Background="#EFF4F8"
-        FontFamily="Bahnschrift">
+        Title="FlyLine Profiler"
+        Height="900"
+        Width="1400"
+        MinHeight="680"
+        MinWidth="900"
+        Background="#12151C"
+        FontFamily="Segoe UI">
 
-    <Fluent:RibbonWindow.Resources>
-        <LinearGradientBrush x:Key="WindowBackgroundBrush" StartPoint="0,0" EndPoint="1,1">
-            <GradientStop Color="#F4F7FB" Offset="0"/>
-            <GradientStop Color="#E6EDF5" Offset="0.52"/>
-            <GradientStop Color="#DEE8F2" Offset="1"/>
-        </LinearGradientBrush>
+    <Window.Resources>
 
-        <LinearGradientBrush x:Key="HeroBrush" StartPoint="0,0" EndPoint="1,1">
-            <GradientStop Color="#0E223B" Offset="0"/>
-            <GradientStop Color="#18456A" Offset="0.6"/>
-            <GradientStop Color="#2A6D86" Offset="1"/>
-        </LinearGradientBrush>
+        <!-- â”€â”€ Colours â”€â”€ -->
+        <SolidColorBrush x:Key="WinBg"        Color="#12151C"/>
+        <SolidColorBrush x:Key="PanelBg"      Color="#1C2030"/>
+        <SolidColorBrush x:Key="CardBg"       Color="#232837"/>
+        <SolidColorBrush x:Key="BorderBrush2" Color="#2E3548"/>
+        <SolidColorBrush x:Key="Accent"       Color="#2D7DD2"/>
+        <SolidColorBrush x:Key="AccentDim"    Color="#1A4F8A"/>
+        <SolidColorBrush x:Key="Danger"       Color="#E85454"/>
+        <SolidColorBrush x:Key="DangerDim"    Color="#7A2020"/>
+        <SolidColorBrush x:Key="Success"      Color="#28C996"/>
+        <SolidColorBrush x:Key="Warning"      Color="#F5A623"/>
+        <SolidColorBrush x:Key="TextPrimary"  Color="#E2E8F4"/>
+        <SolidColorBrush x:Key="TextMuted"    Color="#7A8499"/>
+        <SolidColorBrush x:Key="LogBg"        Color="#0D0F16"/>
 
-        <SolidColorBrush x:Key="CardBackgroundBrush" Color="#FCFDFE"/>
-        <SolidColorBrush x:Key="CardBorderBrush" Color="#D8E2ED"/>
-        <SolidColorBrush x:Key="AccentBrush" Color="#0F5E8C"/>
-        <SolidColorBrush x:Key="AccentSoftBrush" Color="#E8F2F7"/>
-        <SolidColorBrush x:Key="MetricBrush" Color="#F7FAFD"/>
-        <SolidColorBrush x:Key="MetricBorderBrush" Color="#D6E1EB"/>
-        <SolidColorBrush x:Key="InkBrush" Color="#102033"/>
-        <SolidColorBrush x:Key="MutedBrush" Color="#617186"/>
-        <SolidColorBrush x:Key="LogBackgroundBrush" Color="#0F1726"/>
-        <SolidColorBrush x:Key="LogBorderBrush" Color="#2E405A"/>
-
-        <Style x:Key="CardGroupBoxStyle" TargetType="GroupBox">
-            <Setter Property="Margin" Value="0,0,0,10"/>
-            <Setter Property="Background" Value="{StaticResource CardBackgroundBrush}"/>
-            <Setter Property="BorderBrush" Value="{StaticResource CardBorderBrush}"/>
+        <!-- â”€â”€ Button base â”€â”€ -->
+        <Style x:Key="BtnBase" TargetType="Button">
+            <Setter Property="Height"          Value="34"/>
+            <Setter Property="Padding"         Value="14,0"/>
+            <Setter Property="Margin"          Value="2,0"/>
+            <Setter Property="FontSize"        Value="12"/>
+            <Setter Property="FontWeight"      Value="SemiBold"/>
+            <Setter Property="Cursor"          Value="Hand"/>
+            <Setter Property="BorderThickness" Value="0"/>
             <Setter Property="Template">
                 <Setter.Value>
-                    <ControlTemplate TargetType="GroupBox">
-                        <Grid>
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="*"/>
-                            </Grid.RowDefinitions>
-                            <Border Grid.RowSpan="2"
-                                    CornerRadius="20"
-                                    Background="{TemplateBinding Background}"
-                                    BorderBrush="{TemplateBinding BorderBrush}"
-                                    BorderThickness="1"
-                                    Margin="0,14,0,0">
-                                <Border.Effect>
-                                    <DropShadowEffect BlurRadius="22" ShadowDepth="0" Color="#19000000"/>
-                                </Border.Effect>
-                            </Border>
-                            <Border Margin="18,0,18,0"
-                                    Padding="12,6"
-                                    HorizontalAlignment="Left"
-                                    Background="{StaticResource AccentSoftBrush}"
-                                    CornerRadius="12"
-                                    BorderBrush="{StaticResource CardBorderBrush}"
-                                    BorderThickness="1">
-                                <ContentPresenter ContentSource="Header"
-                                                  TextElement.Foreground="{StaticResource AccentBrush}"
-                                                  TextElement.FontWeight="SemiBold"
-                                                  TextElement.FontSize="13"/>
-                            </Border>
-                            <ContentPresenter Grid.Row="1" Margin="18,26,18,18"/>
-                        </Grid>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd"
+                                Background="{TemplateBinding Background}"
+                                CornerRadius="8"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Opacity" Value="0.82"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Bd" Property="Opacity" Value="0.65"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Bd" Property="Opacity" Value="0.35"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
         </Style>
 
-        <Style x:Key="MetricCardStyle" TargetType="Border">
-            <Setter Property="Background" Value="{StaticResource MetricBrush}"/>
-            <Setter Property="BorderBrush" Value="{StaticResource MetricBorderBrush}"/>
-            <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="CornerRadius" Value="16"/>
-            <Setter Property="Padding" Value="14,12"/>
-            <Setter Property="Margin" Value="0,0,10,10"/>
-            <Setter Property="MinWidth" Value="126"/>
-            <Setter Property="MinHeight" Value="88"/>
+        <Style x:Key="BtnPrimary" TargetType="Button" BasedOn="{StaticResource BtnBase}">
+            <Setter Property="Background"  Value="{StaticResource Accent}"/>
+            <Setter Property="Foreground"  Value="White"/>
         </Style>
 
-        <Style x:Key="MetricLabelStyle" TargetType="TextBlock">
-            <Setter Property="FontSize" Value="11"/>
-            <Setter Property="Foreground" Value="{StaticResource MutedBrush}"/>
-            <Setter Property="TextWrapping" Value="Wrap"/>
+        <Style x:Key="BtnDanger" TargetType="Button" BasedOn="{StaticResource BtnBase}">
+            <Setter Property="Background"  Value="{StaticResource Danger}"/>
+            <Setter Property="Foreground"  Value="White"/>
         </Style>
 
-        <Style x:Key="MetricValueStyle" TargetType="TextBlock">
-            <Setter Property="FontSize" Value="21"/>
-            <Setter Property="FontWeight" Value="SemiBold"/>
-            <Setter Property="Foreground" Value="{StaticResource InkBrush}"/>
-            <Setter Property="Margin" Value="0,6,0,0"/>
+        <Style x:Key="BtnSecondary" TargetType="Button" BasedOn="{StaticResource BtnBase}">
+            <Setter Property="Background"  Value="#2C3245"/>
+            <Setter Property="Foreground"  Value="{StaticResource TextPrimary}"/>
         </Style>
 
-        <Style x:Key="DashboardStatusBarStyle" TargetType="StatusBar">
-            <Setter Property="Background" Value="#F9FBFD"/>
-            <Setter Property="BorderBrush" Value="{StaticResource CardBorderBrush}"/>
-            <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="Padding" Value="8,4"/>
+        <Style x:Key="BtnGhost" TargetType="Button" BasedOn="{StaticResource BtnBase}">
+            <Setter Property="Background"  Value="Transparent"/>
+            <Setter Property="Foreground"  Value="{StaticResource TextMuted}"/>
         </Style>
-    </Fluent:RibbonWindow.Resources>
 
-    <Grid Background="{StaticResource WindowBackgroundBrush}">
-        <DockPanel Margin="10">
-
-            <Border DockPanel.Dock="Top"
-                    Background="#F8FBFD"
-                    BorderBrush="{StaticResource CardBorderBrush}"
-                    BorderThickness="1"
-                    CornerRadius="22"
-                    Margin="0,0,0,10">
-                <Border.Effect>
-                    <DropShadowEffect BlurRadius="24" ShadowDepth="0" Color="#18000000"/>
-                </Border.Effect>
-
-                <Fluent:Ribbon AutomaticStateManagement="False"
-                               CanCustomizeQuickAccessToolBar="False"
-                               Background="Transparent">
-
-                    <Fluent:Ribbon.Menu>
-                        <Fluent:Backstage>
-                            <Fluent:BackstageTabControl>
-                                <Fluent:Button Header="Importa CSV confronto" Click="ImportCsv_Click"/>
-                                <Fluent:Button Header="Esporta CSV" Click="ExportCsv_Click"/>
-                                <Fluent:Button Header="Esporta PNG grafico" Click="ExportPng_Click"/>
-                                <Fluent:SeparatorTabItem/>
-                                <Fluent:Button Header="Esporta segmenti CSV" Click="ExportSegmentsCsv_Click"/>
-                                <Fluent:Button Header="Salva nodi..." Click="SaveNodes_Click"/>
-                                <Fluent:Button Header="Carica nodi..." Click="LoadNodes_Click"/>
-                                <Fluent:SeparatorTabItem/>
-                                <Fluent:Button Header="Impostazioni" Click="Settings_Click"/>
-                                <Fluent:Button Header="Esci" Click="Exit_Click"/>
-                            </Fluent:BackstageTabControl>
-                        </Fluent:Backstage>
-                    </Fluent:Ribbon.Menu>
-
-                    <Fluent:RibbonTabItem Header="Connessione">
-                        <Fluent:RibbonGroupBox Header="Rete">
-                            <Fluent:Button Header="Connetti" Size="Large" Click="Connect_Click"/>
-                            <Fluent:Button Header="Disconnetti" Size="Large" Click="Disconnect_Click"/>
-                        </Fluent:RibbonGroupBox>
-                        <Fluent:RibbonGroupBox Header="Scansione">
-                            <Fluent:Button Header="START SCAN" Size="Large" Click="StartScan_Click" IsEnabled="{Binding CanControl}"/>
-                            <Fluent:Button Header="STOP" Size="Large" Click="Stop_Click"/>
-                            <Fluent:Button Header="Ricezione ON" Click="ScanOn_Click" IsEnabled="{Binding CanEnableScan}"/>
-                            <Fluent:Button Header="Ricezione OFF" Click="ScanOff_Click" IsEnabled="{Binding ScanReceiving}"/>
-                        </Fluent:RibbonGroupBox>
-                    </Fluent:RibbonTabItem>
-
-                    <Fluent:RibbonTabItem Header="Motore">
-                        <Fluent:RibbonGroupBox Header="Movimento">
-                            <Fluent:Button Header="FAST stessa dir" Click="FastS_Click" IsEnabled="{Binding CanControl}"/>
-                            <Fluent:Button Header="FAST opposta dir" Click="FastO_Click" IsEnabled="{Binding CanControl}"/>
-                            <Fluent:Button Header="Vai a posizione" Click="Goto_Click" IsEnabled="{Binding CanControl}"/>
-                            <Fluent:Button Header="Aggiorna stato" Click="MotorStatus_Click"/>
-                        </Fluent:RibbonGroupBox>
-                        <Fluent:RibbonGroupBox Header="Calibrazione">
-                            <Fluent:Button Header="Zero display" Click="SetDisplayZero_Click"/>
-                            <Fluent:Button Header="Reset offset" Click="ResetOffset_Click"/>
-                            <Fluent:Button Header="Imposta Offset..." Click="SetOffset_Click"/>
-                            <Fluent:Button Header="Lettura raw" Click="ReadRaw_Click"/>
-                        </Fluent:RibbonGroupBox>
-                    </Fluent:RibbonTabItem>
-
-                    <Fluent:RibbonTabItem Header="Grafico">
-                        <Fluent:RibbonGroupBox Header="Vista">
-                            <Fluent:Button Header="Adatta assi" Size="Large" Click="FitPlot_Click"/>
-                            <Fluent:ToggleButton Header="Auto-fit" Size="Large" IsChecked="True" Click="AutoFitToggle_Click"/>
-                            <Fluent:Button Header="Azzera tutto" Click="Reset_Click" ToolTip="Azzera posizione e cancella grafico"/>
-                            <Fluent:ToggleButton x:Name="SmoothingToggle"
-                                                 Header="Smoothing EMA"
-                                                 IsChecked="True"
-                                                 Click="SmoothingToggle_Click"
-                                                 ToolTip="Applica filtro EMA ai dati ricevuti"/>
-                            <StackPanel Width="190" Margin="8,0,0,0" VerticalAlignment="Center">
-                                <TextBlock Text="Alpha smoothing" FontSize="11" FontWeight="SemiBold"/>
-                                <Slider x:Name="SmoothingAlphaSlider"
-                                        Minimum="0.01"
-                                        Maximum="1.00"
-                                        TickFrequency="0.01"
-                                        IsSnapToTickEnabled="False"
-                                        SmallChange="0.01"
-                                        LargeChange="0.05"
-                                        IsEnabled="{Binding ElementName=SmoothingToggle, Path=IsChecked}"
-                                        ValueChanged="SmoothingAlphaSlider_ValueChanged"/>
-                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                                    <TextBlock Text="{Binding ElementName=MainWin, Path=SmoothingAlphaStatus}"
-                                               FontSize="11"
-                                               VerticalAlignment="Center"/>
-                                    <Button Content="Reset"
-                                            Margin="8,0,0,0"
-                                            Padding="6,1"
-                                            FontSize="11"
-                                            IsEnabled="{Binding ElementName=SmoothingToggle, Path=IsChecked}"
-                                            Click="ResetSmoothingAlpha_Click"/>
-                                </StackPanel>
-                            </StackPanel>
-                            <StackPanel Width="150" Margin="8,0,0,0" VerticalAlignment="Center">
-                                <TextBlock Text="Spessore linea" FontSize="11" FontWeight="SemiBold"/>
-                                <Slider x:Name="LineWidthSlider"
-                                        Minimum="1"
-                                        Maximum="8"
-                                        TickFrequency="1"
-                                        IsSnapToTickEnabled="True"
-                                        ValueChanged="LineWidthSlider_ValueChanged"/>
-                                <TextBlock Text="{Binding ElementName=MainWin, Path=LineWidthStatus}"
-                                           FontSize="11"
-                                           HorizontalAlignment="Right"/>
-                            </StackPanel>
-                            <StackPanel Width="150" Margin="8,0,0,0" VerticalAlignment="Center">
-                                <TextBlock Text="Opacita filtro" FontSize="11" FontWeight="SemiBold"/>
-                                <Slider x:Name="FilteredOpacitySlider"
-                                        Minimum="0.05"
-                                        Maximum="1.00"
-                                        TickFrequency="0.05"
-                                        SmallChange="0.05"
-                                        LargeChange="0.10"
-                                        ValueChanged="FilteredOpacitySlider_ValueChanged"/>
-                                <TextBlock Text="{Binding ElementName=MainWin, Path=FilteredOpacityStatus}"
-                                           FontSize="11"
-                                           HorizontalAlignment="Right"/>
-                            </StackPanel>
-                            <StackPanel Width="150" Margin="8,0,0,0" VerticalAlignment="Center">
-                                <TextBlock Text="Opacita raw" FontSize="11" FontWeight="SemiBold"/>
-                                <Slider x:Name="RawOpacitySlider"
-                                        Minimum="0.05"
-                                        Maximum="1.00"
-                                        TickFrequency="0.05"
-                                        SmallChange="0.05"
-                                        LargeChange="0.10"
-                                        ValueChanged="RawOpacitySlider_ValueChanged"/>
-                                <TextBlock Text="{Binding ElementName=MainWin, Path=RawOpacityStatus}"
-                                           FontSize="11"
-                                           HorizontalAlignment="Right"/>
-                            </StackPanel>
-                        </Fluent:RibbonGroupBox>
-                        <Fluent:RibbonGroupBox Header="Serie">
-                            <Fluent:Button Header="Importa CSV confronto" Click="ImportCsv_Click"/>
-                            <Fluent:Button Header="Cancella serie importate" Click="ClearImported_Click"/>
-                        </Fluent:RibbonGroupBox>
-                    </Fluent:RibbonTabItem>
-
-                    <Fluent:RibbonTabItem Header="Segmenti">
-                        <Fluent:RibbonGroupBox Header="Disegno">
-                            <Fluent:ToggleButton x:Name="MenuDrawSegments"
-                                                 Header="Disegna segmenti"
-                                                 Size="Large"
-                                                 Click="ToggleDrawMode_Click"/>
-                            <Fluent:Button Header="Annulla nodo" Click="UndoLastNode_Click"/>
-                            <Fluent:Button Header="Cancella tutti" Click="ClearSegments_Click"/>
-                        </Fluent:RibbonGroupBox>
-                        <Fluent:RibbonGroupBox Header="File nodi">
-                            <Fluent:Button Header="Salva nodi..." Click="SaveNodes_Click"/>
-                            <Fluent:Button Header="Carica nodi..." Click="LoadNodes_Click"/>
-                            <Fluent:Button Header="Esporta segmenti CSV" Click="ExportSegmentsCsv_Click"/>
-                        </Fluent:RibbonGroupBox>
-                    </Fluent:RibbonTabItem>
-
-                </Fluent:Ribbon>
-            </Border>
-
-            <Border DockPanel.Dock="Bottom"
-                    Background="#F9FBFD"
-                    BorderBrush="{StaticResource CardBorderBrush}"
-                    BorderThickness="1"
-                    CornerRadius="18"
-                    Margin="0,10,0,0">
-                <StatusBar Style="{StaticResource DashboardStatusBarStyle}">
-                    <StatusBarItem>
-                        <TextBlock Text="{Binding ElementName=MainWin, Path=UiStatus}" FontWeight="SemiBold" Foreground="{StaticResource AccentBrush}"/>
-                    </StatusBarItem>
-                    <Separator/>
-                    <StatusBarItem>
-                        <TextBlock Text="{Binding ElementName=MainWin, Path=AutoFitStatus}"/>
-                    </StatusBarItem>
-                    <Separator/>
-                    <StatusBarItem>
-                        <TextBlock Text="{Binding ElementName=MainWin, Path=ImportedSeriesStatus}"/>
-                    </StatusBarItem>
-                    <Separator/>
-                    <StatusBarItem>
-                        <TextBlock Text="{Binding ElementName=MainWin, Path=LastImportedFileStatus}"/>
-                    </StatusBarItem>
-                    <Separator/>
-                    <StatusBarItem>
-                        <TextBlock Text="{Binding ElementName=MainWin, Path=DrawModeStatus}" Foreground="#B42318" FontWeight="SemiBold"/>
-                    </StatusBarItem>
-                    <Separator/>
-                    <StatusBarItem>
-                        <TextBlock Text="{Binding ElementName=MainWin, Path=SegmentNodesStatus}"/>
-                    </StatusBarItem>
-                    <Separator/>
-                    <StatusBarItem HorizontalAlignment="Right">
-                        <TextBlock Text="{Binding ElementName=MainWin, Path=HoverCoordsStatus}" FontFamily="Consolas" Foreground="#0F6B51"/>
-                    </StatusBarItem>
-                </StatusBar>
-            </Border>
-
-            <Grid>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="*"/>
-                    <RowDefinition Height="180"/>
-                </Grid.RowDefinitions>
-
-                <Border Grid.Row="0"
-                        Margin="0,0,0,10"
-                        Padding="24"
-                        Background="{StaticResource HeroBrush}"
-                        CornerRadius="26">
-                    <Border.Effect>
-                        <DropShadowEffect BlurRadius="28" ShadowDepth="0" Color="#26000000"/>
-                    </Border.Effect>
-
-                    <Grid>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                        </Grid.RowDefinitions>
-
-                        <StackPanel Grid.Row="0">
-                            <TextBlock Text="Dashboard di misura"
-                                       FontSize="28"
-                                       FontWeight="SemiBold"
-                                       Foreground="White"/>
-                            <TextBlock Text="Controllo motore, profilo diametro e diagnostica in un'unica console operativa."
-                                       Margin="0,6,0,0"
-                                       FontSize="13"
-                                       Foreground="#D8E8F4"/>
-                        </StackPanel>
-
-                        <WrapPanel Grid.Row="1" Margin="0,22,0,0">
-                            <Border Style="{StaticResource MetricCardStyle}" Background="#FDFEFE">
-                                <StackPanel>
-                                    <TextBlock Style="{StaticResource MetricLabelStyle}" Text="Connessione"/>
-                                    <TextBlock Style="{StaticResource MetricValueStyle}" Text="{Binding ConnectionStatus}"/>
-                                </StackPanel>
-                            </Border>
-                            <Border Style="{StaticResource MetricCardStyle}" Background="#FDFEFE">
-                                <StackPanel>
-                                    <TextBlock Style="{StaticResource MetricLabelStyle}" Text="Motore"/>
-                                    <TextBlock Style="{StaticResource MetricValueStyle}" Text="{Binding MotorState}"/>
-                                </StackPanel>
-                            </Border>
-                            <Border Style="{StaticResource MetricCardStyle}" Background="#FDFEFE">
-                                <StackPanel>
-                                    <TextBlock Style="{StaticResource MetricLabelStyle}" Text="Lunghezza"/>
-                                    <TextBlock Style="{StaticResource MetricValueStyle}" Text="{Binding CurrentLength}"/>
-                                </StackPanel>
-                            </Border>
-                            <Border Style="{StaticResource MetricCardStyle}" Background="#FDFEFE">
-                                <StackPanel>
-                                    <TextBlock Style="{StaticResource MetricLabelStyle}" Text="Diametro"/>
-                                    <TextBlock Style="{StaticResource MetricValueStyle}" Text="{Binding CurrentDiameter}"/>
-                                </StackPanel>
-                            </Border>
-                            <Border Style="{StaticResource MetricCardStyle}" Background="#FDFEFE">
-                                <StackPanel>
-                                    <TextBlock Style="{StaticResource MetricLabelStyle}" Text="Display"/>
-                                    <TextBlock Style="{StaticResource MetricValueStyle}" Text="{Binding CurrentDisplay}"/>
-                                </StackPanel>
-                            </Border>
-                            <Border Style="{StaticResource MetricCardStyle}" Background="#FDFEFE">
-                                <StackPanel>
-                                    <TextBlock Style="{StaticResource MetricLabelStyle}" Text="Velocita"/>
-                                    <TextBlock Style="{StaticResource MetricValueStyle}" Text="{Binding Speed}"/>
-                                    <TextBlock Margin="0,4,0,0" FontSize="11" Foreground="{StaticResource MutedBrush}" Text="{Binding SpeedStatus}"/>
-                                </StackPanel>
-                            </Border>
-                            <Border Style="{StaticResource MetricCardStyle}" Background="#FDFEFE">
-                                <StackPanel>
-                                    <TextBlock Style="{StaticResource MetricLabelStyle}" Text="Punti"/>
-                                    <TextBlock Style="{StaticResource MetricValueStyle}" Text="{Binding PointsCount}"/>
-                                </StackPanel>
-                            </Border>
-                            <Border Style="{StaticResource MetricCardStyle}" Background="#FDFEFE">
-                                <StackPanel>
-                                    <TextBlock Style="{StaticResource MetricLabelStyle}" Text="Zero display"/>
-                                    <TextBlock Style="{StaticResource MetricValueStyle}" Text="{Binding DisplayZeroText}"/>
-                                </StackPanel>
-                            </Border>
-                            <Border Style="{StaticResource MetricCardStyle}" Background="#FDFEFE">
-                                <StackPanel>
-                                    <TextBlock Style="{StaticResource MetricLabelStyle}" Text="Offset"/>
-                                    <TextBlock Style="{StaticResource MetricValueStyle}" Text="{Binding OffsetText}"/>
-                                </StackPanel>
-                            </Border>
-                        </WrapPanel>
-
-                        <Border Grid.Row="2"
-                                Margin="0,18,0,0"
-                                Padding="18,14"
-                                Background="#1B3352"
-                                CornerRadius="18"
-                                BorderBrush="#547091"
-                                BorderThickness="1">
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <Border Width="10" Height="10" CornerRadius="5" Background="#63D3A4" VerticalAlignment="Center"/>
-                                <StackPanel Grid.Column="1" Margin="14,0,0,0">
-                                    <TextBlock Text="GOTOPOS" FontSize="11" Foreground="#99B7D0"/>
-                                    <TextBlock Text="{Binding GotoStatus}" FontSize="16" FontWeight="SemiBold" Foreground="White" TextWrapping="Wrap"/>
-                                </StackPanel>
-                                <TextBlock Grid.Column="2" Text="{Binding LastUpdate}" Foreground="#BFD3E3" VerticalAlignment="Center"/>
-                            </Grid>
+        <!-- â”€â”€ Toggle button â”€â”€ -->
+        <Style x:Key="ToggleBase" TargetType="ToggleButton">
+            <Setter Property="Height"          Value="34"/>
+            <Setter Property="Padding"         Value="14,0"/>
+            <Setter Property="Margin"          Value="2,0"/>
+            <Setter Property="FontSize"        Value="12"/>
+            <Setter Property="FontWeight"      Value="SemiBold"/>
+            <Setter Property="Cursor"          Value="Hand"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Background"      Value="#2C3245"/>
+            <Setter Property="Foreground"      Value="{StaticResource TextMuted}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToggleButton">
+                        <Border x:Name="Bd"
+                                Background="{TemplateBinding Background}"
+                                CornerRadius="8"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"/>
                         </Border>
-                    </Grid>
-                </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{StaticResource AccentDim}"/>
+                                <Setter Property="Foreground" Value="{StaticResource Accent}"/>
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Opacity" Value="0.82"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Bd" Property="Opacity" Value="0.35"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
 
-                <GroupBox Grid.Row="1" Style="{StaticResource CardGroupBoxStyle}">
-                    <GroupBox.Header>
-                        <StackPanel>
-                            <TextBlock Text="Grafico profilo"/>
-                            <TextBlock Text="Serie live, smoothing regolabile e confronto CSV"
-                                       FontSize="11"
-                                       Foreground="#5B7188"/>
-                        </StackPanel>
-                    </GroupBox.Header>
-                    <Border Background="#F7FAFD"
-                            BorderBrush="#D9E5EF"
-                            BorderThickness="1"
-                            CornerRadius="18"
-                            Padding="8">
-                        <ScottPlot:WpfPlot x:Name="PlotControl" Margin="2"/>
-                    </Border>
-                </GroupBox>
+        <!-- â”€â”€ Separator between button groups â”€â”€ -->
+        <Style x:Key="ToolSep" TargetType="Separator">
+            <Setter Property="Width"      Value="1"/>
+            <Setter Property="Height"     Value="22"/>
+            <Setter Property="Margin"     Value="8,0"/>
+            <Setter Property="Background" Value="#2E3548"/>
+        </Style>
 
-                <GroupBox Grid.Row="2" Style="{StaticResource CardGroupBoxStyle}">
-                    <GroupBox.Header>
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="Log diagnostico" VerticalAlignment="Center"/>
-                            <CheckBox x:Name="ChkAutoScroll"
-                                      Content="Auto-scroll"
-                                      IsChecked="True"
-                                      Margin="16,0,0,0"
-                                      VerticalAlignment="Center"/>
-                            <Button Content="Pulisci"
-                                    Margin="10,0,0,0"
-                                    Padding="8,2"
-                                    FontSize="11"
-                                    Click="ClearLog_Click"/>
-                        </StackPanel>
-                    </GroupBox.Header>
-                    <Border Background="{StaticResource LogBackgroundBrush}"
-                            BorderBrush="{StaticResource LogBorderBrush}"
-                            BorderThickness="1"
-                            CornerRadius="18"
-                            Padding="10">
-                        <TextBox x:Name="TxtLog"
-                                 Text="{Binding LogText}"
-                                 IsReadOnly="True"
-                                 AcceptsReturn="True"
-                                 VerticalScrollBarVisibility="Auto"
-                                 HorizontalScrollBarVisibility="Auto"
-                                 TextChanged="TxtLog_TextChanged"
-                                 Background="Transparent"
-                                 BorderThickness="0"
-                                 Foreground="#DCE6F3"
-                                 FontFamily="Consolas"
-                                 SelectionBrush="#3E6F99"/>
-                    </Border>
-                </GroupBox>
+        <!-- â”€â”€ Metric card â”€â”€ -->
+        <Style x:Key="MetricCard" TargetType="Border">
+            <Setter Property="Background"       Value="{StaticResource CardBg}"/>
+            <Setter Property="BorderBrush"      Value="{StaticResource BorderBrush2}"/>
+            <Setter Property="BorderThickness"  Value="1"/>
+            <Setter Property="CornerRadius"     Value="10"/>
+            <Setter Property="Padding"          Value="14,8"/>
+            <Setter Property="Margin"           Value="0,0,8,0"/>
+            <Setter Property="MinWidth"         Value="110"/>
+        </Style>
+
+        <!-- â”€â”€ Slider â”€â”€ -->
+        <Style TargetType="Slider">
+            <Setter Property="Foreground" Value="{StaticResource Accent}"/>
+        </Style>
+
+    </Window.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="52"/>    <!-- header bar       -->
+            <RowDefinition Height="52"/>    <!-- toolbar          -->
+            <RowDefinition Height="72"/>    <!-- metrics strip    -->
+            <RowDefinition Height="*"/>     <!-- chart            -->
+            <RowDefinition Height="Auto"/>  <!-- collapsible log  -->
+            <RowDefinition Height="28"/>    <!-- status bar       -->
+        </Grid.RowDefinitions>
+
+        <!-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+             ROW 0 â€” Header bar
+             â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• -->
+        <Border Grid.Row="0"
+                Background="{StaticResource PanelBg}"
+                BorderBrush="{StaticResource BorderBrush2}"
+                BorderThickness="0,0,0,1">
+            <Grid Margin="18,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <!-- Title -->
+                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Ellipse Width="10" Height="10" Fill="{StaticResource Accent}" Margin="0,0,10,0"/>
+                    <TextBlock Text="FlyLine Profiler"
+                               FontSize="18"
+                               FontWeight="Bold"
+                               Foreground="{StaticResource TextPrimary}"/>
+                    <TextBlock Text="  diametro linea"
+                               FontSize="13"
+                               Foreground="{StaticResource TextMuted}"
+                               VerticalAlignment="Center"/>
+                </StackPanel>
+
+                <!-- Connection controls -->
+                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Ellipse x:Name="ConnLed"
+                             Width="10" Height="10"
+                             VerticalAlignment="Center"
+                             Fill="{StaticResource Danger}"/>
+                    <TextBlock Text="{Binding ConnectionStatus}"
+                               Foreground="{StaticResource TextMuted}"
+                               VerticalAlignment="Center"
+                               FontSize="12"
+                               Margin="0,0,16,0"/>
+                    <Button Content="Connetti"
+                            Style="{StaticResource BtnPrimary}"
+                            Click="Connect_Click"/>
+                    <Button Content="Disconnetti"
+                            Style="{StaticResource BtnSecondary}"
+                            Click="Disconnect_Click"/>
+                </StackPanel>
             </Grid>
-        </DockPanel>
+        </Border>
+
+        <!-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+             ROW 1 â€” Toolbar
+             â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• -->
+        <Border Grid.Row="1"
+                Background="{StaticResource PanelBg}"
+                BorderBrush="{StaticResource BorderBrush2}"
+                BorderThickness="0,0,0,1">
+            <ScrollViewer HorizontalScrollBarVisibility="Auto"
+                          VerticalScrollBarVisibility="Disabled"
+                          Margin="12,0">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+
+                    <!-- Scansione -->
+                    <Button Content="â–¶  SCAN"
+                            Style="{StaticResource BtnPrimary}"
+                            Click="StartScan_Click"
+                            IsEnabled="{Binding CanControl}"
+                            Padding="18,0"/>
+                    <Button Content="â–   STOP"
+                            Style="{StaticResource BtnDanger}"
+                            Click="Stop_Click"
+                            Padding="16,0"/>
+                    <Button Content="RX ON"
+                            Style="{StaticResource BtnSecondary}"
+                            Click="ScanOn_Click"
+                            IsEnabled="{Binding CanEnableScan}"/>
+                    <Button Content="RX OFF"
+                            Style="{StaticResource BtnSecondary}"
+                            Click="ScanOff_Click"
+                            IsEnabled="{Binding ScanReceiving}"/>
+
+                    <Separator Style="{StaticResource ToolSep}"/>
+
+                    <!-- Motore -->
+                    <Button Content="â—€ FAST"
+                            Style="{StaticResource BtnSecondary}"
+                            Click="FastO_Click"
+                            IsEnabled="{Binding CanControl}"/>
+                    <Button Content="FAST â–¶"
+                            Style="{StaticResource BtnSecondary}"
+                            Click="FastS_Click"
+                            IsEnabled="{Binding CanControl}"/>
+                    <Button Content="âŠ• GOTO"
+                            Style="{StaticResource BtnSecondary}"
+                            Click="Goto_Click"
+                            IsEnabled="{Binding CanControl}"/>
+                    <Button Content="Stato"
+                            Style="{StaticResource BtnGhost}"
+                            Click="MotorStatus_Click"/>
+
+                    <Separator Style="{StaticResource ToolSep}"/>
+
+                    <!-- Calibrazione -->
+                    <Button Content="âŠ™ Zero"
+                            Style="{StaticResource BtnSecondary}"
+                            Click="SetDisplayZero_Click"/>
+                    <Button Content="â†º Offsetâ€¦"
+                            Style="{StaticResource BtnSecondary}"
+                            Click="SetOffset_Click"/>
+                    <Button Content="Reset offset"
+                            Style="{StaticResource BtnGhost}"
+                            Click="ResetOffset_Click"/>
+                    <Button Content="Raw"
+                            Style="{StaticResource BtnGhost}"
+                            Click="ReadRaw_Click"/>
+
+                    <Separator Style="{StaticResource ToolSep}"/>
+
+                    <!-- Vista grafico -->
+                    <Button Content="âŠž Adatta"
+                            Style="{StaticResource BtnSecondary}"
+                            Click="FitPlot_Click"/>
+                    <ToggleButton x:Name="AutoFitToggle"
+                                  Content="Auto-fit"
+                                  Style="{StaticResource ToggleBase}"
+                                  IsChecked="True"
+                                  Click="AutoFitToggle_Click"/>
+                    <Button Content="Azzera"
+                            Style="{StaticResource BtnGhost}"
+                            Click="Reset_Click"
+                            ToolTip="Azzera posizione e cancella grafico"/>
+
+                    <Separator Style="{StaticResource ToolSep}"/>
+
+                    <!-- Dati -->
+                    <Button Content="ðŸ“¥ Import CSV"
+                            Style="{StaticResource BtnSecondary}"
+                            Click="ImportCsv_Click"/>
+                    <Button Content="ðŸ“¤ Export CSV"
+                            Style="{StaticResource BtnSecondary}"
+                            Click="ExportCsv_Click"/>
+                    <Button Content="ðŸ–¼ PNG"
+                            Style="{StaticResource BtnSecondary}"
+                            Click="ExportPng_Click"/>
+                    <Button Content="âœ• Importati"
+                            Style="{StaticResource BtnGhost}"
+                            Click="ClearImported_Click"/>
+
+                    <Separator Style="{StaticResource ToolSep}"/>
+
+                    <!-- Segmenti -->
+                    <ToggleButton x:Name="MenuDrawSegments"
+                                  Content="âœ Segmenti"
+                                  Style="{StaticResource ToggleBase}"
+                                  Click="ToggleDrawMode_Click"/>
+                    <Button Content="â†©"
+                            Style="{StaticResource BtnGhost}"
+                            Click="UndoLastNode_Click"
+                            ToolTip="Annulla ultimo nodo"
+                            Padding="10,0"/>
+                    <Button Content="âœ• Nodi"
+                            Style="{StaticResource BtnGhost}"
+                            Click="ClearSegments_Click"/>
+                    <Button Content="ðŸ’¾ Salva nodi"
+                            Style="{StaticResource BtnGhost}"
+                            Click="SaveNodes_Click"/>
+                    <Button Content="ðŸ“‚ Carica nodi"
+                            Style="{StaticResource BtnGhost}"
+                            Click="LoadNodes_Click"/>
+                    <Button Content="ðŸ“¤ Seg. CSV"
+                            Style="{StaticResource BtnGhost}"
+                            Click="ExportSegmentsCsv_Click"/>
+
+                    <Separator Style="{StaticResource ToolSep}"/>
+
+                    <!-- Impostazioni -->
+                    <Button Content="âš™"
+                            Style="{StaticResource BtnGhost}"
+                            Click="Settings_Click"
+                            FontSize="16"
+                            Padding="10,0"
+                            ToolTip="Impostazioni"/>
+
+                </StackPanel>
+            </ScrollViewer>
+        </Border>
+
+        <!-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+             ROW 2 â€” Metrics strip
+             â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• -->
+        <Border Grid.Row="2"
+                Background="{StaticResource WinBg}"
+                BorderBrush="{StaticResource BorderBrush2}"
+                BorderThickness="0,0,0,1">
+            <ScrollViewer HorizontalScrollBarVisibility="Auto"
+                          VerticalScrollBarVisibility="Disabled"
+                          Margin="16,0">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+
+                    <Border Style="{StaticResource MetricCard}">
+                        <StackPanel>
+                            <TextBlock Text="Connessione" FontSize="10" Foreground="{StaticResource TextMuted}"/>
+                            <TextBlock Text="{Binding ConnectionStatus}" FontSize="15" FontWeight="SemiBold"
+                                       Foreground="{StaticResource TextPrimary}" Margin="0,3,0,0"/>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Style="{StaticResource MetricCard}">
+                        <StackPanel>
+                            <TextBlock Text="Motore" FontSize="10" Foreground="{StaticResource TextMuted}"/>
+                            <TextBlock Text="{Binding MotorState}" FontSize="15" FontWeight="SemiBold"
+                                       Foreground="{StaticResource Success}" Margin="0,3,0,0"/>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Style="{StaticResource MetricCard}" MinWidth="130">
+                        <StackPanel>
+                            <TextBlock Text="Lunghezza" FontSize="10" Foreground="{StaticResource TextMuted}"/>
+                            <TextBlock Text="{Binding CurrentLength}" FontSize="19" FontWeight="Bold"
+                                       Foreground="{StaticResource TextPrimary}" Margin="0,3,0,0"/>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Style="{StaticResource MetricCard}" MinWidth="130">
+                        <StackPanel>
+                            <TextBlock Text="Diametro" FontSize="10" Foreground="{StaticResource TextMuted}"/>
+                            <TextBlock Text="{Binding CurrentDiameter}" FontSize="19" FontWeight="Bold"
+                                       Foreground="{StaticResource Accent}" Margin="0,3,0,0"/>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Style="{StaticResource MetricCard}">
+                        <StackPanel>
+                            <TextBlock Text="Display" FontSize="10" Foreground="{StaticResource TextMuted}"/>
+                            <TextBlock Text="{Binding CurrentDisplay}" FontSize="15" FontWeight="SemiBold"
+                                       Foreground="{StaticResource TextPrimary}" Margin="0,3,0,0"/>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Style="{StaticResource MetricCard}">
+                        <StackPanel>
+                            <TextBlock Text="VelocitÃ " FontSize="10" Foreground="{StaticResource TextMuted}"/>
+                            <TextBlock Text="{Binding Speed}" FontSize="15" FontWeight="SemiBold"
+                                       Foreground="{StaticResource Warning}" Margin="0,3,0,0"/>
+                            <TextBlock Text="{Binding SpeedStatus}" FontSize="10"
+                                       Foreground="{StaticResource TextMuted}"/>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Style="{StaticResource MetricCard}">
+                        <StackPanel>
+                            <TextBlock Text="Punti" FontSize="10" Foreground="{StaticResource TextMuted}"/>
+                            <TextBlock Text="{Binding PointsCount}" FontSize="15" FontWeight="SemiBold"
+                                       Foreground="{StaticResource TextPrimary}" Margin="0,3,0,0"/>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Style="{StaticResource MetricCard}">
+                        <StackPanel>
+                            <TextBlock Text="Zero display" FontSize="10" Foreground="{StaticResource TextMuted}"/>
+                            <TextBlock Text="{Binding DisplayZeroText}" FontSize="15" FontWeight="SemiBold"
+                                       Foreground="{StaticResource TextPrimary}" Margin="0,3,0,0"/>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Style="{StaticResource MetricCard}">
+                        <StackPanel>
+                            <TextBlock Text="Offset" FontSize="10" Foreground="{StaticResource TextMuted}"/>
+                            <TextBlock Text="{Binding OffsetText}" FontSize="15" FontWeight="SemiBold"
+                                       Foreground="{StaticResource TextPrimary}" Margin="0,3,0,0"/>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Style="{StaticResource MetricCard}" MinWidth="200">
+                        <StackPanel>
+                            <TextBlock Text="GoTo / Stato" FontSize="10" Foreground="{StaticResource TextMuted}"/>
+                            <TextBlock Text="{Binding GotoStatus}" FontSize="13"
+                                       Foreground="{StaticResource Success}" Margin="0,3,0,0"
+                                       TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
+                        </StackPanel>
+                    </Border>
+
+                </StackPanel>
+            </ScrollViewer>
+        </Border>
+
+        <!-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+             ROW 3 â€” Chart
+             â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• -->
+        <Border Grid.Row="3"
+                Background="#161922"
+                Margin="12,8,12,0"
+                CornerRadius="12"
+                BorderBrush="{StaticResource BorderBrush2}"
+                BorderThickness="1">
+            <ScottPlot:WpfPlot x:Name="PlotControl" Margin="4"/>
+        </Border>
+
+        <!-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+             ROW 4 â€” Collapsible log + chart controls
+             â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• -->
+        <Expander Grid.Row="4"
+                  Margin="12,6,12,0"
+                  IsExpanded="False">
+            <Expander.Header>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Text="Log diagnostico"
+                               FontSize="12"
+                               FontWeight="SemiBold"
+                               Foreground="{StaticResource TextMuted}"
+                               VerticalAlignment="Center"
+                               Margin="0,0,24,0"/>
+                    <!-- Smoothing controls inline in header -->
+                    <ToggleButton x:Name="SmoothingToggle"
+                                  Content="Smoothing EMA"
+                                  Style="{StaticResource ToggleBase}"
+                                  IsChecked="True"
+                                  Height="28"
+                                  FontSize="11"
+                                  Click="SmoothingToggle_Click"/>
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0,0,0">
+                        <TextBlock Text="Î±" FontSize="12" Foreground="{StaticResource TextMuted}"
+                                   VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <Slider x:Name="SmoothingAlphaSlider"
+                                Width="100"
+                                Minimum="0.01" Maximum="1.00"
+                                TickFrequency="0.01"
+                                IsSnapToTickEnabled="False"
+                                SmallChange="0.01" LargeChange="0.05"
+                                IsEnabled="{Binding ElementName=SmoothingToggle, Path=IsChecked}"
+                                ValueChanged="SmoothingAlphaSlider_ValueChanged"
+                                VerticalAlignment="Center"/>
+                        <TextBlock Text="{Binding ElementName=MainWin, Path=SmoothingAlphaStatus}"
+                                   FontSize="11" Foreground="{StaticResource Accent}"
+                                   VerticalAlignment="Center" Margin="6,0,0,0" Width="34"/>
+                        <Button Content="â†º"
+                                Style="{StaticResource BtnGhost}"
+                                Height="26" Width="26" Padding="0"
+                                FontSize="14"
+                                IsEnabled="{Binding ElementName=SmoothingToggle, Path=IsChecked}"
+                                Click="ResetSmoothingAlpha_Click"/>
+                    </StackPanel>
+                    <Separator Style="{StaticResource ToolSep}" Margin="12,0"/>
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock Text="Linea" FontSize="11" Foreground="{StaticResource TextMuted}"
+                                   VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <Slider x:Name="LineWidthSlider"
+                                Width="80"
+                                Minimum="1" Maximum="8"
+                                TickFrequency="1"
+                                IsSnapToTickEnabled="True"
+                                ValueChanged="LineWidthSlider_ValueChanged"
+                                VerticalAlignment="Center"/>
+                        <TextBlock Text="{Binding ElementName=MainWin, Path=LineWidthStatus}"
+                                   FontSize="11" Foreground="{StaticResource Accent}"
+                                   VerticalAlignment="Center" Margin="6,0,0,0" Width="20"/>
+                    </StackPanel>
+                    <Separator Style="{StaticResource ToolSep}" Margin="12,0"/>
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock Text="Opac." FontSize="11" Foreground="{StaticResource TextMuted}"
+                                   VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <Slider x:Name="FilteredOpacitySlider"
+                                Width="80"
+                                Minimum="0.05" Maximum="1.00"
+                                TickFrequency="0.05"
+                                SmallChange="0.05" LargeChange="0.10"
+                                ValueChanged="FilteredOpacitySlider_ValueChanged"
+                                VerticalAlignment="Center"/>
+                        <TextBlock Text="{Binding ElementName=MainWin, Path=FilteredOpacityStatus}"
+                                   FontSize="11" Foreground="{StaticResource Accent}"
+                                   VerticalAlignment="Center" Margin="6,0,0,0" Width="34"/>
+                    </StackPanel>
+                    <Separator Style="{StaticResource ToolSep}" Margin="12,0"/>
+                    <CheckBox x:Name="ChkAutoScroll"
+                              Content="Auto-scroll"
+                              IsChecked="True"
+                              Foreground="{StaticResource TextMuted}"
+                              FontSize="11"
+                              VerticalAlignment="Center"
+                              Margin="0,0,12,0"/>
+                    <Button Content="Pulisci log"
+                            Style="{StaticResource BtnGhost}"
+                            Height="26"
+                            FontSize="11"
+                            Click="ClearLog_Click"/>
+                    <!-- RawOpacity hidden but kept for binding -->
+                    <Slider x:Name="RawOpacitySlider"
+                            Width="0" Height="0" Visibility="Collapsed"
+                            Minimum="0.05" Maximum="1.00"
+                            ValueChanged="RawOpacitySlider_ValueChanged"/>
+                </StackPanel>
+            </Expander.Header>
+
+            <Border Height="160"
+                    Background="{StaticResource LogBg}"
+                    BorderBrush="{StaticResource BorderBrush2}"
+                    BorderThickness="1"
+                    CornerRadius="0,0,10,10"
+                    Padding="10">
+                <TextBox x:Name="TxtLog"
+                         Text="{Binding LogText}"
+                         IsReadOnly="True"
+                         AcceptsReturn="True"
+                         VerticalScrollBarVisibility="Auto"
+                         HorizontalScrollBarVisibility="Auto"
+                         TextChanged="TxtLog_TextChanged"
+                         Background="Transparent"
+                         BorderThickness="0"
+                         Foreground="#8BE0B0"
+                         FontFamily="Consolas"
+                         FontSize="11"
+                         SelectionBrush="#3E6F99"/>
+            </Border>
+        </Expander>
+
+        <!-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+             ROW 5 â€” Status bar
+             â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• -->
+        <Border Grid.Row="5"
+                Background="{StaticResource PanelBg}"
+                BorderBrush="{StaticResource BorderBrush2}"
+                BorderThickness="0,1,0,0"
+                Margin="0,6,0,0">
+            <Grid Margin="16,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0"
+                           Text="{Binding ElementName=MainWin, Path=UiStatus}"
+                           FontWeight="SemiBold"
+                           Foreground="{StaticResource Accent}"
+                           FontSize="11"
+                           VerticalAlignment="Center"/>
+                <TextBlock Grid.Column="1"
+                           Text="{Binding ElementName=MainWin, Path=DrawModeStatus}"
+                           Foreground="{StaticResource Danger}"
+                           FontWeight="SemiBold"
+                           FontSize="11"
+                           Margin="16,0,0,0"
+                           VerticalAlignment="Center"/>
+                <TextBlock Grid.Column="3"
+                           Text="{Binding ElementName=MainWin, Path=AutoFitStatus}"
+                           Foreground="{StaticResource TextMuted}"
+                           FontSize="11"
+                           VerticalAlignment="Center"
+                           Margin="0,0,16,0"/>
+                <TextBlock Grid.Column="4"
+                           Text="{Binding ElementName=MainWin, Path=ImportedSeriesStatus}"
+                           Foreground="{StaticResource TextMuted}"
+                           FontSize="11"
+                           VerticalAlignment="Center"
+                           Margin="0,0,16,0"/>
+                <TextBlock Grid.Column="5"
+                           Text="{Binding ElementName=MainWin, Path=HoverCoordsStatus}"
+                           FontFamily="Consolas"
+                           FontSize="11"
+                           Foreground="{StaticResource Success}"
+                           VerticalAlignment="Center"/>
+            </Grid>
+        </Border>
+
     </Grid>
-</Fluent:RibbonWindow>
+
+
+</Window>
