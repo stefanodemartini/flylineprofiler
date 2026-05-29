@@ -55,7 +55,7 @@ public class ProjectSegment : INotifyPropertyChanged
         }
     }
 
-    public double LengthCm  => EndCm - StartCm;
+    public double LengthCm  { get => EndCm - StartCm; set { /* handled by CellEditEnding */ } }
     public double LengthMm  => LengthCm * 10.0;
 
     public bool   IsCylinder => Math.Abs(StartDiameterMm - EndDiameterMm) < 0.001;

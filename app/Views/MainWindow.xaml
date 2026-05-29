@@ -716,7 +716,7 @@
                                                Binding="{Binding EndDiameterMm, StringFormat='0.000'}"
                                                Width="95"/>
                             <DataGridTextColumn Header="Length (cm)"
-                                               Binding="{Binding LengthCm, StringFormat='0.0', Mode=OneWay}"
+                                               Binding="{Binding LengthCm, StringFormat='0.0'}"
                                                Width="90"/>
                             <DataGridTextColumn Header="Shape"
                                                Binding="{Binding Shape}"
