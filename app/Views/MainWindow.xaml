@@ -17,7 +17,6 @@
 
     <Window.Resources>
 
-        <!-- â”€â”€ Colours â”€â”€ -->
         <SolidColorBrush x:Key="WinBg"        Color="#12151C"/>
         <SolidColorBrush x:Key="PanelBg"      Color="#1C2030"/>
         <SolidColorBrush x:Key="CardBg"       Color="#232837"/>
@@ -25,14 +24,12 @@
         <SolidColorBrush x:Key="Accent"       Color="#2D7DD2"/>
         <SolidColorBrush x:Key="AccentDim"    Color="#1A4F8A"/>
         <SolidColorBrush x:Key="Danger"       Color="#E85454"/>
-        <SolidColorBrush x:Key="DangerDim"    Color="#7A2020"/>
         <SolidColorBrush x:Key="Success"      Color="#28C996"/>
         <SolidColorBrush x:Key="Warning"      Color="#F5A623"/>
         <SolidColorBrush x:Key="TextPrimary"  Color="#E2E8F4"/>
         <SolidColorBrush x:Key="TextMuted"    Color="#7A8499"/>
         <SolidColorBrush x:Key="LogBg"        Color="#0D0F16"/>
 
-        <!-- â”€â”€ Button base â”€â”€ -->
         <Style x:Key="BtnBase" TargetType="Button">
             <Setter Property="Height"          Value="34"/>
             <Setter Property="Padding"         Value="14,0"/>
@@ -48,18 +45,17 @@
                                 Background="{TemplateBinding Background}"
                                 CornerRadius="8"
                                 Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="Center"
-                                              VerticalAlignment="Center"/>
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Bd" Property="Opacity" Value="0.82"/>
+                                <Setter TargetName="Bd" Property="Opacity" Value="0.80"/>
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="Bd" Property="Opacity" Value="0.65"/>
+                                <Setter TargetName="Bd" Property="Opacity" Value="0.60"/>
                             </Trigger>
                             <Trigger Property="IsEnabled" Value="False">
-                                <Setter TargetName="Bd" Property="Opacity" Value="0.35"/>
+                                <Setter TargetName="Bd" Property="Opacity" Value="0.30"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -68,26 +64,25 @@
         </Style>
 
         <Style x:Key="BtnPrimary" TargetType="Button" BasedOn="{StaticResource BtnBase}">
-            <Setter Property="Background"  Value="{StaticResource Accent}"/>
-            <Setter Property="Foreground"  Value="White"/>
+            <Setter Property="Background" Value="{StaticResource Accent}"/>
+            <Setter Property="Foreground" Value="White"/>
         </Style>
 
         <Style x:Key="BtnDanger" TargetType="Button" BasedOn="{StaticResource BtnBase}">
-            <Setter Property="Background"  Value="{StaticResource Danger}"/>
-            <Setter Property="Foreground"  Value="White"/>
+            <Setter Property="Background" Value="{StaticResource Danger}"/>
+            <Setter Property="Foreground" Value="White"/>
         </Style>
 
         <Style x:Key="BtnSecondary" TargetType="Button" BasedOn="{StaticResource BtnBase}">
-            <Setter Property="Background"  Value="#2C3245"/>
-            <Setter Property="Foreground"  Value="{StaticResource TextPrimary}"/>
+            <Setter Property="Background" Value="#2C3245"/>
+            <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
         </Style>
 
         <Style x:Key="BtnGhost" TargetType="Button" BasedOn="{StaticResource BtnBase}">
-            <Setter Property="Background"  Value="Transparent"/>
-            <Setter Property="Foreground"  Value="{StaticResource TextMuted}"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="{StaticResource TextMuted}"/>
         </Style>
 
-        <!-- â”€â”€ Toggle button â”€â”€ -->
         <Style x:Key="ToggleBase" TargetType="ToggleButton">
             <Setter Property="Height"          Value="34"/>
             <Setter Property="Padding"         Value="14,0"/>
@@ -105,8 +100,7 @@
                                 Background="{TemplateBinding Background}"
                                 CornerRadius="8"
                                 Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="Center"
-                                              VerticalAlignment="Center"/>
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsChecked" Value="True">
@@ -114,10 +108,10 @@
                                 <Setter Property="Foreground" Value="{StaticResource Accent}"/>
                             </Trigger>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Bd" Property="Opacity" Value="0.82"/>
+                                <Setter TargetName="Bd" Property="Opacity" Value="0.80"/>
                             </Trigger>
                             <Trigger Property="IsEnabled" Value="False">
-                                <Setter TargetName="Bd" Property="Opacity" Value="0.35"/>
+                                <Setter TargetName="Bd" Property="Opacity" Value="0.30"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -125,7 +119,6 @@
             </Setter>
         </Style>
 
-        <!-- â”€â”€ Separator between button groups â”€â”€ -->
         <Style x:Key="ToolSep" TargetType="Separator">
             <Setter Property="Width"      Value="1"/>
             <Setter Property="Height"     Value="22"/>
@@ -133,18 +126,16 @@
             <Setter Property="Background" Value="#2E3548"/>
         </Style>
 
-        <!-- â”€â”€ Metric card â”€â”€ -->
         <Style x:Key="MetricCard" TargetType="Border">
-            <Setter Property="Background"       Value="{StaticResource CardBg}"/>
-            <Setter Property="BorderBrush"      Value="{StaticResource BorderBrush2}"/>
-            <Setter Property="BorderThickness"  Value="1"/>
-            <Setter Property="CornerRadius"     Value="10"/>
-            <Setter Property="Padding"          Value="14,8"/>
-            <Setter Property="Margin"           Value="0,0,8,0"/>
-            <Setter Property="MinWidth"         Value="110"/>
+            <Setter Property="Background"      Value="{StaticResource CardBg}"/>
+            <Setter Property="BorderBrush"     Value="{StaticResource BorderBrush2}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius"    Value="10"/>
+            <Setter Property="Padding"         Value="14,8"/>
+            <Setter Property="Margin"          Value="0,0,8,0"/>
+            <Setter Property="MinWidth"        Value="110"/>
         </Style>
 
-        <!-- â”€â”€ Slider â”€â”€ -->
         <Style TargetType="Slider">
             <Setter Property="Foreground" Value="{StaticResource Accent}"/>
         </Style>
@@ -153,17 +144,15 @@
 
     <Grid>
         <Grid.RowDefinitions>
-            <RowDefinition Height="52"/>    <!-- header bar       -->
-            <RowDefinition Height="52"/>    <!-- toolbar          -->
-            <RowDefinition Height="72"/>    <!-- metrics strip    -->
-            <RowDefinition Height="*"/>     <!-- chart            -->
-            <RowDefinition Height="Auto"/>  <!-- collapsible log  -->
-            <RowDefinition Height="28"/>    <!-- status bar       -->
+            <RowDefinition Height="52"/>
+            <RowDefinition Height="52"/>
+            <RowDefinition Height="72"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="28"/>
         </Grid.RowDefinitions>
 
-        <!-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-             ROW 0 â€” Header bar
-             â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• -->
+        <!-- Header -->
         <Border Grid.Row="0"
                 Background="{StaticResource PanelBg}"
                 BorderBrush="{StaticResource BorderBrush2}"
@@ -175,43 +164,39 @@
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
 
-                <!-- Title -->
                 <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
                     <Ellipse Width="10" Height="10" Fill="{StaticResource Accent}" Margin="0,0,10,0"/>
                     <TextBlock Text="FlyLine Profiler"
-                               FontSize="18"
-                               FontWeight="Bold"
+                               FontSize="18" FontWeight="Bold"
                                Foreground="{StaticResource TextPrimary}"/>
-                    <TextBlock Text="  diametro linea"
-                               FontSize="13"
-                               Foreground="{StaticResource TextMuted}"
+                    <TextBlock Text="  fly line diameter profiler"
+                               FontSize="13" Foreground="{StaticResource TextMuted}"
                                VerticalAlignment="Center"/>
                 </StackPanel>
 
-                <!-- Connection controls -->
                 <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
                     <Ellipse x:Name="ConnLed"
                              Width="10" Height="10"
                              VerticalAlignment="Center"
-                             Fill="{StaticResource Danger}"/>
+                             Fill="{StaticResource Danger}"
+                             Margin="0,0,8,0"/>
                     <TextBlock Text="{Binding ConnectionStatus}"
                                Foreground="{StaticResource TextMuted}"
                                VerticalAlignment="Center"
                                FontSize="12"
                                Margin="0,0,16,0"/>
-                    <Button Content="Connetti"
+                    <Button Content="Connect"
                             Style="{StaticResource BtnPrimary}"
                             Click="Connect_Click"/>
-                    <Button Content="Disconnetti"
+                    <Button Content="Disconnect"
                             Style="{StaticResource BtnSecondary}"
-                            Click="Disconnect_Click"/>
+                            Click="Disconnect_Click"
+                            Margin="6,0,0,0"/>
                 </StackPanel>
             </Grid>
         </Border>
 
-        <!-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-             ROW 1 â€” Toolbar
-             â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• -->
+        <!-- Toolbar -->
         <Border Grid.Row="1"
                 Background="{StaticResource PanelBg}"
                 BorderBrush="{StaticResource BorderBrush2}"
@@ -221,16 +206,15 @@
                           Margin="12,0">
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
 
-                    <!-- Scansione -->
-                    <Button Content="â–¶  SCAN"
+                    <Button Content="SCAN"
                             Style="{StaticResource BtnPrimary}"
                             Click="StartScan_Click"
                             IsEnabled="{Binding CanControl}"
-                            Padding="18,0"/>
-                    <Button Content="â–   STOP"
+                            Padding="20,0"/>
+                    <Button Content="STOP"
                             Style="{StaticResource BtnDanger}"
                             Click="Stop_Click"
-                            Padding="16,0"/>
+                            Padding="18,0"/>
                     <Button Content="RX ON"
                             Style="{StaticResource BtnSecondary}"
                             Click="ScanOn_Click"
@@ -242,113 +226,102 @@
 
                     <Separator Style="{StaticResource ToolSep}"/>
 
-                    <!-- Motore -->
-                    <Button Content="â—€ FAST"
+                    <Button Content="FAST &lt;"
                             Style="{StaticResource BtnSecondary}"
                             Click="FastO_Click"
                             IsEnabled="{Binding CanControl}"/>
-                    <Button Content="FAST â–¶"
+                    <Button Content="FAST >"
                             Style="{StaticResource BtnSecondary}"
                             Click="FastS_Click"
                             IsEnabled="{Binding CanControl}"/>
-                    <Button Content="âŠ• GOTO"
+                    <Button Content="GOTO"
                             Style="{StaticResource BtnSecondary}"
                             Click="Goto_Click"
                             IsEnabled="{Binding CanControl}"/>
-                    <Button Content="Stato"
+                    <Button Content="Status"
                             Style="{StaticResource BtnGhost}"
                             Click="MotorStatus_Click"/>
 
                     <Separator Style="{StaticResource ToolSep}"/>
 
-                    <!-- Calibrazione -->
-                    <Button Content="âŠ™ Zero"
+                    <Button Content="Set Zero"
                             Style="{StaticResource BtnSecondary}"
                             Click="SetDisplayZero_Click"/>
-                    <Button Content="â†º Offsetâ€¦"
+                    <Button Content="Set Offset"
                             Style="{StaticResource BtnSecondary}"
                             Click="SetOffset_Click"/>
-                    <Button Content="Reset offset"
+                    <Button Content="Reset Offset"
                             Style="{StaticResource BtnGhost}"
                             Click="ResetOffset_Click"/>
-                    <Button Content="Raw"
+                    <Button Content="Read Raw"
                             Style="{StaticResource BtnGhost}"
                             Click="ReadRaw_Click"/>
 
                     <Separator Style="{StaticResource ToolSep}"/>
 
-                    <!-- Vista grafico -->
-                    <Button Content="âŠž Adatta"
+                    <Button Content="Fit"
                             Style="{StaticResource BtnSecondary}"
                             Click="FitPlot_Click"/>
                     <ToggleButton x:Name="AutoFitToggle"
-                                  Content="Auto-fit"
+                                  Content="Auto-Fit"
                                   Style="{StaticResource ToggleBase}"
                                   IsChecked="True"
                                   Click="AutoFitToggle_Click"/>
-                    <Button Content="Azzera"
+                    <Button Content="Clear Chart"
                             Style="{StaticResource BtnGhost}"
                             Click="Reset_Click"
-                            ToolTip="Azzera posizione e cancella grafico"/>
+                            ToolTip="Reset position and clear chart"/>
 
                     <Separator Style="{StaticResource ToolSep}"/>
 
-                    <!-- Dati -->
-                    <Button Content="ðŸ“¥Import CSV"
+                    <Button Content="Import CSV"
                             Style="{StaticResource BtnSecondary}"
                             Click="ImportCsv_Click"/>
-                    <Button Content="ðŸ“¤Export CSV"
+                    <Button Content="Export CSV"
                             Style="{StaticResource BtnSecondary}"
                             Click="ExportCsv_Click"/>
-                    <Button Content="ðŸ–¼PNG"
+                    <Button Content="Export PNG"
                             Style="{StaticResource BtnSecondary}"
                             Click="ExportPng_Click"/>
-                    <Button Content="âœ• Importati"
+                    <Button Content="Clear Imported"
                             Style="{StaticResource BtnGhost}"
                             Click="ClearImported_Click"/>
 
                     <Separator Style="{StaticResource ToolSep}"/>
 
-                    <!-- Segmenti -->
                     <ToggleButton x:Name="MenuDrawSegments"
-                                  Content="âœ Segmenti"
+                                  Content="Draw Segments"
                                   Style="{StaticResource ToggleBase}"
                                   Click="ToggleDrawMode_Click"/>
-                    <Button Content="â†©"
+                    <Button Content="Undo Node"
                             Style="{StaticResource BtnGhost}"
                             Click="UndoLastNode_Click"
-                            ToolTip="Annulla ultimo nodo"
-                            Padding="10,0"/>
-                    <Button Content="âœ• Nodi"
+                            ToolTip="Undo last node"/>
+                    <Button Content="Clear Nodes"
                             Style="{StaticResource BtnGhost}"
                             Click="ClearSegments_Click"/>
-                    <Button Content="ðŸ’¾Salva nodi"
+                    <Button Content="Save Nodes"
                             Style="{StaticResource BtnGhost}"
                             Click="SaveNodes_Click"/>
-                    <Button Content="ðŸ“‚Carica nodi"
+                    <Button Content="Load Nodes"
                             Style="{StaticResource BtnGhost}"
                             Click="LoadNodes_Click"/>
-                    <Button Content="ðŸ“¤Seg. CSV"
+                    <Button Content="Export Seg. CSV"
                             Style="{StaticResource BtnGhost}"
                             Click="ExportSegmentsCsv_Click"/>
 
                     <Separator Style="{StaticResource ToolSep}"/>
 
-                    <!-- Impostazioni -->
-                    <Button Content="âš™"
+                    <Button Content="Settings"
                             Style="{StaticResource BtnGhost}"
                             Click="Settings_Click"
-                            FontSize="16"
-                            Padding="10,0"
-                            ToolTip="Impostazioni"/>
+                            ToolTip="App settings"/>
 
                 </StackPanel>
             </ScrollViewer>
         </Border>
 
-        <!-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-             ROW 2 â€” Metrics strip
-             â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• -->
+        <!-- Metrics strip -->
         <Border Grid.Row="2"
                 Background="{StaticResource WinBg}"
                 BorderBrush="{StaticResource BorderBrush2}"
@@ -360,7 +333,7 @@
 
                     <Border Style="{StaticResource MetricCard}">
                         <StackPanel>
-                            <TextBlock Text="Connessione" FontSize="10" Foreground="{StaticResource TextMuted}"/>
+                            <TextBlock Text="Connection" FontSize="10" Foreground="{StaticResource TextMuted}"/>
                             <TextBlock Text="{Binding ConnectionStatus}" FontSize="15" FontWeight="SemiBold"
                                        Foreground="{StaticResource TextPrimary}" Margin="0,3,0,0"/>
                         </StackPanel>
@@ -368,7 +341,7 @@
 
                     <Border Style="{StaticResource MetricCard}">
                         <StackPanel>
-                            <TextBlock Text="Motore" FontSize="10" Foreground="{StaticResource TextMuted}"/>
+                            <TextBlock Text="Motor" FontSize="10" Foreground="{StaticResource TextMuted}"/>
                             <TextBlock Text="{Binding MotorState}" FontSize="15" FontWeight="SemiBold"
                                        Foreground="{StaticResource Success}" Margin="0,3,0,0"/>
                         </StackPanel>
@@ -376,7 +349,7 @@
 
                     <Border Style="{StaticResource MetricCard}" MinWidth="130">
                         <StackPanel>
-                            <TextBlock Text="Lunghezza" FontSize="10" Foreground="{StaticResource TextMuted}"/>
+                            <TextBlock Text="Length" FontSize="10" Foreground="{StaticResource TextMuted}"/>
                             <TextBlock Text="{Binding CurrentLength}" FontSize="19" FontWeight="Bold"
                                        Foreground="{StaticResource TextPrimary}" Margin="0,3,0,0"/>
                         </StackPanel>
@@ -384,7 +357,7 @@
 
                     <Border Style="{StaticResource MetricCard}" MinWidth="130">
                         <StackPanel>
-                            <TextBlock Text="Diametro" FontSize="10" Foreground="{StaticResource TextMuted}"/>
+                            <TextBlock Text="Diameter" FontSize="10" Foreground="{StaticResource TextMuted}"/>
                             <TextBlock Text="{Binding CurrentDiameter}" FontSize="19" FontWeight="Bold"
                                        Foreground="{StaticResource Accent}" Margin="0,3,0,0"/>
                         </StackPanel>
@@ -400,7 +373,7 @@
 
                     <Border Style="{StaticResource MetricCard}">
                         <StackPanel>
-                            <TextBlock Text="VelocitÃ " FontSize="10" Foreground="{StaticResource TextMuted}"/>
+                            <TextBlock Text="Speed" FontSize="10" Foreground="{StaticResource TextMuted}"/>
                             <TextBlock Text="{Binding Speed}" FontSize="15" FontWeight="SemiBold"
                                        Foreground="{StaticResource Warning}" Margin="0,3,0,0"/>
                             <TextBlock Text="{Binding SpeedStatus}" FontSize="10"
@@ -410,7 +383,7 @@
 
                     <Border Style="{StaticResource MetricCard}">
                         <StackPanel>
-                            <TextBlock Text="Punti" FontSize="10" Foreground="{StaticResource TextMuted}"/>
+                            <TextBlock Text="Points" FontSize="10" Foreground="{StaticResource TextMuted}"/>
                             <TextBlock Text="{Binding PointsCount}" FontSize="15" FontWeight="SemiBold"
                                        Foreground="{StaticResource TextPrimary}" Margin="0,3,0,0"/>
                         </StackPanel>
@@ -418,7 +391,7 @@
 
                     <Border Style="{StaticResource MetricCard}">
                         <StackPanel>
-                            <TextBlock Text="Zero display" FontSize="10" Foreground="{StaticResource TextMuted}"/>
+                            <TextBlock Text="Display Zero" FontSize="10" Foreground="{StaticResource TextMuted}"/>
                             <TextBlock Text="{Binding DisplayZeroText}" FontSize="15" FontWeight="SemiBold"
                                        Foreground="{StaticResource TextPrimary}" Margin="0,3,0,0"/>
                         </StackPanel>
@@ -434,7 +407,7 @@
 
                     <Border Style="{StaticResource MetricCard}" MinWidth="200">
                         <StackPanel>
-                            <TextBlock Text="GoTo / Stato" FontSize="10" Foreground="{StaticResource TextMuted}"/>
+                            <TextBlock Text="GoTo / Status" FontSize="10" Foreground="{StaticResource TextMuted}"/>
                             <TextBlock Text="{Binding GotoStatus}" FontSize="13"
                                        Foreground="{StaticResource Success}" Margin="0,3,0,0"
                                        TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
@@ -445,9 +418,7 @@
             </ScrollViewer>
         </Border>
 
-        <!-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-             ROW 3 â€” Chart
-             â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• -->
+        <!-- Chart -->
         <Border Grid.Row="3"
                 Background="#161922"
                 Margin="12,8,12,0"
@@ -457,80 +428,72 @@
             <ScottPlot:WpfPlot x:Name="PlotControl" Margin="4"/>
         </Border>
 
-        <!-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-             ROW 4 â€” Collapsible log + chart controls
-             â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• -->
+        <!-- Collapsible log + chart controls -->
         <Expander Grid.Row="4"
                   Margin="12,6,12,0"
                   IsExpanded="False">
             <Expander.Header>
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                    <TextBlock Text="Log diagnostico"
-                               FontSize="12"
-                               FontWeight="SemiBold"
+                    <TextBlock Text="Diagnostic Log"
+                               FontSize="12" FontWeight="SemiBold"
                                Foreground="{StaticResource TextMuted}"
                                VerticalAlignment="Center"
                                Margin="0,0,24,0"/>
-                    <!-- Smoothing controls inline in header -->
                     <ToggleButton x:Name="SmoothingToggle"
-                                  Content="Smoothing EMA"
+                                  Content="EMA Smoothing"
                                   Style="{StaticResource ToggleBase}"
                                   IsChecked="True"
                                   Height="28"
                                   FontSize="11"
                                   Click="SmoothingToggle_Click"/>
-                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0,0,0">
-                        <TextBlock Text="Î±" FontSize="12" Foreground="{StaticResource TextMuted}"
-                                   VerticalAlignment="Center" Margin="0,0,6,0"/>
-                        <Slider x:Name="SmoothingAlphaSlider"
-                                Width="100"
-                                Minimum="0.01" Maximum="1.00"
-                                TickFrequency="0.01"
-                                IsSnapToTickEnabled="False"
-                                SmallChange="0.01" LargeChange="0.05"
-                                IsEnabled="{Binding ElementName=SmoothingToggle, Path=IsChecked}"
-                                ValueChanged="SmoothingAlphaSlider_ValueChanged"
-                                VerticalAlignment="Center"/>
-                        <TextBlock Text="{Binding ElementName=MainWin, Path=SmoothingAlphaStatus}"
-                                   FontSize="11" Foreground="{StaticResource Accent}"
-                                   VerticalAlignment="Center" Margin="6,0,0,0" Width="34"/>
-                        <Button Content="â†º"
-                                Style="{StaticResource BtnGhost}"
-                                Height="26" Width="26" Padding="0"
-                                FontSize="14"
-                                IsEnabled="{Binding ElementName=SmoothingToggle, Path=IsChecked}"
-                                Click="ResetSmoothingAlpha_Click"/>
-                    </StackPanel>
+                    <TextBlock Text="alpha"
+                               FontSize="11" Foreground="{StaticResource TextMuted}"
+                               VerticalAlignment="Center" Margin="12,0,6,0"/>
+                    <Slider x:Name="SmoothingAlphaSlider"
+                            Width="100"
+                            Minimum="0.01" Maximum="1.00"
+                            TickFrequency="0.01"
+                            SmallChange="0.01" LargeChange="0.05"
+                            IsEnabled="{Binding ElementName=SmoothingToggle, Path=IsChecked}"
+                            ValueChanged="SmoothingAlphaSlider_ValueChanged"
+                            VerticalAlignment="Center"/>
+                    <TextBlock Text="{Binding ElementName=MainWin, Path=SmoothingAlphaStatus}"
+                               FontSize="11" Foreground="{StaticResource Accent}"
+                               VerticalAlignment="Center" Margin="6,0,0,0" Width="34"/>
+                    <Button Content="Reset"
+                            Style="{StaticResource BtnGhost}"
+                            Height="26" Padding="8,0"
+                            FontSize="11"
+                            IsEnabled="{Binding ElementName=SmoothingToggle, Path=IsChecked}"
+                            Click="ResetSmoothingAlpha_Click"/>
                     <Separator Style="{StaticResource ToolSep}" Margin="12,0"/>
-                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                        <TextBlock Text="Linea" FontSize="11" Foreground="{StaticResource TextMuted}"
-                                   VerticalAlignment="Center" Margin="0,0,6,0"/>
-                        <Slider x:Name="LineWidthSlider"
-                                Width="80"
-                                Minimum="1" Maximum="8"
-                                TickFrequency="1"
-                                IsSnapToTickEnabled="True"
-                                ValueChanged="LineWidthSlider_ValueChanged"
-                                VerticalAlignment="Center"/>
-                        <TextBlock Text="{Binding ElementName=MainWin, Path=LineWidthStatus}"
-                                   FontSize="11" Foreground="{StaticResource Accent}"
-                                   VerticalAlignment="Center" Margin="6,0,0,0" Width="20"/>
-                    </StackPanel>
+                    <TextBlock Text="Line W"
+                               FontSize="11" Foreground="{StaticResource TextMuted}"
+                               VerticalAlignment="Center" Margin="0,0,6,0"/>
+                    <Slider x:Name="LineWidthSlider"
+                            Width="80"
+                            Minimum="1" Maximum="8"
+                            TickFrequency="1"
+                            IsSnapToTickEnabled="True"
+                            ValueChanged="LineWidthSlider_ValueChanged"
+                            VerticalAlignment="Center"/>
+                    <TextBlock Text="{Binding ElementName=MainWin, Path=LineWidthStatus}"
+                               FontSize="11" Foreground="{StaticResource Accent}"
+                               VerticalAlignment="Center" Margin="6,0,0,0" Width="20"/>
                     <Separator Style="{StaticResource ToolSep}" Margin="12,0"/>
-                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                        <TextBlock Text="Opac." FontSize="11" Foreground="{StaticResource TextMuted}"
-                                   VerticalAlignment="Center" Margin="0,0,6,0"/>
-                        <Slider x:Name="FilteredOpacitySlider"
-                                Width="80"
-                                Minimum="0.05" Maximum="1.00"
-                                TickFrequency="0.05"
-                                SmallChange="0.05" LargeChange="0.10"
-                                ValueChanged="FilteredOpacitySlider_ValueChanged"
-                                VerticalAlignment="Center"/>
-                        <TextBlock Text="{Binding ElementName=MainWin, Path=FilteredOpacityStatus}"
-                                   FontSize="11" Foreground="{StaticResource Accent}"
-                                   VerticalAlignment="Center" Margin="6,0,0,0" Width="34"/>
-                    </StackPanel>
+                    <TextBlock Text="Opacity"
+                               FontSize="11" Foreground="{StaticResource TextMuted}"
+                               VerticalAlignment="Center" Margin="0,0,6,0"/>
+                    <Slider x:Name="FilteredOpacitySlider"
+                            Width="80"
+                            Minimum="0.05" Maximum="1.00"
+                            TickFrequency="0.05"
+                            SmallChange="0.05" LargeChange="0.10"
+                            ValueChanged="FilteredOpacitySlider_ValueChanged"
+                            VerticalAlignment="Center"/>
+                    <TextBlock Text="{Binding ElementName=MainWin, Path=FilteredOpacityStatus}"
+                               FontSize="11" Foreground="{StaticResource Accent}"
+                               VerticalAlignment="Center" Margin="6,0,0,0" Width="34"/>
                     <Separator Style="{StaticResource ToolSep}" Margin="12,0"/>
                     <CheckBox x:Name="ChkAutoScroll"
                               Content="Auto-scroll"
@@ -539,12 +502,11 @@
                               FontSize="11"
                               VerticalAlignment="Center"
                               Margin="0,0,12,0"/>
-                    <Button Content="Pulisci log"
+                    <Button Content="Clear Log"
                             Style="{StaticResource BtnGhost}"
-                            Height="26"
+                            Height="26" Padding="8,0"
                             FontSize="11"
                             Click="ClearLog_Click"/>
-                    <!-- RawOpacity hidden but kept for binding -->
                     <Slider x:Name="RawOpacitySlider"
                             Width="0" Height="0" Visibility="Collapsed"
                             Minimum="0.05" Maximum="1.00"
@@ -574,9 +536,7 @@
             </Border>
         </Expander>
 
-        <!-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-             ROW 5 â€” Status bar
-             â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• -->
+        <!-- Status bar -->
         <Border Grid.Row="5"
                 Background="{StaticResource PanelBg}"
                 BorderBrush="{StaticResource BorderBrush2}"
@@ -627,6 +587,4 @@
 
     </Grid>
 
-
 </Window>
-
