@@ -746,8 +746,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         // Keep the editable node DataGrid in sync
         SyncDesignNodesToList();
     }
-
-    /// <summary>Rebuild DesignNodes from the canonical _segmentNodes list.</summary>
     private void SyncDesignNodesToList()
     {
         if (_syncingNodes) return;
@@ -1546,23 +1544,69 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         FitAfterRefresh();
     }
 
-    private void SegmentsDataGrid_RowEditEnding(object sender, DataGridRowEditEndingEventArgs e)
+    private void SegmentsDataGrid_CellEditEnding(object sender, DataGridCellEditEndingEventArgs e)
     {
-        // Refresh totals after the binding commits (on next dispatcher cycle)
+        if (e.EditAction != DataGridEditAction.Commit) return;
+        if (e.Row.Item is not ProjectSegment seg) return;
+        if (e.EditingElement is not TextBox tb) return;
+
+        string text    = tb.Text.Trim();
+        int    colIdx  = SegmentsDataGrid.Columns.IndexOf(e.Column);
+
+        // Col 1 = Name, Col 8 = Sp.W. — handled by direct binding, no node sync needed
+        if (colIdx == 1 || colIdx == 8)
+        {
+            Dispatcher.BeginInvoke(RefreshTotals);
+            Dispatcher.BeginInvoke((Action)MarkDirty);
+            return;
+        }
+
+        // Col 2 = Start Ø, Col 3 = End Ø, Col 4 = Length
+        if (colIdx < 2 || colIdx > 4) return;
+        if (!TryParseDouble(text, out double newVal) || newVal <= 0) return;
+
         Dispatcher.BeginInvoke(() =>
         {
-            double totalCm3  = ProjectSegments.Sum(s => s.VolumeCm3);
-            bool   hasMass   = ProjectSegments.Count > 0 && ProjectSegments.All(s => s.SpecWeightGCm3 > 0);
-            double totalMassG = hasMass ? ProjectSegments.Sum(s => s.MassG) : 0;
+            switch (colIdx)
+            {
+                case 2: // Start Ø — change the Y of the start node
+                {
+                    int idx = _segmentNodes.FindIndex(n => Math.Abs(n.X - seg.StartCm) < 0.05);
+                    if (idx >= 0) _segmentNodes[idx] = (_segmentNodes[idx].X, newVal);
+                    break;
+                }
+                case 3: // End Ø — change the Y of the end node (shared with next segment's start)
+                {
+                    int idx = _segmentNodes.FindIndex(n => Math.Abs(n.X - seg.EndCm) < 0.05);
+                    if (idx >= 0) _segmentNodes[idx] = (_segmentNodes[idx].X, newVal);
+                    break;
+                }
+                case 4: // Length — move the end node's X position
+                {
+                    double newEndCm = seg.StartCm + newVal;
+                    int idx = _segmentNodes.FindIndex(n => Math.Abs(n.X - seg.EndCm) < 0.05);
+                    if (idx >= 0) _segmentNodes[idx] = (Math.Round(newEndCm, 1), _segmentNodes[idx].Y);
+                    break;
+                }
+            }
 
-            TotalVolumeText = ProjectSegments.Count > 0
-                ? hasMass
-                    ? $"Total: {totalCm3:0.00} cm³  |  {totalMassG:0.00} g  |  {ProjectSegments.Count} segments"
-                    : $"Total: {totalCm3:0.00} cm³  |  {ProjectSegments.Count} segments"
-                : string.Empty;
-
+            RefreshPlot();           // redraw chart with updated nodes
+            RefreshSegmentTable();   // rebuild segment rows
             MarkDirty();
         });
+    }
+
+    private void RefreshTotals()
+    {
+        double totalCm3   = ProjectSegments.Sum(s => s.VolumeCm3);
+        bool   hasMass    = ProjectSegments.Count > 0 && ProjectSegments.All(s => s.SpecWeightGCm3 > 0);
+        double totalMassG = hasMass ? ProjectSegments.Sum(s => s.MassG) : 0;
+
+        TotalVolumeText = ProjectSegments.Count > 0
+            ? hasMass
+                ? $"Total: {totalCm3:0.00} cm³  |  {totalMassG:0.00} g  |  {ProjectSegments.Count} segments"
+                : $"Total: {totalCm3:0.00} cm³  |  {ProjectSegments.Count} segments"
+            : string.Empty;
     }
 
     private void Settings_Click(object sender, RoutedEventArgs e)

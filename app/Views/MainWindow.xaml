@@ -694,12 +694,13 @@
                         BorderThickness="1">
                     <DataGrid x:Name="SegmentsDataGrid"
                               Style="{StaticResource DarkGrid}"
+                              FontSize="13"
                               ItemsSource="{Binding ElementName=MainWin, Path=ProjectSegments}"
                               AutoGenerateColumns="False"
                               IsReadOnly="False"
                               CanUserAddRows="False"
                               CanUserDeleteRows="False"
-                              RowEditEnding="SegmentsDataGrid_RowEditEnding">
+                              CellEditEnding="SegmentsDataGrid_CellEditEnding">
                         <DataGrid.Columns>
                             <DataGridTextColumn Header="#"
                                                Binding="{Binding Index}"
@@ -710,34 +711,31 @@
                                                Width="90"/>
                             <DataGridTextColumn Header="Start Ø (mm)"
                                                Binding="{Binding StartDiameterMm, StringFormat='0.000'}"
-                                               Width="88"
-                                               IsReadOnly="True"/>
+                                               Width="105"/>
                             <DataGridTextColumn Header="End Ø (mm)"
                                                Binding="{Binding EndDiameterMm, StringFormat='0.000'}"
-                                               Width="80"
-                                               IsReadOnly="True"/>
+                                               Width="95"/>
                             <DataGridTextColumn Header="Length (cm)"
                                                Binding="{Binding LengthCm, StringFormat='0.0'}"
-                                               Width="80"
-                                               IsReadOnly="True"/>
+                                               Width="90"/>
                             <DataGridTextColumn Header="Shape"
                                                Binding="{Binding Shape}"
-                                               Width="65"
+                                               Width="70"
                                                IsReadOnly="True"/>
                             <DataGridTextColumn Header="Taper (mm/m)"
                                                Binding="{Binding TaperText}"
-                                               Width="90"
+                                               Width="100"
                                                IsReadOnly="True"/>
                             <DataGridTextColumn Header="Volume (cm³)"
                                                Binding="{Binding VolumeText}"
-                                               Width="82"
+                                               Width="90"
                                                IsReadOnly="True"/>
                             <DataGridTextColumn Header="Sp.W. (g/cm³)"
                                                Binding="{Binding SpecWeightGCm3, StringFormat='0.000', UpdateSourceTrigger=PropertyChanged}"
-                                               Width="95"/>
+                                               Width="105"/>
                             <DataGridTextColumn Header="Mass (g)"
                                                Binding="{Binding MassText}"
-                                               Width="70"
+                                               Width="80"
                                                IsReadOnly="True"/>
                         </DataGrid.Columns>
                     </DataGrid>
