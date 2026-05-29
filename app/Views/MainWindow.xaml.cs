@@ -28,8 +28,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private string _uiStatus = "Ready";
 
     // Layer visibility
-    private bool _showScanLayer   = true;
-    private bool _showDesignLayer = true;
+    private bool _showScanLayer    = true;
+    private bool _showDesignLayer  = true;
+    private bool _showSinkSpeedMap = false;
+    private bool _showCompProfile  = false;
 
     // Segment drawing — node.Y stores FULL DIAMETER in mm (not radius)
     private readonly List<(double X, double Y)> _segmentNodes = new();
@@ -52,10 +54,18 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private bool    _isDirty            = false;
     private string  _projectName        = "Untitled";
     private DateTime _projectCreatedAt  = DateTime.UtcNow;
+    private bool    _designMode         = false;
 
     // Persists user-edited segment names and specific weights across RefreshSegmentTable() calls.
     // Key: (StartCm, EndCm) — survives as long as the segment boundaries don't move.
-    private readonly Dictionary<(double, double), (string Name, double SpecWeight)> _segmentMetadata = new();
+    private readonly Dictionary<(double, double), (string Name, double SpecWeight, bool IsHead)> _segmentMetadata = new();
+
+    private bool   _useSharedDensity = true;
+    private double _sharedDensity    = 0.0;
+
+    private bool   _waterIsSalt = false;
+    private double _waterTempC  = 20.0;
+    private double _compTargetSpeedIns = 1.0; // desired compensation speed in in/s
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -121,6 +131,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             RefreshPlot();
             RefreshStatusBar();
             UpdateProjectTitle();
+            ApplyCompTarget(); // populate cm/s label with initial value
         };
 
         Closing += MainWindow_Closing;
@@ -157,7 +168,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         if (_plotInitialized) return;
         var plot = PlotControl.Plot;
         plot.Clear();
-        plot.Title("Profilo diametro linea");
+        plot.Title(GetChartTitle());
         plot.XLabel("Lunghezza (cm)");
         plot.YLabel("Diametro (mm)");
         plot.ShowLegend();
@@ -186,7 +197,16 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private void RefreshPlot()
     {
         if (!_plotInitialized) return;
+        try { RefreshPlotCore(); }
+        catch (Exception ex)
+        {
+            UiStatus = $"Chart error: {ex.GetType().Name}: {ex.Message}";
+            Console.Error.WriteLine($"[RefreshPlot] {ex.GetType().Name}: {ex.Message}\n{ex.StackTrace}");
+        }
+    }
 
+    private void RefreshPlotCore()
+    {
         var plot = PlotControl.Plot;
         plot.Clear();
 
@@ -264,33 +284,31 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             }
         }
 
-        // Imported comparison series — also mirrored with fill
-        if (_showScanLayer)
+        // Imported comparison series — render regardless of _showScanLayer
+        // (they should be visible in design mode even when scan layer is hidden)
+        foreach (var series in _importedSeries)
         {
-            foreach (var series in _importedSeries)
-            {
-                double[] halfYs = series.Ys.Select(y =>  y / 2.0).ToArray();
-                double[] negYs  = series.Ys.Select(y => -y / 2.0).ToArray();
+            double[] halfYs = series.Ys.Select(y =>  y / 2.0).ToArray();
+            double[] negYs  = series.Ys.Select(y => -y / 2.0).ToArray();
 
-                DrawLineFill(plot, series.Xs, halfYs, negYs, series.Color);
+            DrawLineFill(plot, series.Xs, halfYs, negYs, series.Color);
 
-                var top = plot.Add.Scatter(series.Xs, halfYs);
-                top.LegendText = series.Name;
-                top.LineWidth  = 2;
-                top.MarkerSize = 0;
-                top.Color      = series.Color;
+            var top = plot.Add.Scatter(series.Xs, halfYs);
+            top.LegendText = series.Name;
+            top.LineWidth  = 2;
+            top.MarkerSize = 0;
+            top.Color      = series.Color;
 
-                var bot = plot.Add.Scatter(series.Xs, negYs);
-                bot.LineWidth  = 2;
-                bot.MarkerSize = 0;
-                bot.Color      = series.Color;
-            }
+            var bot = plot.Add.Scatter(series.Xs, negYs);
+            bot.LineWidth  = 2;
+            bot.MarkerSize = 0;
+            bot.Color      = series.Color;
         }
 
         if (_showDesignLayer)
             RenderSegmentOverlay(plot);
 
-        plot.Title("Profilo diametro linea");
+        plot.Title(GetChartTitle());
         plot.XLabel("Lunghezza (cm)");
         plot.YLabel("Diametro (mm)");
         plot.ShowLegend();
@@ -342,11 +360,20 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _importedSeries.Clear();
         _segmentNodes.Clear();
         _segmentUndoStack.Clear();
+        foreach (var seg in ProjectSegments) seg.PropertyChanged -= OnSegmentPropertyChanged;
         _segmentMetadata.Clear();
         ProjectSegments.Clear();
         DesignNodes.Clear();
-        TotalVolumeText = string.Empty;
+        TotalVolumeText   = string.Empty;
         _lastImportedFile = "-";
+        _useSharedDensity = true;
+        _sharedDensity    = 0.0;
+        _waterIsSalt      = false;
+        _waterTempC       = 20.0;
+        OnPropertyChanged(nameof(UseSharedDensity));
+        OnPropertyChanged(nameof(SharedDensity));
+        OnPropertyChanged(nameof(WaterIsSalt));
+        OnPropertyChanged(nameof(WaterTempC));
         _vm.Points.CollectionChanged += Points_CollectionChanged;
     }
 
@@ -354,8 +381,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     {
         var project = new FlyLineProject
         {
-            Name       = _projectName,
-            CreatedAt  = _projectCreatedAt,
+            Name               = _projectName,
+            CreatedAt          = _projectCreatedAt,
+            UseSharedDensity   = _useSharedDensity,
+            SharedDensityGCm3  = _sharedDensity,
+            WaterType          = _waterIsSalt ? "salt" : "fresh",
+            WaterTempC         = _waterTempC,
             ScanPoints = _vm.Points
                            .OrderBy(p => p.X)
                            .Select(p => new MeasurementPoint { X = p.X, RawY = p.RawY, FilteredY = p.FilteredY })
@@ -379,7 +410,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                                     StartCm    = s.StartCm,
                                     EndCm      = s.EndCm,
                                     Name       = s.Name,
-                                    SpecWeight = s.SpecWeightGCm3
+                                    SpecWeight = s.SpecWeightGCm3,
+                                    IsHead     = s.IsHead
                                 })
                                 .ToList()
         };
@@ -415,10 +447,19 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         foreach (var n in project.DesignNodes)
             _segmentNodes.Add((n.X, n.Y));
 
-        // Restore segment metadata (names, spec weights)
+        // Restore segment metadata (names, spec weights, head flag)
         _segmentMetadata.Clear();
         foreach (var m in project.SegmentMetadata)
-            _segmentMetadata[(m.StartCm, m.EndCm)] = (m.Name, m.SpecWeight);
+            _segmentMetadata[(m.StartCm, m.EndCm)] = (m.Name, m.SpecWeight, m.IsHead);
+
+        _useSharedDensity = project.UseSharedDensity;
+        _sharedDensity    = project.SharedDensityGCm3;
+        _waterIsSalt      = project.WaterType == "salt";
+        _waterTempC       = project.WaterTempC;
+        OnPropertyChanged(nameof(UseSharedDensity));
+        OnPropertyChanged(nameof(SharedDensity));
+        OnPropertyChanged(nameof(WaterIsSalt));
+        OnPropertyChanged(nameof(WaterTempC));
 
         _projectName        = project.Name;
         _projectCreatedAt   = project.CreatedAt;
@@ -431,6 +472,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         RefreshPlot();
         FitAfterRefresh();
         RefreshSegmentTable();
+        SpWeightColumn.IsReadOnly = _useSharedDensity;
         RefreshStatusBar();
         UpdateProjectTitle();
         UiStatus = $"Project loaded: {project.Name}  ({project.ScanPoints.Count} scan pts, {project.ImportedSeries.Count} series, {project.DesignNodes.Count} nodes)";
@@ -554,6 +596,57 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         UiStatus = "Project closed";
     }
 
+    private void DesignModeToggle_Click(object sender, RoutedEventArgs e)
+    {
+        _designMode = DesignModeToggle.IsChecked == true;
+        ApplyDesignMode();
+    }
+
+    private void ApplyDesignMode()
+    {
+        var scanVis   = _designMode ? Visibility.Collapsed : Visibility.Visible;
+        var designVis = _designMode ? Visibility.Visible   : Visibility.Collapsed;
+
+        // Scan-only elements
+        ScanButtonsPanel.Visibility    = scanVis;
+        ConnectionPanel.Visibility     = scanVis;
+        MetricsStrip.Visibility        = scanVis;
+        LogExpander.Visibility         = scanVis;
+
+        // Keep the metrics row height at 0 when hidden so it doesn't reserve space
+        MainGrid.RowDefinitions[2].Height = _designMode
+            ? new GridLength(0)
+            : new GridLength(72);
+
+        // Design-only elements
+        DesignToolsPanel.Visibility          = designVis;
+        DesignProjectExpander.Visibility     = designVis;
+
+        // Hide scan layer by default when entering design mode; restore when leaving
+        if (_designMode)
+        {
+            _showScanLayer = false;
+            if (ShowScanToggle != null) ShowScanToggle.IsChecked = false;
+        }
+        else
+        {
+            _showScanLayer = true;
+            if (ShowScanToggle != null) ShowScanToggle.IsChecked = true;
+        }
+
+        RefreshPlot();
+    }
+
+    private string GetChartTitle()
+    {
+        string mode;
+        if (_designMode)
+            mode = _showCompProfile ? "Compensated Profile" : "Design";
+        else
+            mode = "Scan";
+        return $"{_projectName}  —  {mode}";
+    }
+
     private void SaveProjectAs_Click(object sender, RoutedEventArgs e)
     {
         Directory.CreateDirectory(ProjectService.DefaultProjectFolder);
@@ -581,17 +674,19 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     }
 
     /// <summary>
-    /// Draws a filled band between topYs and botYs with a layered gradient that
-    /// simulates the cross-section of a round solid (fly line), giving a "sfumatura"
-    /// cylindrical appearance: darker body at the edges, lighter highlight at centre.
+    /// Draws a filled band between topYs and botYs.
+    /// When <paramref name="solid"/> is true (design profile) renders N concentric bands
+    /// outer-to-inner with Lambert cylindrical shading: dark edges → rich body → specular
+    /// centre, creating a convincing solid round cross-section.
+    /// When false (scan / imported series) uses a lightweight 3-layer transparent blend.
     /// </summary>
     private static void DrawLineFill(ScottPlot.Plot plot,
                                      double[] xs, double[] topYs, double[] botYs,
-                                     ScottPlot.Color bodyColor)
+                                     ScottPlot.Color bodyColor,
+                                     bool solid = false)
     {
         if (xs.Length < 2) return;
 
-        // Build a closed polygon for a given fraction of the full radius on each side.
         ScottPlot.Coordinates[] Band(double fraction)
         {
             var top = xs.Select((x, i) => new ScottPlot.Coordinates(x,  topYs[i] * fraction));
@@ -600,23 +695,61 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             return top.Concat(bot).ToArray();
         }
 
-        // Layer 1 — full extent: body colour, semi-transparent (dark edges implied by absence of highlight)
-        var body = plot.Add.Polygon(Band(1.0));
-        body.FillColor  = bodyColor.WithAlpha(0.50f);
-        body.LineWidth  = 0;
-        body.LineColor  = Colors.Transparent;
+        if (solid)
+        {
+            // ── Lambert cylindrical shading ───────────────────────────────
+            // Draw 20 concentric bands, outermost (darkest) first.
+            // Each inner band is brighter and, at high alpha, nearly replaces
+            // the region covered by the previous darker band.
+            // v=1 (edge) → b=0 → darkest; v=0 (centre) → b=1 → brightest.
+            const int N = 20;
+            const float layerAlpha = 0.91f;
 
-        // Layer 2 — inner 60% of radius: lighter tint, softens the mid-zone
-        var mid = plot.Add.Polygon(Band(0.60));
-        mid.FillColor = Colors.White.WithAlpha(0.14f);
-        mid.LineWidth = 0;
-        mid.LineColor = Colors.Transparent;
+            for (int i = 0; i <= N; i++)
+            {
+                double frac = 1.0 - (double)i / N;        // 1.0 → ~0
+                double v    = frac;
+                double b    = Math.Sqrt(1.0 - v * v);     // 0 at edge, 1 at centre
 
-        // Layer 3 — inner 25% of radius: stronger highlight simulating specular top surface
-        var hi = plot.Add.Polygon(Band(0.25));
-        hi.FillColor = Colors.White.WithAlpha(0.22f);
-        hi.LineWidth = 0;
-        hi.LineColor = Colors.Transparent;
+                // Shade factor: 0.25 (very dark edge) → 1.0 (full body at centre)
+                float shade = (float)(0.25 + 0.75 * b);
+                byte  r     = (byte)Math.Min(255, (int)(bodyColor.Red   * shade));
+                byte  g     = (byte)Math.Min(255, (int)(bodyColor.Green * shade));
+                byte  bl    = (byte)Math.Min(255, (int)(bodyColor.Blue  * shade));
+
+                // Specular glint in the inner 15% of the radius
+                if (b > 0.85)
+                {
+                    float spec = (float)((b - 0.85) / 0.15) * 0.55f;
+                    r  = (byte)Math.Min(255, r  + (int)((255 - r)  * spec));
+                    g  = (byte)Math.Min(255, g  + (int)((255 - g)  * spec));
+                    bl = (byte)Math.Min(255, bl + (int)((255 - bl) * spec));
+                }
+
+                var band = plot.Add.Polygon(Band(frac));
+                band.FillColor = new ScottColor(r, g, bl).WithAlpha(layerAlpha);
+                band.LineWidth = 0;
+                band.LineColor = Colors.Transparent;
+            }
+        }
+        else
+        {
+            // ── Lightweight 3-layer blend for scan / imported series ──────
+            var body = plot.Add.Polygon(Band(1.0));
+            body.FillColor = bodyColor.WithAlpha(0.55f);
+            body.LineWidth = 0;
+            body.LineColor = Colors.Transparent;
+
+            var mid = plot.Add.Polygon(Band(0.60));
+            mid.FillColor = Colors.White.WithAlpha(0.14f);
+            mid.LineWidth = 0;
+            mid.LineColor = Colors.Transparent;
+
+            var hi = plot.Add.Polygon(Band(0.25));
+            hi.FillColor = Colors.White.WithAlpha(0.22f);
+            hi.LineWidth = 0;
+            hi.LineColor = Colors.Transparent;
+        }
     }
 
     private double[] GetDisplayedSeries(IReadOnlyList<MeasurementPoint> points)
@@ -641,6 +774,91 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         return values;
     }
 
+    // ── Sink-speed heat-map overlay ──────────────────────────────────────────
+    // Each ~12 cm slice is drawn as a colour-coded trapezoid, inserted between
+    // the gradient fill and the profile outline so it's always visible.
+    // Colour = individual cylinder terminal speed for that slice's diameter:
+    //   blue (slow/floating) → cyan → green → yellow → red (fast sinking)
+    private void RenderSinkSpeedOverlay(Plot plot, List<(double X, double Y)> sorted)
+    {
+        // ── Pass 1: collect all slice speeds for colour normalisation ──────
+        var slices = new List<(double xStart, double xEnd, double dStart, double dEnd, double speed)>();
+
+        for (int si = 0; si < sorted.Count - 1; si++)
+        {
+            double x0 = sorted[si].X, x1 = sorted[si + 1].X;
+            double d0 = sorted[si].Y, d1 = sorted[si + 1].Y;
+            double lenCm = x1 - x0;
+            if (lenCm <= 0) continue;
+
+            var seg = ProjectSegments.FirstOrDefault(
+                s => Math.Abs(s.StartCm - x0) < 0.05 && Math.Abs(s.EndCm - x1) < 0.05);
+            if (seg == null || seg.SpecWeightGCm3 <= 0) continue;
+
+            int n = Math.Max(1, (int)Math.Ceiling(lenCm / 12.0));
+            for (int i = 0; i < n; i++)
+            {
+                double t0 = (double)i / n, t1 = (i + 1.0) / n, tm = (t0 + t1) / 2.0;
+                double xs = x0 + t0 * lenCm,     xe = x0 + t1 * lenCm;
+                double ds = d0 + t0 * (d1 - d0), de = d0 + t1 * (d1 - d0);
+                double dm = d0 + tm * (d1 - d0);
+
+                double v = SinkingSpeedCalc.CylinderSinkSpeed(
+                    _waterIsSalt, _waterTempC, dm, seg.SpecWeightGCm3);
+                if (!double.IsNaN(v))
+                    slices.Add((xs, xe, ds, de, v));
+            }
+        }
+
+        if (slices.Count == 0) return;
+
+        double minV  = slices.Min(s => s.speed);
+        double maxV  = slices.Max(s => s.speed);
+        double range = Math.Max(maxV - minV, 1e-10);
+
+        // ── Pass 2: draw trapezoids ────────────────────────────────────────
+        foreach (var (xs, xe, ds, de, v) in slices)
+        {
+            double t   = (v - minV) / range;
+            var    fill = SpeedColor(t).WithAlpha(0.70f);
+
+            var poly = plot.Add.Polygon(new ScottPlot.Coordinates[]
+            {
+                new(xs,  ds / 2.0),
+                new(xe,  de / 2.0),
+                new(xe, -de / 2.0),
+                new(xs, -ds / 2.0),
+            });
+            poly.FillColor = fill;
+            poly.LineWidth = 0;
+            poly.LineColor = Colors.Transparent;
+        }
+
+        // ── 4-stop gradient legend (matches density map style) ────────────
+        double minIns = minV * 39.3701, maxIns = maxV * 39.3701;
+        for (int stop = 0; stop < 4; stop++)
+        {
+            double t     = stop / 3.0;
+            double speed = minIns + t * (maxIns - minIns);
+            var entry    = plot.Add.Scatter(new double[] {}, new double[] {});
+            entry.Color      = SpeedColor(t);
+            entry.LineWidth  = 8;
+            entry.LegendText = $"{speed:+0.000;-0.000} in/s";
+        }
+    }
+
+    /// <summary>Maps t ∈ [0,1] to a blue→cyan→green→yellow→red colour ramp.</summary>
+    private static ScottColor SpeedColor(double t)
+    {
+        t = Math.Clamp(t, 0.0, 1.0);
+        byte r, g, b;
+        if (t < 0.25)      { double s = t / 0.25;        r = 0;           g = (byte)(s * 255);       b = 255; }
+        else if (t < 0.50) { double s = (t - 0.25)/0.25; r = 0;           g = 255;                   b = (byte)((1-s)*255); }
+        else if (t < 0.75) { double s = (t - 0.50)/0.25; r = (byte)(s*255); g = 255;                 b = 0; }
+        else               { double s = (t - 0.75)/0.25; r = 255;          g = (byte)((1-s)*255);    b = 0; }
+        return new ScottColor(r, g, b);
+    }
+
     // Segment overlay rendering
     // node.Y stores full diameter in mm; chart Y axis is radius (diameter/2)
     private void RenderSegmentOverlay(Plot plot)
@@ -648,51 +866,260 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         if (_segmentNodes.Count == 0) return;
 
         var sorted = _segmentNodes.OrderBy(n => n.X).ToList();
-        double[] xs       = sorted.Select(n => n.X).ToArray();
-        double[] halfYs   = sorted.Select(n =>  n.Y / 2.0).ToArray();   // +radius
-        double[] negHalfYs = sorted.Select(n => -n.Y / 2.0).ToArray(); // -radius (mirror)
+        double[] xs        = sorted.Select(n => n.X).ToArray();
+        double[] halfYs    = sorted.Select(n =>  n.Y / 2.0).ToArray();
+        double[] negHalfYs = sorted.Select(n => -n.Y / 2.0).ToArray();
 
-        var designColor = new ScottColor(220, 50, 50); // red
+        var designColor = new ScottColor(220, 50, 50);
+        bool compActive = _showCompProfile && ProjectSegments.Any(s => s.HasCompensation);
 
         if (sorted.Count >= 2)
         {
-            // Gradient fill like the scan profile
-            DrawLineFill(plot, xs, halfYs, negHalfYs, designColor);
+            if (!compActive)
+            {
+                // 1. Smooth cylindrical fill
+                DrawLineFill(plot, xs, halfYs, negHalfYs, designColor, solid: true);
 
-            var topLine = plot.Add.Scatter(xs, halfYs);
-            topLine.LegendText = $"Design ({sorted.Count} nodes)";
-            topLine.Color      = designColor;
-            topLine.LineWidth  = 2;
-            topLine.MarkerSize = 0;
+                // 2. Sink-speed heat-map (drawn over the fill)
+                if (_showSinkSpeedMap)
+                    RenderSinkSpeedOverlay(plot, sorted);
 
-            var botLine = plot.Add.Scatter(xs, negHalfYs);
-            botLine.Color      = designColor;
-            botLine.LineWidth  = 2;
-            botLine.MarkerSize = 0;
+                // 3. Profile outline — crisp, slightly thicker than before
+                var topLine = plot.Add.Scatter(xs, halfYs);
+                topLine.LegendText = $"Design ({sorted.Count} nodes)";
+                topLine.Color      = designColor;
+                topLine.LineWidth  = 2.5f;
+                topLine.MarkerSize = 0;
+
+                var botLine = plot.Add.Scatter(xs, negHalfYs);
+                botLine.Color      = designColor;
+                botLine.LineWidth  = 2.5f;
+                botLine.MarkerSize = 0;
+
+                // 4. Subtle segment-boundary ticks (hairline, not dashed — less noise)
+                foreach (var node in sorted)
+                {
+                    var tick = plot.Add.Scatter(
+                        new[] { node.X, node.X },
+                        new[] { node.Y / 2.0, -node.Y / 2.0 });
+                    tick.Color       = designColor.WithAlpha(0.25f);
+                    tick.LineWidth   = 0.8f;
+                    tick.MarkerSize  = 0;
+                }
+            }
+            else
+            {
+                // When comp profile is shown: draw original as faint ghost only
+                var ghostColor = designColor.WithAlpha(0.18f);
+                var topGhost = plot.Add.Scatter(xs, halfYs);
+                topGhost.Color      = ghostColor;
+                topGhost.LineWidth  = 1;
+                topGhost.MarkerSize = 0;
+                var botGhost = plot.Add.Scatter(xs, negHalfYs);
+                botGhost.Color      = ghostColor;
+                botGhost.LineWidth  = 1;
+                botGhost.MarkerSize = 0;
+            }
+
+            // Compensated profile (drawn last so it's on top)
+            RenderCompensatedOverlay(plot, sorted);
         }
 
-        // Markers at node positions (on the top profile line)
-        var markers = plot.Add.Scatter(xs, halfYs);
-        markers.Color      = designColor;
-        markers.LineWidth  = 0;
-        markers.MarkerSize = 8;
-
-        // Label each node: diameter (full value), position
-        foreach (var node in sorted)
+        if (!compActive)
         {
-            double chartY = node.Y / 2.0;
-            var lbl = plot.Add.Text($"Ø {node.Y:0.000} mm\n{node.X:0.0} cm", node.X, chartY);
-            lbl.LabelFontSize        = 10;
-            lbl.LabelBold            = true;
-            lbl.LabelFontColor       = Colors.DarkRed;
-            lbl.LabelAlignment       = Alignment.LowerLeft;
-            lbl.LabelBackgroundColor = Colors.White.WithAlpha(0.93f);
-            lbl.LabelBorderColor     = Colors.DarkRed;
-            lbl.LabelBorderWidth     = 1.5f;
-            lbl.LabelPadding         = 3;
-            lbl.OffsetX              = 8;
-            lbl.OffsetY              = -8;
+            // Node markers — filled circle with white ring for a clean look
+            var markers = plot.Add.Scatter(xs, halfYs);
+            markers.Color        = designColor;
+            markers.LineWidth    = 0;
+            markers.MarkerSize   = 9;
+            markers.MarkerShape  = MarkerShape.OpenCircle;
+
+            var markersInner = plot.Add.Scatter(xs, halfYs);
+            markersInner.Color       = designColor.WithAlpha(0.85f);
+            markersInner.LineWidth   = 0;
+            markersInner.MarkerSize  = 5;
+            markersInner.MarkerShape = MarkerShape.FilledCircle;
+
+            // Node labels
+            foreach (var node in sorted)
+            {
+                double chartY = node.Y / 2.0;
+                var lbl = plot.Add.Text($"Ø {node.Y:0.000} mm\n{node.X:0.0} cm", node.X, chartY);
+                lbl.LabelFontSize        = 10;
+                lbl.LabelBold            = true;
+                lbl.LabelFontColor       = Colors.DarkRed;
+                lbl.LabelAlignment       = Alignment.LowerLeft;
+                lbl.LabelBackgroundColor = Colors.White.WithAlpha(0.93f);
+                lbl.LabelBorderColor     = Colors.DarkRed;
+                lbl.LabelBorderWidth     = 1.5f;
+                lbl.LabelPadding         = 3;
+                lbl.OffsetX              = 8;
+                lbl.OffsetY              = -8;
+            }
         }
+    }
+
+    /// <summary>
+    /// Draws the compensated profile as colored filled rectangles per slice.
+    /// Each slice is drawn at its compensated diameter, filled with a color
+    /// representing its required density (blue=low → red=high).
+    /// An outline polyline traces the full staircase shape.
+    /// </summary>
+    private void RenderCompensatedOverlay(Plot plot, List<(double X, double Y)> sorted)
+    {
+        if (!_showCompProfile) return;
+        if (ProjectSegments.Count == 0) return;
+        bool anyComp = ProjectSegments.Any(s => s.HasCompensation);
+        if (!anyComp) return;
+
+        // Collect all slices to find density range for color normalization
+        var allSlices = new List<(double x0, double x1, double r, double density)>();
+        foreach (var seg in ProjectSegments.OrderBy(s => s.StartCm))
+        {
+            if (!seg.HasCompensation) continue;
+            double[] xs   = seg.CompSliceXsCm;
+            double[] diam = seg.CompSliceDiamsMm;
+            double[] dens = seg.CompSliceDensities;
+            int n = xs.Length;
+            double half = n > 1 ? (xs[1] - xs[0]) / 2.0 : seg.LengthCm / 2.0;
+            for (int i = 0; i < n; i++)
+            {
+                double xAbs = seg.StartCm + xs[i];
+                allSlices.Add((xAbs - half, xAbs + half, diam[i] / 2.0, dens[i]));
+            }
+        }
+        if (allSlices.Count == 0) return;
+
+        double minDens = allSlices.Min(s => s.density);
+        double maxDens = allSlices.Max(s => s.density);
+        double range   = maxDens - minDens;
+        if (range < 1e-9) range = 1.0;
+
+        // Draw filled rectangles colored by density
+        bool legendAdded = false;
+        foreach (var (x0, x1, r, dens) in allSlices)
+        {
+            double t = (dens - minDens) / range;
+            var fillColor = DensityColor(t).WithAlpha(0.55f);
+
+            var poly = plot.Add.Polygon(new ScottPlot.Coordinates[]
+            {
+                new(x0,  r),
+                new(x1,  r),
+                new(x1, -r),
+                new(x0, -r),
+            });
+            poly.FillColor  = fillColor;
+            poly.LineWidth  = 0;
+            poly.LineColor  = ScottPlot.Colors.Transparent;
+        }
+
+        // Draw outline staircase on top
+        var topXs = new List<double>();
+        var topYs = new List<double>();
+        var botXs = new List<double>();
+        var botYs = new List<double>();
+
+        foreach (var (x0, x1, r, _) in allSlices)
+        {
+            if (topXs.Count == 0)
+            {
+                topXs.Add(x0); topYs.Add(0);
+                topXs.Add(x0); topYs.Add(r);
+                botXs.Add(x0); botYs.Add(0);
+                botXs.Add(x0); botYs.Add(-r);
+            }
+            else
+            {
+                double prevR = topYs.Last();
+                topXs.Add(x0); topYs.Add(prevR);
+                topXs.Add(x0); topYs.Add(r);
+                botXs.Add(x0); botYs.Add(-prevR);
+                botXs.Add(x0); botYs.Add(-r);
+            }
+            topXs.Add(x1); topYs.Add(r);
+            botXs.Add(x1); botYs.Add(-r);
+        }
+        topXs.Add(topXs.Last()); topYs.Add(0);
+        botXs.Add(botXs.Last()); botYs.Add(0);
+
+        var outlineColor = new ScottColor(255, 140, 0);
+        var topLine = plot.Add.Scatter(topXs.ToArray(), topYs.ToArray());
+        topLine.Color      = outlineColor;
+        topLine.LineWidth  = 2;
+        topLine.MarkerSize = 0;
+        topLine.LegendText = $"Comp. {_compTargetSpeedIns:0.00} in/s";
+
+        var botLine = plot.Add.Scatter(botXs.ToArray(), botYs.ToArray());
+        botLine.Color      = outlineColor;
+        botLine.LineWidth  = 2;
+        botLine.MarkerSize = 0;
+
+        // 4-stop gradient legend
+        for (int stop = 0; stop < 4; stop++)
+        {
+            double t    = stop / 3.0;
+            double dens = minDens + t * (maxDens - minDens);
+            var entry   = plot.Add.Scatter(new double[] {}, new double[] {});
+            entry.Color      = DensityColor(t);
+            entry.LineWidth  = 8;
+            entry.LegendText = $"ρ {dens:0.000} g/cm³";
+        }
+
+        // Node labels at each segment boundary
+        var segsOrdered = ProjectSegments.OrderBy(s => s.StartCm).Where(s => s.HasCompensation).ToList();
+        var labeledXs   = new HashSet<double>();
+        foreach (var seg in segsOrdered)
+        {
+            // Start boundary
+            if (!labeledXs.Contains(seg.StartCm))
+            {
+                labeledXs.Add(seg.StartCm);
+                double d = seg.CompSliceDiamsMm[0];
+                double r = d / 2.0;
+                var lbl = plot.Add.Text($"Ø {d:0.000} mm\n{seg.StartCm:0.0} cm", seg.StartCm, r);
+                lbl.LabelFontSize        = 10;
+                lbl.LabelBold            = true;
+                lbl.LabelFontColor       = ScottPlot.Colors.Orange;
+                lbl.LabelAlignment       = Alignment.LowerLeft;
+                lbl.LabelBackgroundColor = Colors.Black.WithAlpha(0.75f);
+                lbl.LabelBorderColor     = ScottPlot.Colors.Orange;
+                lbl.LabelBorderWidth     = 1.5f;
+                lbl.LabelPadding         = 3;
+                lbl.OffsetX              = 6;
+                lbl.OffsetY              = -6;
+            }
+            // End boundary
+            if (!labeledXs.Contains(seg.EndCm))
+            {
+                labeledXs.Add(seg.EndCm);
+                double d = seg.CompSliceDiamsMm[seg.CompSliceDiamsMm.Length - 1];
+                double r = d / 2.0;
+                var lbl = plot.Add.Text($"Ø {d:0.000} mm\n{seg.EndCm:0.0} cm", seg.EndCm, r);
+                lbl.LabelFontSize        = 10;
+                lbl.LabelBold            = true;
+                lbl.LabelFontColor       = ScottPlot.Colors.Orange;
+                lbl.LabelAlignment       = Alignment.LowerLeft;
+                lbl.LabelBackgroundColor = Colors.Black.WithAlpha(0.75f);
+                lbl.LabelBorderColor     = ScottPlot.Colors.Orange;
+                lbl.LabelBorderWidth     = 1.5f;
+                lbl.LabelPadding         = 3;
+                lbl.OffsetX              = 6;
+                lbl.OffsetY              = -6;
+            }
+        }
+    }
+
+    /// <summary>Density color ramp: blue (low) → cyan → green → yellow → red (high).</summary>
+    private static ScottColor DensityColor(double t)
+    {
+        t = Math.Clamp(t, 0, 1);
+        double r, g, b;
+        if (t < 0.25)      { double s = t / 0.25;       r = 0;         g = s;         b = 1; }
+        else if (t < 0.5)  { double s = (t-0.25)/0.25;  r = 0;         g = 1;         b = 1-s; }
+        else if (t < 0.75) { double s = (t-0.5)/0.25;   r = s;         g = 1;         b = 0; }
+        else               { double s = (t-0.75)/0.25;  r = 1;         g = 1-s;       b = 0; }
+        return new ScottColor((byte)(r*255), (byte)(g*255), (byte)(b*255));
     }
 
     /// <summary>
@@ -701,9 +1128,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     /// </summary>
     private void RefreshSegmentTable()
     {
-        // Save current user edits (name, spec weight) before clearing
+        // Save current user edits (name, spec weight, head flag) and unsubscribe events
         foreach (var seg in ProjectSegments)
-            _segmentMetadata[(seg.StartCm, seg.EndCm)] = (seg.Name, seg.SpecWeightGCm3);
+        {
+            _segmentMetadata[(seg.StartCm, seg.EndCm)] = (seg.Name, seg.SpecWeightGCm3, seg.IsHead);
+            seg.PropertyChanged -= OnSegmentPropertyChanged;
+        }
 
         ProjectSegments.Clear();
 
@@ -719,32 +1149,36 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 EndDiameterMm   = sorted[i + 1].Y,
             };
 
-            // Restore name and spec weight from metadata dict
             if (_segmentMetadata.TryGetValue((seg.StartCm, seg.EndCm), out var meta))
             {
-                seg.Name            = meta.Name;
-                seg.SpecWeightGCm3  = meta.SpecWeight;
+                seg.Name           = meta.Name;
+                seg.SpecWeightGCm3 = _useSharedDensity ? _sharedDensity : meta.SpecWeight;
+                seg.IsHead         = meta.IsHead;
             }
             else
             {
-                seg.Name = $"S{i + 1}";
+                seg.Name           = $"S{i + 1}";
+                seg.SpecWeightGCm3 = _useSharedDensity ? _sharedDensity : 0.0;
             }
 
+            seg.PropertyChanged += OnSegmentPropertyChanged;
             ProjectSegments.Add(seg);
         }
 
-        double totalCm3  = ProjectSegments.Sum(s => s.VolumeCm3);
-        bool   hasMass   = ProjectSegments.Count > 0 && ProjectSegments.All(s => s.SpecWeightGCm3 > 0);
-        double totalMassG = hasMass ? ProjectSegments.Sum(s => s.MassG) : 0;
-
-        TotalVolumeText = ProjectSegments.Count > 0
-            ? hasMass
-                ? $"Total: {totalCm3:0.00} cm³  |  {totalMassG:0.00} g  |  {ProjectSegments.Count} segments"
-                : $"Total: {totalCm3:0.00} cm³  |  {ProjectSegments.Count} segments"
-            : string.Empty;
+        RefreshTotals();
+        UpdateSinkingSpeeds();
 
         // Keep the editable node DataGrid in sync
         SyncDesignNodesToList();
+    }
+
+    private void OnSegmentPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is nameof(ProjectSegment.IsHead) or nameof(ProjectSegment.SpecWeightGCm3))
+        {
+            Dispatcher.BeginInvoke(() => { RefreshTotals(); UpdateSinkingSpeeds(); });
+            MarkDirty();
+        }
     }
     private void SyncDesignNodesToList()
     {
@@ -797,6 +1231,108 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     {
         get => _totalVolumeText;
         set { _totalVolumeText = value; OnPropertyChanged(nameof(TotalVolumeText)); }
+    }
+
+    public bool UseSharedDensity
+    {
+        get => _useSharedDensity;
+        set
+        {
+            _useSharedDensity = value;
+            OnPropertyChanged(nameof(UseSharedDensity));
+            // Update the column read-only state
+            SpWeightColumn.IsReadOnly = value;
+            if (value) ApplySharedDensity();
+            MarkDirty();
+        }
+    }
+
+    public double SharedDensity
+    {
+        get => _sharedDensity;
+        set
+        {
+            _sharedDensity = value;
+            OnPropertyChanged(nameof(SharedDensity));
+            if (_useSharedDensity) ApplySharedDensity();
+            MarkDirty();
+        }
+    }
+
+    private void ApplySharedDensity()
+    {
+        foreach (var seg in ProjectSegments)
+            seg.SpecWeightGCm3 = _sharedDensity;
+        RefreshTotals();
+        UpdateSinkingSpeeds();
+    }
+
+    // ── Water / sinking speed ────────────────────────────────────────────────
+
+    public bool WaterIsSalt
+    {
+        get => _waterIsSalt;
+        set
+        {
+            _waterIsSalt = value;
+            OnPropertyChanged(nameof(WaterIsSalt));
+            UpdateSinkingSpeeds();
+            MarkDirty();
+        }
+    }
+
+    public double WaterTempC
+    {
+        get => _waterTempC;
+        set
+        {
+            _waterTempC = Math.Clamp(value, 0.0, 40.0);
+            OnPropertyChanged(nameof(WaterTempC));
+            UpdateSinkingSpeeds();
+            MarkDirty();
+        }
+    }
+
+    private void UpdateSinkingSpeeds()
+    {
+        foreach (var seg in ProjectSegments)
+        {
+            if (seg.SpecWeightGCm3 <= 0)
+            {
+                seg.SinkSpeedMs = double.NaN;
+                continue;
+            }
+            seg.SinkSpeedMs = SinkingSpeedCalc.TaperedSegmentSinkSpeed(
+                _waterIsSalt, _waterTempC,
+                seg.StartDiameterMm, seg.EndDiameterMm,
+                seg.LengthCm,
+                seg.SpecWeightGCm3);
+        }
+    }
+
+    private void ComputeCompensation()
+    {
+        double targetMs = _compTargetSpeedIns / 39.3701;
+
+        foreach (var seg in ProjectSegments)
+        {
+            if (seg.SpecWeightGCm3 <= 0 || seg.LengthCm <= 0)
+            {
+                seg.ClearCompensation();
+                continue;
+            }
+
+            var (sliceXs, sliceDiams, sliceDens) = SinkingSpeedCalc.CompensateProfile(
+                _waterIsSalt, _waterTempC,
+                seg.StartDiameterMm, seg.EndDiameterMm,
+                seg.LengthCm,
+                seg.SpecWeightGCm3,
+                targetMs);
+
+            seg.SetCompensation(seg.StartCm, sliceXs, sliceDiams, sliceDens, targetMs);
+        }
+        RefreshPlot();
+        UiStatus = $"Compensation computed for {_compTargetSpeedIns:0.000} in/s";
     }
 
     // Segment drawing mouse handlers
@@ -1450,6 +1986,73 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         UiStatus = _showDesignLayer ? "Design layer visible" : "Design layer hidden";
     }
 
+    private void ShowSinkMap_Click(object sender, RoutedEventArgs e)
+    {
+        _showSinkSpeedMap = SinkMapToggle.IsChecked ?? false;
+        RefreshPlot();
+        UiStatus = _showSinkSpeedMap ? "Sink speed map ON" : "Sink speed map OFF";
+    }
+
+    private void ShowCompProfile_Click(object sender, RoutedEventArgs e)
+    {
+        _showCompProfile = CompProfileToggle.IsChecked ?? false;
+        RefreshPlot();
+        UiStatus = _showCompProfile ? "Compensated profile ON" : "Compensated profile OFF";
+    }
+
+    private void CompTargetBox_LostFocus(object sender, RoutedEventArgs e) => ApplyCompTarget();
+    private void CompTargetBox_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key == System.Windows.Input.Key.Enter) ApplyCompTarget();
+    }
+    private void ApplyCompTarget()
+    {
+        if (double.TryParse(CompTargetBox.Text,
+            System.Globalization.NumberStyles.Any,
+            System.Globalization.CultureInfo.InvariantCulture,
+            out double v) && v > 0)
+        {
+            _compTargetSpeedIns = v;
+            CompTargetBox.BorderBrush = null; // restore default
+            double cms = v * 2.54;
+            string cls = v switch
+            {
+                < 1.25 => "very slow",
+                < 2.00 => "Class I",
+                < 3.00 => "Class II",
+                < 3.50 => "Class III",
+                < 4.50 => "Class IV",
+                < 6.00 => "Class V",
+                < 8.00 => "Class VI",
+                _      => "Class VII"
+            };
+            CompTargetCmsLabel.Text = $"≈ {cms:0.0} cm/s  ({cls})";
+        }
+        else
+        {
+            CompTargetBox.BorderBrush = new System.Windows.Media.SolidColorBrush(
+                (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#E85454"));
+            CompTargetBox.Text = _compTargetSpeedIns.ToString("0.000", System.Globalization.CultureInfo.InvariantCulture);
+        }
+    }
+
+    private void Compensate_Click(object sender, RoutedEventArgs e)
+    {
+        if (ProjectSegments.Count == 0)
+        {
+            UiStatus = "No segments to compensate — draw nodes first";
+            return;
+        }
+        if (ProjectSegments.All(s => s.SpecWeightGCm3 <= 0))
+        {
+            UiStatus = "Set density (g/cm³) before computing compensation";
+            return;
+        }
+        ApplyCompTarget();
+        ComputeCompensation();
+        MarkDirty();
+    }
+
     private void AutoFitToggle_Click(object sender, RoutedEventArgs e)
     {
         bool isChecked = AutoFitToggle.IsChecked ?? true;
@@ -1553,35 +2156,38 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         string text    = tb.Text.Trim();
         int    colIdx  = SegmentsDataGrid.Columns.IndexOf(e.Column);
 
-        // Col 1 = Name, Col 8 = Sp.W. — handled by direct binding, no node sync needed
-        if (colIdx == 1 || colIdx == 8)
+        // Col 2 = Name, Col 9 = Sp.W. — handled by direct binding, no node sync needed
+        if (colIdx == 2 || colIdx == 9)
         {
+            // When not in shared-density mode and Sp.W. was edited, apply to just this segment
+            if (colIdx == 9 && !_useSharedDensity && TryParseDouble(text, out double spw) && spw >= 0)
+                seg.SpecWeightGCm3 = spw;
             Dispatcher.BeginInvoke(RefreshTotals);
             Dispatcher.BeginInvoke((Action)MarkDirty);
             return;
         }
 
-        // Col 2 = Start Ø, Col 3 = End Ø, Col 4 = Length
-        if (colIdx < 2 || colIdx > 4) return;
+        // Col 3 = Start Ø, Col 4 = End Ø, Col 5 = Length
+        if (colIdx < 3 || colIdx > 5) return;
         if (!TryParseDouble(text, out double newVal) || newVal <= 0) return;
 
         Dispatcher.BeginInvoke(() =>
         {
             switch (colIdx)
             {
-                case 2: // Start Ø — change the Y of the start node
+                case 3: // Start Ø — change the Y of the start node
                 {
                     int idx = _segmentNodes.FindIndex(n => Math.Abs(n.X - seg.StartCm) < 0.05);
                     if (idx >= 0) _segmentNodes[idx] = (_segmentNodes[idx].X, newVal);
                     break;
                 }
-                case 3: // End Ø — change the Y of the end node (shared with next segment's start)
+                case 4: // End Ø — change the Y of the end node (shared with next segment's start)
                 {
                     int idx = _segmentNodes.FindIndex(n => Math.Abs(n.X - seg.EndCm) < 0.05);
                     if (idx >= 0) _segmentNodes[idx] = (_segmentNodes[idx].X, newVal);
                     break;
                 }
-                case 4: // Length — move the end node's X position
+                case 5: // Length — move the end node's X position
                 {
                     double newEndCm = seg.StartCm + newVal;
                     int idx = _segmentNodes.FindIndex(n => Math.Abs(n.X - seg.EndCm) < 0.05);
@@ -1590,23 +2196,36 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 }
             }
 
-            RefreshPlot();           // redraw chart with updated nodes
-            RefreshSegmentTable();   // rebuild segment rows
+            RefreshPlot();
+            RefreshSegmentTable();
             MarkDirty();
         });
     }
 
     private void RefreshTotals()
     {
-        double totalCm3   = ProjectSegments.Sum(s => s.VolumeCm3);
-        bool   hasMass    = ProjectSegments.Count > 0 && ProjectSegments.All(s => s.SpecWeightGCm3 > 0);
-        double totalMassG = hasMass ? ProjectSegments.Sum(s => s.MassG) : 0;
+        if (ProjectSegments.Count == 0) { TotalVolumeText = string.Empty; return; }
 
-        TotalVolumeText = ProjectSegments.Count > 0
-            ? hasMass
-                ? $"Total: {totalCm3:0.00} cm³  |  {totalMassG:0.00} g  |  {ProjectSegments.Count} segments"
-                : $"Total: {totalCm3:0.00} cm³  |  {ProjectSegments.Count} segments"
-            : string.Empty;
+        double totalVol  = ProjectSegments.Sum(s => s.VolumeCm3);
+        bool   hasMass   = ProjectSegments.All(s => s.SpecWeightGCm3 > 0);
+        double totalMass = hasMass ? ProjectSegments.Sum(s => s.MassG) : 0;
+
+        var headSegs  = ProjectSegments.Where(s => s.IsHead).ToList();
+        bool hasHeads = headSegs.Count > 0;
+        double headVol  = hasHeads ? headSegs.Sum(s => s.VolumeCm3) : 0;
+        double headMass = hasMass && hasHeads ? headSegs.Sum(s => s.MassG) : 0;
+
+        var sb = new System.Text.StringBuilder();
+        sb.Append($"Total: {totalVol:0.00} cm³");
+        if (hasMass) sb.Append($"  |  {totalMass:0.00} g");
+        if (hasHeads)
+        {
+            sb.Append($"  |  Head: {headVol:0.00} cm³");
+            if (hasMass) sb.Append($" / {headMass:0.00} g");
+        }
+        sb.Append($"  |  {ProjectSegments.Count} segments");
+
+        TotalVolumeText = sb.ToString();
     }
 
     private void Settings_Click(object sender, RoutedEventArgs e)

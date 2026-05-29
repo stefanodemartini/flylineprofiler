@@ -31,16 +31,21 @@ const uint32_t ACCEL = 1500;
 const uint32_t GOTOPOS_ACCEL       = 800;    // gentle accel/decel for phase-1 long approach
 const uint32_t GOTOPOS_CREEP_HZ    = 400;    // phase-2 creep speed ≈ 0.5 cm/s (precise final approach)
 const uint32_t GOTOPOS_CREEP_ACCEL = 5000;   // fast decel/accel inside creep zone
-const int32_t  GOTOPOS_CREEP_DIST_ENC = 120; // enter creep zone 4 cm before target (120 enc pulses)
 const uint32_t FAST_STOP_DECEL = 24000;
 const uint32_t MIN_SPEED_HZ = 300;
 const uint32_t STEPS_PER_ENC = 25;           // stepper steps per encoder pulse
-// Encoder stop threshold: forceStop safety net when motor is nearly stopped at creep speed
-const int32_t  GOTOPOS_STOP_ENC_STEPS = 3;   // ≈ 1 mm
+const int32_t  GOTOPOS_STOP_ENC_STEPS = 3;   // ≈ 1 mm — encoder stop threshold
 
-// -----------------------------
-// Conversion constants (deve corrispondere al master)
-const float PULSES_PER_CM = 30.0;
+// ── Encoder calibration (deve corrispondere al master) ────────────────────
+// Set ENCODER_PPR and WHEEL_CIRC_MM to match your hardware.
+// See master.ino for full explanation.
+// Formula: PULSES_PER_CM = (PPR × 10) / WHEEL_CIRC_MM
+#define ENCODER_PPR_S    600   // encoder datasheet value (same unit as master)
+#define WHEEL_CIRC_MM_S  200   // wheel circumference mm (same as master)
+const float PULSES_PER_CM = (ENCODER_PPR_S * 10.0f) / WHEEL_CIRC_MM_S;  // 30.0 pulses/cm
+
+// Derived: creep zone = 4 cm before target
+const int32_t  GOTOPOS_CREEP_DIST_ENC = (int32_t)(4.0f * PULSES_PER_CM);
 
 // -----------------------------
 // State variables

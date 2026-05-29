@@ -6,6 +6,7 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:ScottPlot="clr-namespace:ScottPlot.WPF;assembly=ScottPlot.WPF"
+        xmlns:local="clr-namespace:DiametroLineaDesktop.Views"
         mc:Ignorable="d"
         Title="FlyLine Profiler"
         Height="900"
@@ -29,6 +30,8 @@
         <SolidColorBrush x:Key="TextPrimary"  Color="#E2E8F4"/>
         <SolidColorBrush x:Key="TextMuted"    Color="#7A8499"/>
         <SolidColorBrush x:Key="LogBg"        Color="#0D0F16"/>
+
+        <local:InverseBoolConverter x:Key="InverseBoolConverter"/>
 
         <Style x:Key="BtnBase" TargetType="Button">
             <Setter Property="Height"          Value="34"/>
@@ -192,7 +195,7 @@
 
     </Window.Resources>
 
-    <Grid>
+    <Grid x:Name="MainGrid">
         <Grid.RowDefinitions>
             <RowDefinition Height="52"/>
             <RowDefinition Height="52"/>
@@ -258,23 +261,31 @@
                 </StackPanel>
 
                 <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
-                    <Ellipse x:Name="ConnLed"
-                             Width="10" Height="10"
-                             VerticalAlignment="Center"
-                             Fill="{StaticResource Danger}"
-                             Margin="0,0,8,0"/>
-                    <TextBlock Text="{Binding ConnectionStatus}"
-                               Foreground="{StaticResource TextMuted}"
-                               VerticalAlignment="Center"
-                               FontSize="12"
-                               Margin="0,0,16,0"/>
-                    <Button Content="Connect"
-                            Style="{StaticResource BtnPrimary}"
-                            Click="Connect_Click"/>
-                    <Button Content="Disconnect"
-                            Style="{StaticResource BtnSecondary}"
-                            Click="Disconnect_Click"
-                            Margin="6,0,0,0"/>
+                    <ToggleButton x:Name="DesignModeToggle"
+                                  Content="Design Mode"
+                                  Style="{StaticResource ToggleBase}"
+                                  Click="DesignModeToggle_Click"
+                                  ToolTip="Hide scan controls and focus on line design"
+                                  Margin="0,0,12,0"/>
+                    <StackPanel x:Name="ConnectionPanel" Orientation="Horizontal">
+                        <Ellipse x:Name="ConnLed"
+                                 Width="10" Height="10"
+                                 VerticalAlignment="Center"
+                                 Fill="{StaticResource Danger}"
+                                 Margin="0,0,8,0"/>
+                        <TextBlock Text="{Binding ConnectionStatus}"
+                                   Foreground="{StaticResource TextMuted}"
+                                   VerticalAlignment="Center"
+                                   FontSize="12"
+                                   Margin="0,0,16,0"/>
+                        <Button Content="Connect"
+                                Style="{StaticResource BtnPrimary}"
+                                Click="Connect_Click"/>
+                        <Button Content="Disconnect"
+                                Style="{StaticResource BtnSecondary}"
+                                Click="Disconnect_Click"
+                                Margin="6,0,0,0"/>
+                    </StackPanel>
                 </StackPanel>
             </Grid>
         </Border>
@@ -289,58 +300,56 @@
                           Margin="12,0">
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
 
-                    <Button Content="SCAN"
-                            Style="{StaticResource BtnPrimary}"
-                            Click="StartScan_Click"
-                            IsEnabled="{Binding CanControl}"
-                            Padding="20,0"/>
-                    <Button Content="STOP"
-                            Style="{StaticResource BtnDanger}"
-                            Click="Stop_Click"
-                            Padding="18,0"/>
-                    <Button Content="RX ON"
-                            Style="{StaticResource BtnSecondary}"
-                            Click="ScanOn_Click"
-                            IsEnabled="{Binding CanEnableScan}"/>
-                    <Button Content="RX OFF"
-                            Style="{StaticResource BtnSecondary}"
-                            Click="ScanOff_Click"
-                            IsEnabled="{Binding ScanReceiving}"/>
-
-                    <Separator Style="{StaticResource ToolSep}"/>
-
-                    <Button Content="FAST &lt;"
-                            Style="{StaticResource BtnSecondary}"
-                            Click="FastO_Click"
-                            IsEnabled="{Binding CanControl}"/>
-                    <Button Content="FAST >"
-                            Style="{StaticResource BtnSecondary}"
-                            Click="FastS_Click"
-                            IsEnabled="{Binding CanControl}"/>
-                    <Button Content="GOTO"
-                            Style="{StaticResource BtnSecondary}"
-                            Click="Goto_Click"
-                            IsEnabled="{Binding CanControl}"/>
-                    <Button Content="Status"
-                            Style="{StaticResource BtnGhost}"
-                            Click="MotorStatus_Click"/>
-
-                    <Separator Style="{StaticResource ToolSep}"/>
-
-                    <Button Content="Set Zero"
-                            Style="{StaticResource BtnSecondary}"
-                            Click="SetDisplayZero_Click"/>
-                    <Button Content="Set Offset"
-                            Style="{StaticResource BtnSecondary}"
-                            Click="SetOffset_Click"/>
-                    <Button Content="Reset Offset"
-                            Style="{StaticResource BtnGhost}"
-                            Click="ResetOffset_Click"/>
-                    <Button Content="Read Raw"
-                            Style="{StaticResource BtnGhost}"
-                            Click="ReadRaw_Click"/>
-
-                    <Separator Style="{StaticResource ToolSep}"/>
+                    <!-- Scan controls (hidden in Design Mode) -->
+                    <StackPanel x:Name="ScanButtonsPanel" Orientation="Horizontal">
+                        <Button Content="SCAN"
+                                Style="{StaticResource BtnPrimary}"
+                                Click="StartScan_Click"
+                                IsEnabled="{Binding CanControl}"
+                                Padding="20,0"/>
+                        <Button Content="STOP"
+                                Style="{StaticResource BtnDanger}"
+                                Click="Stop_Click"
+                                Padding="18,0"/>
+                        <Button Content="RX ON"
+                                Style="{StaticResource BtnSecondary}"
+                                Click="ScanOn_Click"
+                                IsEnabled="{Binding CanEnableScan}"/>
+                        <Button Content="RX OFF"
+                                Style="{StaticResource BtnSecondary}"
+                                Click="ScanOff_Click"
+                                IsEnabled="{Binding ScanReceiving}"/>
+                        <Separator Style="{StaticResource ToolSep}"/>
+                        <Button Content="FAST &lt;"
+                                Style="{StaticResource BtnSecondary}"
+                                Click="FastO_Click"
+                                IsEnabled="{Binding CanControl}"/>
+                        <Button Content="FAST >"
+                                Style="{StaticResource BtnSecondary}"
+                                Click="FastS_Click"
+                                IsEnabled="{Binding CanControl}"/>
+                        <Button Content="GOTO"
+                                Style="{StaticResource BtnSecondary}"
+                                Click="Goto_Click"
+                                IsEnabled="{Binding CanControl}"/>
+                        <Button Content="Status"
+                                Style="{StaticResource BtnGhost}"
+                                Click="MotorStatus_Click"/>
+                        <Separator Style="{StaticResource ToolSep}"/>
+                        <Button Content="Set Zero"
+                                Style="{StaticResource BtnSecondary}"
+                                Click="SetDisplayZero_Click"/>
+                        <Button Content="Set Offset"
+                                Style="{StaticResource BtnSecondary}"
+                                Click="SetOffset_Click"/>
+                        <Button Content="Reset Offset"
+                                Style="{StaticResource BtnGhost}"
+                                Click="ResetOffset_Click"/>
+                        <Button Content="Read Raw"
+                                Style="{StaticResource BtnGhost}"
+                                Click="ReadRaw_Click"/>
+                        <Separator Style="{StaticResource ToolSep}"/>
+                    </StackPanel>
 
                     <Button Content="Fit"
                             Style="{StaticResource BtnSecondary}"
@@ -370,43 +379,77 @@
                             Style="{StaticResource BtnGhost}"
                             Click="ClearImported_Click"/>
 
-                    <Separator Style="{StaticResource ToolSep}"/>
-
-                    <ToggleButton x:Name="MenuDrawSegments"
-                                  Content="Draw Segments"
-                                  Style="{StaticResource ToggleBase}"
-                                  Click="ToggleDrawMode_Click"/>
-                    <Button Content="Undo Node"
-                            Style="{StaticResource BtnGhost}"
-                            Click="UndoLastNode_Click"
-                            ToolTip="Undo last node"/>
-                    <Button Content="Clear Nodes"
-                            Style="{StaticResource BtnGhost}"
-                            Click="ClearSegments_Click"/>
-                    <Button Content="Save Nodes"
-                            Style="{StaticResource BtnGhost}"
-                            Click="SaveNodes_Click"/>
-                    <Button Content="Load Nodes"
-                            Style="{StaticResource BtnGhost}"
-                            Click="LoadNodes_Click"/>
-                    <Button Content="Export Seg. CSV"
-                            Style="{StaticResource BtnGhost}"
-                            Click="ExportSegmentsCsv_Click"/>
-
-                    <Separator Style="{StaticResource ToolSep}"/>
-
                     <ToggleButton x:Name="ShowScanToggle"
                                   Content="Show Scan"
                                   Style="{StaticResource ToggleBase}"
                                   IsChecked="True"
                                   Click="ShowScanLayer_Click"/>
-                    <ToggleButton x:Name="ShowDesignToggle"
-                                  Content="Show Design"
-                                  Style="{StaticResource ToggleBase}"
-                                  IsChecked="True"
-                                  Click="ShowDesignLayer_Click"/>
 
-                    <Separator Style="{StaticResource ToolSep}"/>
+                    <!-- Design-mode-only toolbar items — collapsed in scan mode -->
+                    <StackPanel x:Name="DesignToolsPanel" Orientation="Horizontal">
+                        <Separator Style="{StaticResource ToolSep}"/>
+
+                        <ToggleButton x:Name="MenuDrawSegments"
+                                      Content="Draw Segments"
+                                      Style="{StaticResource ToggleBase}"
+                                      Click="ToggleDrawMode_Click"/>
+                        <Button Content="Undo Node"
+                                Style="{StaticResource BtnGhost}"
+                                Click="UndoLastNode_Click"
+                                ToolTip="Undo last node"/>
+                        <Button Content="Clear Nodes"
+                                Style="{StaticResource BtnGhost}"
+                                Click="ClearSegments_Click"/>
+                        <Button Content="Save Nodes"
+                                Style="{StaticResource BtnGhost}"
+                                Click="SaveNodes_Click"/>
+                        <Button Content="Load Nodes"
+                                Style="{StaticResource BtnGhost}"
+                                Click="LoadNodes_Click"/>
+                        <Button Content="Export Seg. CSV"
+                                Style="{StaticResource BtnGhost}"
+                                Click="ExportSegmentsCsv_Click"/>
+                        <TextBlock Text="Desired sink:" Foreground="{StaticResource TextMuted}" VerticalAlignment="Center" Margin="4,0,2,0"/>
+                        <TextBox x:Name="CompTargetBox"
+                                 Text="1.000"
+                                 Width="58"
+                                 VerticalAlignment="Center"
+                                 LostFocus="CompTargetBox_LostFocus"
+                                 KeyDown="CompTargetBox_KeyDown"
+                                 ToolTip="Target uniform sinking speed for the compensated profile.&#x0a;Typical sink tip classes (AFTM):&#x0a;  Class I : 1.25–2.00 in/s  (slow intermediate)&#x0a;  Class II : 2.00–3.00 in/s&#x0a;  Class III: 2.50–3.50 in/s&#x0a;  Class IV : 3.50–4.50 in/s&#x0a;  Class V  : 4.50–6.00 in/s&#x0a;  Class VI : 6.00–8.00 in/s&#x0a;  Class VII: &gt; 8.00 in/s (very fast)"/>
+                        <TextBlock Text="in/s" Foreground="{StaticResource TextMuted}" VerticalAlignment="Center" Margin="2,0,2,0"/>
+                        <TextBlock x:Name="CompTargetCmsLabel"
+                                   Foreground="{StaticResource TextMuted}"
+                                   VerticalAlignment="Center"
+                                   FontStyle="Italic"
+                                   Margin="0,0,4,0"/>
+                        <Button Content="⚖ Compensate"
+                                Style="{StaticResource BtnSecondary}"
+                                Click="Compensate_Click"
+                                ToolTip="Compute per-slice compensated diameter profile for the target sink speed (slice mass preserved)"/>
+
+                        <Separator Style="{StaticResource ToolSep}"/>
+
+                        <ToggleButton x:Name="ShowDesignToggle"
+                                      Content="Show Design"
+                                      Style="{StaticResource ToggleBase}"
+                                      IsChecked="True"
+                                      Click="ShowDesignLayer_Click"/>
+                        <ToggleButton x:Name="SinkMapToggle"
+                                      Content="Sink Map"
+                                      Style="{StaticResource ToggleBase}"
+                                      IsChecked="False"
+                                      Click="ShowSinkMap_Click"
+                                      ToolTip="Show sinking speed heat-map overlay (blue=slow, red=fast)"/>
+                        <ToggleButton x:Name="CompProfileToggle"
+                                      Content="Comp. Profile"
+                                      Style="{StaticResource ToggleBase}"
+                                      IsChecked="False"
+                                      Click="ShowCompProfile_Click"
+                                      ToolTip="Show compensated step profile — equivalent cylinders per segment (same mass, uniform sink speed)"/>
+
+                        <Separator Style="{StaticResource ToolSep}"/>
+                    </StackPanel>
 
                     <Button Content="Fit View"
                             Style="{StaticResource BtnGhost}"
@@ -425,7 +468,7 @@
         </Border>
 
         <!-- Metrics strip -->
-        <Border Grid.Row="2"
+        <Border x:Name="MetricsStrip" Grid.Row="2"
                 Background="{StaticResource WinBg}"
                 BorderBrush="{StaticResource BorderBrush2}"
                 BorderThickness="0,0,0,1">
@@ -532,7 +575,7 @@
         </Border>
 
         <!-- Collapsible log + chart controls -->
-        <Expander Grid.Row="4"
+        <Expander x:Name="LogExpander" Grid.Row="4"
                   Margin="12,6,12,0"
                   IsExpanded="False">
             <Expander.Header>
@@ -640,7 +683,8 @@
         </Expander>
 
         <!-- Project panel: Design nodes + Segment table with volumes -->
-        <Expander Grid.Row="5"
+        <Expander x:Name="DesignProjectExpander"
+                  Grid.Row="5"
                   Margin="12,4,12,0"
                   IsExpanded="True">
             <Expander.Header>
@@ -653,6 +697,57 @@
                     <TextBlock Text="{Binding ElementName=MainWin, Path=TotalVolumeText}"
                                FontSize="11" FontWeight="SemiBold"
                                Foreground="{StaticResource Success}"
+                               VerticalAlignment="Center"
+                               Margin="0,0,24,0"/>
+                    <!-- Shared density controls -->
+                    <CheckBox Content="Same density"
+                              IsChecked="{Binding ElementName=MainWin, Path=UseSharedDensity}"
+                              VerticalAlignment="Center"
+                              Foreground="{StaticResource TextMuted}"
+                              FontSize="11"
+                              Margin="0,0,8,0"/>
+                    <TextBox x:Name="SharedDensityBox"
+                             Width="68"
+                             FontSize="11"
+                             VerticalAlignment="Center"
+                             HorizontalContentAlignment="Center"
+                             Text="{Binding ElementName=MainWin, Path=SharedDensity, StringFormat='0.000', UpdateSourceTrigger=LostFocus}"
+                             ToolTip="Specific weight in g/cm³ — applies to all segments when Same density is checked"
+                             Margin="0,0,4,0"/>
+                    <TextBlock Text="g/cm³"
+                               FontSize="11"
+                               Foreground="{StaticResource TextMuted}"
+                               VerticalAlignment="Center"/>
+                    <!-- Water settings for sinking speed -->
+                    <Separator Style="{StaticResource ToolSep}" Margin="12,0"/>
+                    <TextBlock Text="Water:"
+                               FontSize="11"
+                               Foreground="{StaticResource TextMuted}"
+                               VerticalAlignment="Center"
+                               Margin="0,0,6,0"/>
+                    <RadioButton x:Name="FreshWaterRadio"
+                                 Content="Fresh"
+                                 IsChecked="{Binding ElementName=MainWin, Path=WaterIsSalt, Converter={StaticResource InverseBoolConverter}}"
+                                 FontSize="11"
+                                 Foreground="{StaticResource TextMuted}"
+                                 VerticalAlignment="Center"
+                                 Margin="0,0,6,0"/>
+                    <RadioButton Content="Salt"
+                                 IsChecked="{Binding ElementName=MainWin, Path=WaterIsSalt}"
+                                 FontSize="11"
+                                 Foreground="{StaticResource TextMuted}"
+                                 VerticalAlignment="Center"
+                                 Margin="0,0,10,0"/>
+                    <TextBox Width="44"
+                             FontSize="11"
+                             VerticalAlignment="Center"
+                             HorizontalContentAlignment="Center"
+                             Text="{Binding ElementName=MainWin, Path=WaterTempC, StringFormat='0.#', UpdateSourceTrigger=LostFocus}"
+                             ToolTip="Water temperature in °C (0–40)"
+                             Margin="0,0,4,0"/>
+                    <TextBlock Text="°C"
+                               FontSize="11"
+                               Foreground="{StaticResource TextMuted}"
                                VerticalAlignment="Center"/>
                 </StackPanel>
             </Expander.Header>
@@ -701,11 +796,24 @@
                               CanUserAddRows="False"
                               CanUserDeleteRows="False"
                               CellEditEnding="SegmentsDataGrid_CellEditEnding">
+                        <DataGrid.RowStyle>
+                            <Style TargetType="DataGridRow">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsHead}" Value="True">
+                                        <Setter Property="Background" Value="#22305A"/>
+                                        <Setter Property="Foreground" Value="#7FB4FF"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </DataGrid.RowStyle>
                         <DataGrid.Columns>
                             <DataGridTextColumn Header="#"
                                                Binding="{Binding Index}"
                                                Width="28"
                                                IsReadOnly="True"/>
+                            <DataGridCheckBoxColumn Header="Head"
+                                                   Binding="{Binding IsHead, UpdateSourceTrigger=PropertyChanged}"
+                                                   Width="44"/>
                             <DataGridTextColumn Header="Name"
                                                Binding="{Binding Name, UpdateSourceTrigger=PropertyChanged}"
                                                Width="90"/>
@@ -730,12 +838,29 @@
                                                Binding="{Binding VolumeText}"
                                                Width="90"
                                                IsReadOnly="True"/>
-                            <DataGridTextColumn Header="Sp.W. (g/cm³)"
+                            <DataGridTextColumn x:Name="SpWeightColumn"
+                                               Header="Sp.W. (g/cm³)"
                                                Binding="{Binding SpecWeightGCm3, StringFormat='0.000', UpdateSourceTrigger=PropertyChanged}"
                                                Width="105"/>
                             <DataGridTextColumn Header="Mass (g)"
                                                Binding="{Binding MassText}"
                                                Width="80"
+                                               IsReadOnly="True"/>
+                            <DataGridTextColumn Header="Sink (in/s)"
+                                               Binding="{Binding SinkSpeedText}"
+                                               Width="90"
+                                               IsReadOnly="True"/>
+                            <DataGridTextColumn Header="Comp. Sink (in/s)"
+                                               Binding="{Binding CompSpeedText}"
+                                               Width="115"
+                                               IsReadOnly="True"/>
+                            <DataGridTextColumn Header="Comp. Start Ø (mm)"
+                                               Binding="{Binding CompStartDiamText}"
+                                               Width="120"
+                                               IsReadOnly="True"/>
+                            <DataGridTextColumn Header="Comp. End Ø (mm)"
+                                               Binding="{Binding CompEndDiamText}"
+                                               Width="115"
                                                IsReadOnly="True"/>
                         </DataGrid.Columns>
                     </DataGrid>

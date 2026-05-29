@@ -38,6 +38,13 @@ public class ProjectSegment : INotifyPropertyChanged
         set { if (_name != value) { _name = value; Notify(nameof(Name)); } }
     }
 
+    private bool _isHead = false;
+    public bool IsHead
+    {
+        get => _isHead;
+        set { if (_isHead != value) { _isHead = value; Notify(nameof(IsHead)); } }
+    }
+
     private double _specWeightGCm3 = 0.0;
     /// <summary>Specific weight in g/cm³. Zero means "not set".</summary>
     public double SpecWeightGCm3
@@ -88,6 +95,87 @@ public class ProjectSegment : INotifyPropertyChanged
 
     public string TaperText =>
         IsCylinder ? "—" : $"{TaperMmPerMeter:+0.000;-0.000} mm/m";
+
+    private double _sinkSpeedMs = double.NaN;
+    /// <summary>Terminal sinking speed in m/s. Set externally by MainWindow after computing.</summary>
+    public double SinkSpeedMs
+    {
+        get => _sinkSpeedMs;
+        set { if (_sinkSpeedMs != value) { _sinkSpeedMs = value; Notify(nameof(SinkSpeedMs)); Notify(nameof(SinkSpeedText)); } }
+    }
+
+    public string SinkSpeedText
+    {
+        get
+        {
+            if (double.IsNaN(_sinkSpeedMs)) return "—";
+            double ins = _sinkSpeedMs * 39.3701;
+            return ins >= 0 ? $"+{ins:0.000}" : $"{ins:0.000}";
+        }
+    }
+
+    // Compensated profile — per-slice results (set by ComputeCompensation)
+    private double[] _compSliceXsCm      = Array.Empty<double>();
+    private double[] _compSliceDiamsMm   = Array.Empty<double>();
+    private double[] _compSliceDensities = Array.Empty<double>(); // g/cm³ per slice
+    private double   _compStartCm = 0;
+
+    public double[] CompSliceXsCm       => _compSliceXsCm;
+    public double[] CompSliceDiamsMm    => _compSliceDiamsMm;
+    public double[] CompSliceDensities  => _compSliceDensities;
+    public double   CompStartCm         => _compStartCm;
+
+    private double _compensatedTargetSpeedMs = double.NaN;
+    public double CompensatedTargetSpeedMs
+    {
+        get => _compensatedTargetSpeedMs;
+        set { if (_compensatedTargetSpeedMs != value) { _compensatedTargetSpeedMs = value; Notify(nameof(CompensatedTargetSpeedMs)); Notify(nameof(CompSpeedText)); } }
+    }
+
+    public bool HasCompensation => _compSliceDiamsMm.Length > 0;
+
+    public void SetCompensation(double startCm, double[] sliceXsCm, double[] sliceDiamsMm, double[] sliceDensities, double targetSpeedMs)
+    {
+        _compStartCm        = startCm;
+        _compSliceXsCm      = sliceXsCm;
+        _compSliceDiamsMm   = sliceDiamsMm;
+        _compSliceDensities = sliceDensities;
+        _compensatedTargetSpeedMs = targetSpeedMs;
+        Notify(nameof(HasCompensation));
+        Notify(nameof(CompSpeedText));
+        Notify(nameof(CompStartDiamText));
+        Notify(nameof(CompEndDiamText));
+    }
+
+    public void ClearCompensation()
+    {
+        _compSliceXsCm      = Array.Empty<double>();
+        _compSliceDiamsMm   = Array.Empty<double>();
+        _compSliceDensities = Array.Empty<double>();
+        _compensatedTargetSpeedMs = double.NaN;
+        Notify(nameof(HasCompensation));
+        Notify(nameof(CompSpeedText));
+        Notify(nameof(CompStartDiamText));
+        Notify(nameof(CompEndDiamText));
+    }
+
+    public string CompSpeedText
+    {
+        get
+        {
+            if (double.IsNaN(_compensatedTargetSpeedMs)) return "—";
+            double ins = _compensatedTargetSpeedMs * 39.3701;
+            return ins >= 0 ? $"+{ins:0.000}" : $"{ins:0.000}";
+        }
+    }
+
+    /// <summary>Compensated diameter at the start of this segment (first slice).</summary>
+    public string CompStartDiamText => _compSliceDiamsMm.Length > 0
+        ? $"{_compSliceDiamsMm[0]:0.000}" : "—";
+
+    /// <summary>Compensated diameter at the end of this segment (last slice).</summary>
+    public string CompEndDiamText => _compSliceDiamsMm.Length > 0
+        ? $"{_compSliceDiamsMm[_compSliceDiamsMm.Length - 1]:0.000}" : "—";
 
     // Legacy alias (used by CSV export)
     public double VolumeMm3 => VolumeCm3 * 1000.0;

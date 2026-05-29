@@ -5,13 +5,14 @@
 #include <EEPROM.h>
 #include <WiFiManager.h>
 #include <HardwareSerial.h>
+#include "driver/pcnt.h"  // ESP32 hardware pulse counter — immune to ISR interference
 
 // ===============================
 // FW
 // ===============================
-#define FIRMWARE_VERSION "0.4.17"
-#define FIRMWARE_DATE "2026-05-27"
-#define FIRMWARE_FEATURES "WiFi Manager + EMA + 0.01mm + UART Motor + Scan timer + Autostop + RicezioneON/OFF + GOTOPOS + Caliper timeout + Atomic encoder + Watchdog fixes + Scan state sync on connect + GOTOPOS chart overlay + encoder init fix + non-blocking caliper buffer + GOTOPOS overshoot safety guard + mirrored profile chart + encoder-diameter position correction"
+#define FIRMWARE_VERSION "0.4.22"
+#define FIRMWARE_DATE "2026-05-29"
+#define FIRMWARE_FEATURES "WiFi Manager + EMA + 0.01mm + UART Motor + Scan timer + Autostop + RicezioneON/OFF + GOTOPOS + Caliper timeout + Atomic encoder + Watchdog fixes + Scan state sync on connect + GOTOPOS chart overlay + encoder init fix + non-blocking caliper buffer + GOTOPOS overshoot safety guard + mirrored profile chart + hardware PCNT encoder (ISR-immune)"
 
 // -----------------------------
 #define ENCODER_DATA_PIN 12
@@ -19,9 +20,29 @@
 #define CALIPER_DATA_PIN 27
 #define CALIPER_CLOCK_PIN 26
 #define WIFI_RESET_PIN 14
-#define PULSES_PER_REV 600
-#define PULSES_PER_CM 30
+// ── Encoder calibration ────────────────────────────────────────────────────
+// Change ENCODER_PPR and WHEEL_CIRC_MM to match your hardware.
+// PULSES_PER_CM is then derived automatically — never set it directly.
+//
+//   ENCODER_PPR   : pulses per revolution, from encoder datasheet.
+//   WHEEL_CIRC_MM : wheel circumference in mm. Measure by wrapping a piece of
+//                   string around the wheel once, then measuring the string.
+//                   Do NOT calculate from the diameter unless you are sure it
+//                   is the rolling diameter (not the outer or bore diameter).
+//
+// Hardware PCNT counting mode: PCNT_UNIT_0 counts only A-phase edges where
+// B=0. This is 1× decoding → effective counts = 1× PPR per revolution.
+// The hardware counter is immune to caliper ISR interference.
+//
+// Formula:  PULSES_PER_CM = (ENCODER_PPR × 10) / WHEEL_CIRC_MM
+//   e.g.  PPR=600, circ=190 mm  →  6000/190 = 31.578 pulses/cm
+//         PPR=600, circ=200 mm  →  6000/200 = 30 pulses/cm
+// ──────────────────────────────────────────────────────────────────────────
+#define ENCODER_PPR     600   // encoder datasheet value
+#define WHEEL_CIRC_MM   200   // physical wheel circumference in mm
+#define PULSES_PER_CM   ((ENCODER_PPR * 10.0f) / WHEEL_CIRC_MM)   // float: 6000/200 = 30.0
 #define EEPROM_SIZE 512
+#define EEPROM_ADDR_CALIB_PPC 4   // float (4 bytes) — calibrated pulses/cm; 0 = use formula
 
 float lineDiameter = 0.0;
 bool scanEnabled = false;
@@ -83,8 +104,66 @@ DataPoint* firstDataPoint = nullptr;
 DataPoint* lastDataPoint = nullptr;
 int totalDataPoints = 0;
 
-volatile long encoderValue = 2 * PULSES_PER_CM;  // init to 60 so display starts at 0 cm (encoder wheel is 20mm behind caliper)
-volatile int lastEncoded = 0;
+// ── PCNT hardware encoder ──────────────────────────────────────────────────
+// The ESP32 PCNT peripheral counts quadrature pulses in hardware, completely
+// unaffected by caliper ISR activity that caused software-ISR miscounts.
+#define PCNT_ENC_UNIT PCNT_UNIT_0
+#define PCNT_H_LIM  30000  // ~1000 cm per overflow at PPC=30
+#define PCNT_L_LIM -30000
+static volatile long pcntAccum = 0;  // 32-bit overflow accumulator
+
+static long getEncoderValue() {
+  // Re-read until accumulator is stable across the PCNT snapshot
+  long acc, acc2;
+  int16_t cnt;
+  do {
+    acc = pcntAccum;
+    pcnt_get_counter_value(PCNT_ENC_UNIT, &cnt);
+    acc2 = pcntAccum;
+  } while (acc != acc2);
+  return acc + cnt;
+}
+
+static void setEncoderValue(long v) {
+  pcnt_counter_pause(PCNT_ENC_UNIT);
+  pcnt_counter_clear(PCNT_ENC_UNIT);
+  pcntAccum = v;
+  pcnt_counter_resume(PCNT_ENC_UNIT);
+}
+
+static void IRAM_ATTR pcntOverflowISR(void* arg) {
+  uint32_t status;
+  pcnt_get_event_status(PCNT_ENC_UNIT, &status);
+  if (status & PCNT_EVT_H_LIM) pcntAccum += PCNT_H_LIM;
+  if (status & PCNT_EVT_L_LIM) pcntAccum += PCNT_L_LIM;
+}
+
+static void setupPCNT() {
+  pcnt_config_t cfg = {};
+  cfg.pulse_gpio_num = ENCODER_DATA_PIN;   // A phase
+  cfg.ctrl_gpio_num  = ENCODER_CLOCK_PIN;  // B phase (direction control)
+  cfg.lctrl_mode = PCNT_MODE_KEEP;         // B=0: count normally
+  cfg.hctrl_mode = PCNT_MODE_DISABLE;      // B=1: do not count (1x decoding)
+  cfg.neg_mode   = PCNT_COUNT_INC;         // A falling + B=0 → forward (+)
+  cfg.pos_mode   = PCNT_COUNT_DEC;         // A rising  + B=0 → reverse (-)
+  cfg.counter_h_lim = PCNT_H_LIM;
+  cfg.counter_l_lim = PCNT_L_LIM;
+  cfg.unit    = PCNT_ENC_UNIT;
+  cfg.channel = PCNT_CHANNEL_0;
+  pcnt_unit_config(&cfg);
+  pcnt_counter_pause(PCNT_ENC_UNIT);
+  pcnt_counter_clear(PCNT_ENC_UNIT);
+  pcnt_event_enable(PCNT_ENC_UNIT, PCNT_EVT_H_LIM);
+  pcnt_event_enable(PCNT_ENC_UNIT, PCNT_EVT_L_LIM);
+  pcnt_isr_service_install(0);
+  pcnt_isr_handler_add(PCNT_ENC_UNIT, pcntOverflowISR, nullptr);
+  pcnt_counter_resume(PCNT_ENC_UNIT);
+}
+
+// Runtime-calibrated PPC: set once via 'calibrate:<cm>' command, stored in EEPROM.
+// When 0 (or invalid), getActivePpc() returns the formula value (PULSES_PER_CM).
+static float calibratedPpc = 0.0f;
+static long  calStartEncoder = 0;  // encoder snapshot at last resetpos — baseline for calibration
 
 // Caliper ISR state — written only in onCaliperChange(), read under noInterrupts()
 volatile long  calBitAccum   = 0;
@@ -143,6 +222,11 @@ void motorPollIfNeeded();
 void motorHandleStatusLine(const char* line);
 void goToPosition(float targetCm);
 void checkGoToStatus();
+
+// Returns the active pulses-per-cm value: calibrated (from EEPROM) if valid, formula otherwise.
+inline float getActivePpc() {
+  return (calibratedPpc >= 5.0f && calibratedPpc <= 500.0f) ? calibratedPpc : (float)PULSES_PER_CM;
+}
 
 // -----------------------------
 void addDataPoint(int cm, int encoderCm, float diameter, float rawDisplay) {
@@ -204,15 +288,6 @@ int getTotalDataPoints() {
   return totalDataPoints;
 }
 
-void IRAM_ATTR updateEncoder() {
-  int MSB = digitalRead(ENCODER_DATA_PIN);
-  int LSB = digitalRead(ENCODER_CLOCK_PIN);
-  int encoded = (MSB << 1) | LSB;
-  int sum = (lastEncoded << 2) | encoded;
-  if (sum == 0b1000) encoderValue++;
-  if (sum == 0b0010) encoderValue--;
-  lastEncoded = encoded;
-}
 
 // Caliper ISR — mirrors the original blocking logic but fully non-blocking.
 // Triggers on every CHANGE of CALIPER_CLOCK_PIN:
@@ -300,13 +375,12 @@ void motorHandleStatusLine(const char* line) {
         // FW-13: broadcast restored scan state so clients stay in sync
         String scanJson = "{\"type\":\"scan_enabled\",\"value\":" + String(scanEnabled ? "true" : "false") + "}";
         webSocket.broadcastTXT(scanJson);
-        float finalCm = (float)encoderValue / PULSES_PER_CM - 2.0f;
+        float finalCm = (float)getEncoderValue() / getActivePpc() - 2.0f;
         String json = "{\"type\":\"goto_status\",\"active\":false,\"completed\":true,\"final_cm\":" + String(finalCm, 1) + "}";
-        webSocket.broadcastTXT(json);
       } else {
         // Invia stato di avanzamento al client
-        int currentCm = (encoderValue / PULSES_PER_CM) - 2;
-        int remainingCm = remaining / PULSES_PER_CM;
+        int currentCm = (int)(getEncoderValue() / getActivePpc()) - 2;
+        int remainingCm = (int)(remaining / getActivePpc());
         String json = "{\"type\":\"goto_progress\",\"remaining_cm\":" + String(remainingCm) + 
                      ",\"current_cm\":" + String(currentCm) + ",\"target_cm\":" + String(goToTargetCm) + "}";
         webSocket.broadcastTXT(json);
@@ -321,7 +395,7 @@ void motorHandleStatusLine(const char* line) {
       String scanJson = "{\"type\":\"scan_enabled\",\"value\":" + String(scanEnabled ? "true" : "false") + "}";
       webSocket.broadcastTXT(scanJson);
       // Use goToEncoderReached so encoder-based stops report completed:true
-      float finalCm = (float)encoderValue / PULSES_PER_CM - 2.0f;
+      float finalCm = (float)getEncoderValue() / getActivePpc() - 2.0f;
       String json = "{\"type\":\"goto_status\",\"active\":false,\"completed\":" +
                     String(goToEncoderReached ? "true" : "false") + ",\"final_cm\":" + String(finalCm, 1) + ",\"reason\":\"stopped\"}";
       webSocket.broadcastTXT(json);
@@ -378,7 +452,7 @@ void goToPosition(float targetCm) {
     return;
   }
 
-  float currentCm = actualPositionCm;  // actual (corrected) position
+  float currentCm = (float)getEncoderValue() / getActivePpc() - 2.0f;  // encoder-based actual position
   
   // Se già a target
   if (abs(targetCm - currentCm) < 0.1) {
@@ -421,7 +495,7 @@ void goToPosition(float targetCm) {
   goToTargetEncoderCm = targetEncoderCm;
 
   // Send GOTOPOS to slave. Add the +2 cm encoder offset (encoder wheel is 20 mm behind caliper).
-  noInterrupts(); long encNow = encoderValue; interrupts();
+  long encNow = getEncoderValue();
   String cmd = "GOTOPOS:" + String(targetEncoderCm + 2.0f, 2) + ":" + String(MOTOR_FAST_HZ) + ":" + String(encNow) + ":" + (direction ? "F" : "B");
   motorQueueTx(cmd);
   
@@ -457,15 +531,24 @@ void setup() {
   pinMode(CALIPER_CLOCK_PIN, INPUT);
   pinMode(CALIPER_DATA_PIN, INPUT);
 
-  attachInterrupt(digitalPinToInterrupt(ENCODER_DATA_PIN), updateEncoder, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(ENCODER_CLOCK_PIN), updateEncoder, CHANGE);
+  setupPCNT();  // Hardware pulse counter for encoder — replaces software ISR
   attachInterrupt(digitalPinToInterrupt(CALIPER_CLOCK_PIN), onCaliperChange, CHANGE);
 
   EEPROM.get(0, caliperZeroOffset);
   if (isnan(caliperZeroOffset)) caliperZeroOffset = 0.0;
 
+  EEPROM.get(EEPROM_ADDR_CALIB_PPC, calibratedPpc);
+  if (isnan(calibratedPpc) || calibratedPpc < 5.0f || calibratedPpc > 500.0f) calibratedPpc = 0.0f;
+  // Align encoder init value to calibrated PPC so display starts at 0 cm
+  setEncoderValue((long)ceilf(2.0f * getActivePpc()));
+  calStartEncoder = getEncoderValue();
+  Serial.print("PPC attivo: ");
+  Serial.println(getActivePpc(), 4);
+  Serial.print("PCNT encoder HW attivo (ticks iniziali): ");
+  Serial.println(getEncoderValue());
+
   lastSpeedTime = millis();
-  lastSpeedEncoder = encoderValue;
+  lastSpeedEncoder = getEncoderValue();
 
   Serial.println("\n=== WiFi Manager v2.3.0 ===");
   pinMode(WIFI_RESET_PIN, INPUT_PULLUP);
@@ -729,6 +812,31 @@ void setup() {
                     <h4>Calibro</h4>
                     <button onclick="sendCommand('readraw')">Lettura Display Calibro</button>
                     <button onclick="sendCommand('setdisplayzero')">Imposta Zero da Display</button>
+                </div>
+                <div class="calib-col">
+                    <h4>Calibrazione Encoder</h4>
+                    <p style="font-size:12px;margin:0 0 8px 0;color:#aaa;">
+                        1&hairsp;. Premi <strong>Reset Posizione</strong><br>
+                        2&hairsp;. Estrai esattamente N cm di linea con un metro<br>
+                        3&hairsp;. Inserisci N e premi <strong>Calibra</strong>
+                    </p>
+                    <button onclick="sendCommand('resetpos')">1. Reset Posizione</button>
+                    <div class="auto-control" style="margin-top:6px;">
+                        <input type="number" id="calibKnownCm" placeholder="cm noti" step="1" min="10" style="width:90px">
+                        <button onclick="doCalibratePpc()">3. Calibra</button>
+                    </div>
+                    <button onclick="sendCommand('calibrate_reset')" style="margin-top:6px;">Ripristina formula</button>
+                    <div class="auto-control" style="margin-top:8px;">
+                        <input type="number" id="manualPpcInput" placeholder="PPC manuale" step="0.001" min="5" max="500" style="width:110px">
+                        <button onclick="doSetPpc()">Imposta PPC</button>
+                    </div>
+                    <p style="font-size:11px;margin:4px 0 0 0;color:#aaa;">
+                        Fine tune: <strong>PPC_nuovo = PPC_attivo × display_cm / reale_cm</strong>
+                    </p>
+                    <div style="margin-top:8px;font-size:12px;">
+                        PPC attivo: <span class="param-display" id="ppcActiveValue">--</span>
+                        <span id="ppcSource" style="color:#aaa;margin-left:4px;">(formula)</span>
+                    </div>
                 </div>
             </div>
         </div>
@@ -1493,7 +1601,7 @@ void setup() {
             try {
                 const msg = JSON.parse(event.data);
                 if (msg.type === 'params') {
-                    updateParamsDisplay(msg.displayZero, msg.offset);
+                    updateParamsDisplay(msg.displayZero, msg.offset, msg.ppc, msg.ppcCalibrated);
                 } else if (msg.type === 'speed') {
                     updateSpeedDisplay(msg.speed);
                 } else if (msg.type === 'motor') {
@@ -1550,13 +1658,44 @@ void setup() {
         ws.onerror = function(error) { console.error('WebSocket error:', error); };
     }
 
-    function updateParamsDisplay(displayZero, offset) {
+    function updateParamsDisplay(displayZero, offset, ppc, ppcCalibrated) {
         currentDisplayZero = displayZero;
         currentOffset = offset;
         document.getElementById('currentDisplayZero').textContent = displayZero.toFixed(2);
         document.getElementById('displayZeroValue').textContent = displayZero.toFixed(2);
         document.getElementById('currentOffsetValue').textContent = offset.toFixed(2);
         document.getElementById('currentOffset').textContent = offset.toFixed(2);
+        if (ppc !== undefined) {
+            document.getElementById('ppcActiveValue').textContent = ppc.toFixed(4);
+            const src = document.getElementById('ppcSource');
+            if (ppcCalibrated) {
+                src.textContent = '(calibrato)';
+                src.style.color = '#28a745';
+            } else {
+                src.textContent = '(formula)';
+                src.style.color = '#aaa';
+            }
+        }
+    }
+
+    function doCalibratePpc() {
+        const v = document.getElementById('calibKnownCm').value;
+        if (!v || isNaN(v) || parseFloat(v) < 1) {
+            showCommandStatus('Inserire una lunghezza valida (minimo 1 cm)', true);
+            return;
+        }
+        sendCommand('calibrate:' + parseFloat(v));
+        showCommandStatus('Calibrazione inviata per ' + parseFloat(v) + ' cm');
+    }
+
+    function doSetPpc() {
+        const v = document.getElementById('manualPpcInput').value;
+        if (!v || isNaN(v) || parseFloat(v) < 5 || parseFloat(v) > 500) {
+            showCommandStatus('PPC non valido (range 5–500)', true);
+            return;
+        }
+        sendCommand('setppc:' + parseFloat(v).toFixed(4));
+        showCommandStatus('PPC impostato a ' + parseFloat(v).toFixed(4));
     }
 
     function updateDisplay(msg) {
@@ -1819,6 +1958,21 @@ void setup() {
     }
   });
 
+  server.on("/encoder", HTTP_GET, []() {
+    long enc = getEncoderValue();
+    float cm  = (float)enc / getActivePpc() - 2.0f;
+    int16_t hwCount = 0;
+    pcnt_get_counter_value(PCNT_ENC_UNIT, &hwCount);
+    String json = "{\"ticks\":" + String(enc) +
+                  ",\"pcntAccum\":" + String(pcntAccum) +
+                  ",\"hwCounter\":" + String(hwCount) +
+                  ",\"ppc\":" + String(getActivePpc(), 4) +
+                  ",\"cm\":" + String(cm, 2) +
+                  ",\"scanEnabled\":" + String(scanEnabled ? "true" : "false") +
+                  ",\"totalPoints\":" + String(getTotalDataPoints()) + "}";
+    server.send(200, "application/json", json);
+  });
+
   server.begin();
 
   webSocket.begin();
@@ -1826,13 +1980,13 @@ void setup() {
     if (type == WStype_TEXT) {
       String cmd = String((char*)payload);
       if (cmd == "getparams") {
-        String json = "{\"type\":\"params\",\"displayZero\":" + String(displayZeroValue, 2) + ",\"offset\":" + String(caliperZeroOffset, 2) + "}";
+        String json = "{\"type\":\"params\",\"displayZero\":" + String(displayZeroValue, 2) + ",\"offset\":" + String(caliperZeroOffset, 2) + ",\"ppc\":" + String(getActivePpc(), 4) + ",\"ppcCalibrated\":" + String((calibratedPpc >= 5.0f && calibratedPpc <= 500.0f) ? "true" : "false") + "}";
         webSocket.sendTXT(num, json);
       } else {
         handleCommand(cmd);
       }
     } else if (type == WStype_CONNECTED) {
-      String json = "{\"type\":\"params\",\"displayZero\":" + String(displayZeroValue, 2) + ",\"offset\":" + String(caliperZeroOffset, 2) + "}";
+      String json = "{\"type\":\"params\",\"displayZero\":" + String(displayZeroValue, 2) + ",\"offset\":" + String(caliperZeroOffset, 2) + ",\"ppc\":" + String(getActivePpc(), 4) + ",\"ppcCalibrated\":" + String((calibratedPpc >= 5.0f && calibratedPpc <= 500.0f) ? "true" : "false") + "}";
       webSocket.sendTXT(num, json);
       String scanJson = "{\"type\":\"scan_enabled\",\"value\":" + String(scanEnabled ? "true" : "false") + "}";
       webSocket.sendTXT(num, scanJson);
@@ -1847,9 +2001,9 @@ void setup() {
 void calculateSpeed() {
   unsigned long currentTime = millis();
   if (currentTime - lastSpeedTime >= 1000) {
-    int encoderDiff = encoderValue - lastSpeedEncoder;
-    currentSpeed = abs(encoderDiff / (float)PULSES_PER_CM);
-    lastSpeedEncoder = encoderValue;
+    int encoderDiff = getEncoderValue() - lastSpeedEncoder;
+    currentSpeed = abs(encoderDiff / getActivePpc());
+    lastSpeedEncoder = getEncoderValue();
     lastSpeedTime = currentTime;
     String json = "{\"type\":\"speed\",\"speed\":" + String(currentSpeed, 2) + "}";
     webSocket.broadcastTXT(json);
@@ -1868,7 +2022,11 @@ void calculateSpeed() {
 }
 
 void sendParamsToClients() {
-  String json = "{\"type\":\"params\",\"displayZero\":" + String(displayZeroValue, 2) + ",\"offset\":" + String(caliperZeroOffset, 2) + "}";
+  String json = "{\"type\":\"params\",\"displayZero\":" + String(displayZeroValue, 2) + 
+                ",\"offset\":" + String(caliperZeroOffset, 2) +
+                ",\"ppc\":" + String(getActivePpc(), 4) +
+                ",\"ppcCalibrated\":" + String((calibratedPpc >= 5.0f && calibratedPpc <= 500.0f) ? "true" : "false") +
+                "}";
   webSocket.broadcastTXT(json);
 }
 
@@ -1890,10 +2048,8 @@ void loop() {
 
   calculateSpeed();
 
-  // FW-09: single atomic snapshot of volatile encoderValue for consistent use this iteration
-  noInterrupts();
-  long encSnap = encoderValue;
-  interrupts();
+  // FW-09: single consistent snapshot of hardware encoder for this iteration
+  long encSnap = getEncoderValue();
 
   // Watchdog encoder: auto-stop motore dopo 5s fermo
   {
@@ -1910,7 +2066,7 @@ void loop() {
     }
   }
 
-  int currentCm = (encSnap / PULSES_PER_CM) - 2;
+  int currentCm = (int)(encSnap / getActivePpc()) - 2;
 
   // Acquisizione dati solo se scansione abilitata e NON in GOTOPOS
   if (!isGoToActive && currentCm != lastCm && currentCm >= 0 && scanEnabled) {
@@ -1920,14 +2076,13 @@ void loop() {
 
     float compensatedDiameter = displayValue - displayZeroValue - caliperZeroOffset;
     compensatedDiameter = roundf(compensatedDiameter * 100.0f) / 100.0f;  // 0.01 mm precision
+    // Guard: NaN/Inf in JSON silently breaks JSON.parse in the browser
+    if (!isfinite(compensatedDiameter)) compensatedDiameter = 0.0f;
+    if (!isfinite(displayValue))        displayValue        = 0.0f;
 
-    // Encoder-diameter correction: flat wheel sinking into soft line coating reduces
-    // effective rolling radius by line radius (r = d/2), not full diameter.
-    // C_eff = 20 - π × r_mm/10 = 20 - π × d_mm/20  → corrFactor = C_eff / 20
-    float dMm = max(0.0f, compensatedDiameter);
-    float corrFactor = constrain((20.0f - (float)M_PI * dMm / 20.0f) / 20.0f, 0.5f, 1.0f);
-    actualPositionCm += corrFactor;
-    int actualCm = (int)lroundf(actualPositionCm);
+    // Use encoder position directly: PCNT is hardware-accurate (0.28% error),
+    // and using currentCm avoids phantom counts from line oscillation/bounce.
+    int actualCm = currentCm;
 
     addDataPoint(actualCm, currentCm, compensatedDiameter, displayValue);
 
@@ -1941,7 +2096,7 @@ void loop() {
     Serial.print(",");
     Serial.println(displayValue, 2);
   } else if (isGoToActive) {
-    float floatCm = (float)encSnap / PULSES_PER_CM - 2.0f;
+    float floatCm = (float)encSnap / getActivePpc() - 2.0f;
 
     // Safety-only overshoot guard: if encoder went MORE than 1 cm past target, force stop.
     // Under normal operation the slave's natural deceleration stops the motor before this fires.
@@ -2093,10 +2248,15 @@ void handleCommand(String cmd) {
   if (cmd == "help") {
     Serial.println("Comandi disponibili:");
     Serial.println("  reset               - Azzera lunghezza encoder e dati");
+    Serial.println("  resetpos            - Azzera solo posizione (non i dati)");
+    Serial.println("  calibrate:<cm>      - Calibra PPC: dopo resetpos, estrai <cm> di linea, poi invia questo comando");
+    Serial.println("  setppc:<val>        - Imposta PPC manualmente (es: setppc:31.25) e salva in EEPROM");
+    Serial.println("  calibrate_reset     - Ripristina PPC alla formula (cancella calibrazione)");
     Serial.println("  goto <cm>           - Vai alla posizione specificata in cm");
     Serial.println("  setoffset <val>     - Imposta offset di compensazione");
     Serial.println("  setdisplayzero      - Imposta display corrente come zero");
     Serial.println("  readraw             - Mostra lettura grezza del calibro");
+    Serial.println("  readenc             - Mostra tick PCNT, pcntAccum e posizione calcolata (debug)");
     Serial.println("  resetoffset         - Azzera offset a 0");
     Serial.println("  getparams           - Mostra parametri correnti");
     Serial.println("  debugdata           - Mostra statistiche dati");
@@ -2142,9 +2302,9 @@ void handleCommand(String cmd) {
   }
 
   if (cmd == "reset") {
-    // Set encoder so caliper position reads 0: caliper = encoder/PULSES_PER_CM - 2 = 0
-    // → encoder must be 2 * PULSES_PER_CM (encoder wheel is 20mm behind caliper)
-    encoderValue = 2 * PULSES_PER_CM;
+    // Set encoder so caliper position reads 0: display = encoder/activePpc - 2 = 0
+    // → encoder must be ceil(2 * activePpc) so integer division gives exactly 2
+    setEncoderValue((long)ceilf(2.0f * getActivePpc()));
     lastCm = -1;
     clearAllData();
     Serial.println("Lunghezza azzerata e dati resettati.");
@@ -2153,7 +2313,8 @@ void handleCommand(String cmd) {
 
   if (cmd == "resetpos") {
     // Reset only the encoder position (display → 0); does NOT clear measurement data.
-    encoderValue = 2 * PULSES_PER_CM;
+    setEncoderValue((long)ceilf(2.0f * getActivePpc()));
+    calStartEncoder = getEncoderValue();  // mark baseline for next calibration run
     lastCm = -1;
     actualPositionCm = 0.0f;
     Serial.println("Posizione azzerata.");
@@ -2165,6 +2326,73 @@ void handleCommand(String cmd) {
     float display = readCaliperDisplay();
     Serial.print("Display calibro: ");
     Serial.println(display, 2);
+    return;
+  }
+
+  if (cmd == "readenc") {
+    long enc = getEncoderValue();
+    float cm = (float)enc / getActivePpc() - 2.0f;
+    int16_t hwCount = 0;
+    pcnt_get_counter_value(PCNT_ENC_UNIT, &hwCount);
+    Serial.print("Encoder ticks totali: "); Serial.println(enc);
+    Serial.print("  pcntAccum: ");          Serial.println(pcntAccum);
+    Serial.print("  PCNT HW counter: ");    Serial.println(hwCount);
+    Serial.print("  PPC attivo: ");         Serial.println(getActivePpc(), 4);
+    Serial.print("  Posizione calcolata: "); Serial.print(cm, 2); Serial.println(" cm");
+    return;
+  }
+
+  // calibrate:<cm>  — compute actual PPC from encoder delta since last resetpos.
+  // Workflow: (1) send resetpos, (2) pull EXACTLY <cm> of line, (3) send calibrate:<cm>.
+  // Stores result in EEPROM; survives reboot. Formula value used until first calibration.
+  if (cmd.startsWith("calibrate:")) {
+    float knownCm = cmd.substring(10).toFloat();
+    if (knownCm < 1.0f) {
+      Serial.println("calibrate: lunghezza troppo piccola (minimo 1 cm)");
+      return;
+    }
+    long delta = getEncoderValue() - calStartEncoder;
+    if (delta <= 0) {
+      Serial.println("calibrate: encoder non avanzato. Premi resetpos prima di estrarre la linea.");
+      return;
+    }
+    calibratedPpc = (float)delta / knownCm;
+    EEPROM.put(EEPROM_ADDR_CALIB_PPC, calibratedPpc);
+    EEPROM.commit();
+    Serial.print("PPC calibrato: ");
+    Serial.print(calibratedPpc, 4);
+    Serial.print(" (delta=");
+    Serial.print(delta);
+    Serial.print(" ticks / ");
+    Serial.print(knownCm, 1);
+    Serial.println(" cm)");
+    sendParamsToClients();
+    return;
+  }
+
+  // setppc:<value>  — manually set PPC and save to EEPROM (e.g. setppc:31.25)
+  if (cmd.startsWith("setppc:")) {
+    float val = cmd.substring(7).toFloat();
+    if (val < 5.0f || val > 500.0f) {
+      Serial.println("setppc: valore fuori range (5–500)");
+      return;
+    }
+    calibratedPpc = val;
+    EEPROM.put(EEPROM_ADDR_CALIB_PPC, calibratedPpc);
+    EEPROM.commit();
+    Serial.print("PPC impostato manualmente: ");
+    Serial.println(calibratedPpc, 4);
+    sendParamsToClients();
+    return;
+  }
+
+  if (cmd == "calibrate_reset") {
+    calibratedPpc = 0.0f;
+    EEPROM.put(EEPROM_ADDR_CALIB_PPC, calibratedPpc);
+    EEPROM.commit();
+    Serial.print("PPC resettato alla formula: ");
+    Serial.println(getActivePpc(), 4);
+    sendParamsToClients();
     return;
   }
 

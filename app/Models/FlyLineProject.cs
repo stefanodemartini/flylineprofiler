@@ -12,10 +12,18 @@ public class FlyLineProject
     public DateTime ModifiedAt { get; set; } = DateTime.UtcNow;
     public string   Notes      { get; set; } = string.Empty;
 
+    /// <summary>Shared density mode: all segments use the same g/cm³ value.</summary>
+    public bool   UseSharedDensity    { get; set; } = true;
+    public double SharedDensityGCm3   { get; set; } = 0.0;
+
+    /// <summary>Sinking speed calculation settings.</summary>
+    public string WaterType { get; set; } = "fresh";   // "fresh" | "salt"
+    public double WaterTempC { get; set; } = 20.0;
+
     public List<MeasurementPoint>      ScanPoints      { get; set; } = new();
     public List<ProjectImportedSeries> ImportedSeries  { get; set; } = new();
     public List<ProjectDesignNode>     DesignNodes     { get; set; } = new();
-    /// <summary>Persists user-edited segment names and specific weights across saves.</summary>
+    /// <summary>Persists user-edited segment names, specific weights and head flag across saves.</summary>
     public List<ProjectSegmentMeta>    SegmentMetadata { get; set; } = new();
 }
 
@@ -40,4 +48,5 @@ public class ProjectSegmentMeta
     public double EndCm      { get; set; }
     public string Name       { get; set; } = string.Empty;
     public double SpecWeight { get; set; } = 0.0;
+    public bool   IsHead     { get; set; } = false;
 }
