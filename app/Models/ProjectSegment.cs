@@ -110,7 +110,8 @@ public class ProjectSegment : INotifyPropertyChanged
         {
             if (double.IsNaN(_sinkSpeedMs)) return "—";
             double ins = _sinkSpeedMs * 39.3701;
-            return ins >= 0 ? $"+{ins:0.000}" : $"{ins:0.000}";
+            if (ins <= 0) return "floating";
+            return $"{ins:0.000} in/s";
         }
     }
 
@@ -165,7 +166,8 @@ public class ProjectSegment : INotifyPropertyChanged
         {
             if (double.IsNaN(_compensatedTargetSpeedMs)) return "—";
             double ins = _compensatedTargetSpeedMs * 39.3701;
-            return ins >= 0 ? $"+{ins:0.000}" : $"{ins:0.000}";
+            if (ins <= 0) return "floating";
+            return $"{ins:0.000} in/s";
         }
     }
 

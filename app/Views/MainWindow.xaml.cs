@@ -6,6 +6,7 @@ using System.IO;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using WpfColor    = System.Windows.Media.Color;
 using ScottColor  = ScottPlot.Color;
@@ -45,16 +46,44 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     public ObservableCollection<DesignNode> DesignNodes { get; } = new();
     private bool _syncingNodes = false;
 
-    // Drag state — null when not dragging
-    private double? _draggingNodeX = null;   // original X of the node being dragged
+    // Colour sections — coloured bands painted over the profile, independent of nodes
+    public ObservableCollection<LineColorSectionVm> ColorSections { get; } = new();
+    private string _colorNote = string.Empty;
+    public string ColorNote
+    {
+        get => _colorNote;
+        set { _colorNote = value; OnPropertyChanged(nameof(ColorNote)); MarkDirty(); }
+    }
+
+    // Node drag state
+    private double? _draggingNodeX = null;
     private const double DragHitRadiusPx = 12.0;
+
+    // Label drag state — allows repositioning labels like Excel chart labels
+    private double?                _draggingLabelNodeX   = null;
+    private System.Windows.Point   _labelDragStartMouse;
+    private (double LX, double LY) _labelDragStartOffset;
+    private const double           LabelHitRadiusPx = 26.0;
+    // Per-node label positions in DATA coordinates (keyed by node X); persisted in project file
+    private readonly Dictionary<double, (double LX, double LY)> _nodeLabelOffsets = new();
 
     // Project state
     private string? _currentProjectPath = null;
     private bool    _isDirty            = false;
     private string  _projectName        = "Untitled";
     private DateTime _projectCreatedAt  = DateTime.UtcNow;
-    private bool    _designMode         = false;
+    private bool    _designMode         = true;
+    // User-selectable design profile color
+    private ScottColor _designLineColor = new ScottColor(220, 50, 50);
+    private static readonly ScottColor[] DesignColorPresets =
+    {
+        new ScottColor(220,  50,  50),   // red (default)
+        new ScottColor( 50, 180, 255),   // blue
+        new ScottColor( 50, 210, 120),   // green
+        new ScottColor(255, 180,  30),   // amber
+        new ScottColor(200,  80, 220),   // purple
+        new ScottColor(255, 255, 255),   // white
+    };
 
     // Persists user-edited segment names and specific weights across RefreshSegmentTable() calls.
     // Key: (StartCm, EndCm) — survives as long as the segment boundaries don't move.
@@ -66,6 +95,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private bool   _waterIsSalt = false;
     private double _waterTempC  = 20.0;
     private double _compTargetSpeedIns = 1.0; // desired compensation speed in in/s
+    private bool   _isSinking  = false;
+    private bool   _isFullLine = false;
+    private string _afftaBadge = "AFFTA: —";
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -84,6 +116,22 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     public string RawOpacityStatus       => $"Raw: {_vm.Settings.Chart.RawOpacity:0.00}";
     public string DrawModeStatus         => _segmentDrawMode ? "DISEGNO SEGMENTI ATTIVO" : string.Empty;
     public string SegmentNodesStatus     => _segmentNodes.Count > 0 ? $"Nodi: {_segmentNodes.Count}" : string.Empty;
+
+    public bool IsSinking
+    {
+        get => _isSinking;
+        set { _isSinking = value; OnPropertyChanged(nameof(IsSinking)); UpdateLineTypeUI(); }
+    }
+    public bool IsFullLine
+    {
+        get => _isFullLine;
+        set { _isFullLine = value; OnPropertyChanged(nameof(IsFullLine)); UpdateLineTypeUI(); RefreshSegmentTable(); RefreshPlot(); }
+    }
+    public string AfftaBadge
+    {
+        get => _afftaBadge;
+        private set { _afftaBadge = value; OnPropertyChanged(nameof(AfftaBadge)); }
+    }
 
     private string _hoverCoordsStatus = string.Empty;
     public  string HoverCoordsStatus
@@ -110,22 +158,27 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         Loaded += async (_, _) =>
         {
+            ApplyDesignMode();   // apply immediately so UI never flashes in scan mode
             SetupPlot();
+            UpdateLineTypeUI();
             _autoFitEnabled = _vm.Settings.Chart.AutoFit;
             _vm.Points.CollectionChanged += Points_CollectionChanged;
             _vm.PropertyChanged += (s, e) =>
             {
-                RefreshStatusBar();
-                if (e.PropertyName == nameof(MainViewModel.ScanReceiving))
-                    RefreshPlot();
-                if (e.PropertyName == nameof(MainViewModel.ConnectionStatus))
+                Dispatcher.InvokeAsync(() =>
                 {
-                    bool connected = _vm.ConnectionStatus.Contains("Connesso", StringComparison.OrdinalIgnoreCase)
-                                  || _vm.ConnectionStatus.Contains("OK",       StringComparison.OrdinalIgnoreCase);
-                    ConnLed.Fill = connected
-                        ? new System.Windows.Media.SolidColorBrush((WpfColor)System.Windows.Media.ColorConverter.ConvertFromString("#28C996"))
-                        : new System.Windows.Media.SolidColorBrush((WpfColor)System.Windows.Media.ColorConverter.ConvertFromString("#E85454"));
-                }
+                    RefreshStatusBar();
+                    if (e.PropertyName == nameof(MainViewModel.ScanReceiving))
+                        RefreshPlot();
+                    if (e.PropertyName == nameof(MainViewModel.ConnectionStatus))
+                    {
+                        bool connected = _vm.ConnectionStatus.Contains("Connesso", StringComparison.OrdinalIgnoreCase)
+                                      || _vm.ConnectionStatus.Contains("OK",       StringComparison.OrdinalIgnoreCase);
+                        ConnLed.Fill = connected
+                            ? new System.Windows.Media.SolidColorBrush((WpfColor)System.Windows.Media.ColorConverter.ConvertFromString("#28C996"))
+                            : new System.Windows.Media.SolidColorBrush((WpfColor)System.Windows.Media.ColorConverter.ConvertFromString("#E85454"));
+                    }
+                });
             };
             await _vm.InitializeAsync();
             RefreshPlot();
@@ -168,9 +221,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         if (_plotInitialized) return;
         var plot = PlotControl.Plot;
         plot.Clear();
-        plot.Title(GetChartTitle());
-        plot.XLabel("Lunghezza (cm)");
-        plot.YLabel("Diametro (mm)");
+        plot.XLabel("Length (cm)");
+        plot.YLabel("Diameter (mm)");
         plot.ShowLegend();
 
         PlotControl.PreviewMouseLeftButtonDown  += PlotControl_PreviewMouseLeftButtonDown;
@@ -181,7 +233,15 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         PlotControl.MouseLeave                  += (_, _) => HoverCoordsStatus = string.Empty;
 
         _plotInitialized = true;
+        ColorSections.CollectionChanged += (_, _) => { RefreshPlot(); MarkDirty(); };
         PlotControl.Refresh();
+
+        // Analysis chart setup
+        var ap = AnalysisPlotControl.Plot;
+        ap.Title("Mass Distribution");
+        ap.XLabel("Position (cm)");
+        ap.YLabel("gr/ft");
+        AnalysisPlotControl.Refresh();
     }
 
     private void Points_CollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
@@ -213,22 +273,29 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         var pts = _vm.Points.OrderBy(p => p.X).ToList();
         var displayedYs = GetDisplayedSeries(pts);  // full diameters
 
+        // Design layer first so scan can render on top of it.
+        if (_showDesignLayer && _designMode)
+            RenderSegmentOverlay(plot);
+
+        // Scan + imported series (always on top in design mode so they're not buried).
         if (_showScanLayer && pts.Count > 0)
         {
             double[] xs = pts.Select(p => p.X).ToArray();
 
-            // Symmetric profile: top = +radius, bottom = -radius (mirrors the web UI)
             if (_vm.Settings.Chart.ShowFilteredSeries)
             {
                 var alpha = (float)Math.Clamp(_vm.Settings.Chart.FilteredOpacity, 0.0, 1.0);
-                var col   = Colors.Blue.WithAlpha(alpha);
-                int lw    = _vm.Settings.Chart.LineWidth;
+                // In design mode: bright yellow outline so it reads over the blue fill.
+                var col = _designMode
+                    ? new ScottColor(255, 220, 0).WithAlpha(0.95f)
+                    : Colors.Blue.WithAlpha(alpha);
+                int lw = _designMode ? 2 : _vm.Settings.Chart.LineWidth;
 
-                double[] topYs = displayedYs.Select(y => y / 2.0).ToArray();
+                double[] topYs = displayedYs.Select(y =>  y / 2.0).ToArray();
                 double[] botYs = displayedYs.Select(y => -y / 2.0).ToArray();
 
-                // Filled gradient band simulating a round solid cross-section
-                DrawLineFill(plot, xs, topYs, botYs, col);
+                if (!_designMode)
+                    DrawLineFill(plot, xs, topYs, botYs, col);
 
                 var top = plot.Add.Scatter(xs, topYs);
                 top.LegendText = "Scan";
@@ -242,7 +309,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 bot.Color      = col;
             }
 
-            // Optional raw series (also mirrored)
             if (_vm.Settings.Chart.ShowRawSeries)
             {
                 var rawAlpha = (float)Math.Clamp(_vm.Settings.Chart.RawOpacity, 0.0, 1.0);
@@ -260,12 +326,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 rawBot.Color      = rawCol;
             }
 
-            // Centre axis
             var hline = plot.Add.HorizontalLine(0);
             hline.Color     = Colors.Gray.WithAlpha(0.4f);
             hline.LineWidth = 0.8f;
 
-            // Live scan annotation: dimension label at the latest received point
             if (_vm.ScanReceiving && displayedYs.Length > 0)
             {
                 double lastX    = pts[^1].X;
@@ -284,14 +348,15 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             }
         }
 
-        // Imported comparison series — render regardless of _showScanLayer
-        // (they should be visible in design mode even when scan layer is hidden)
+        // Imported comparison series (gated by _showScanLayer)
+        if (_showScanLayer)
         foreach (var series in _importedSeries)
         {
             double[] halfYs = series.Ys.Select(y =>  y / 2.0).ToArray();
             double[] negYs  = series.Ys.Select(y => -y / 2.0).ToArray();
 
-            DrawLineFill(plot, series.Xs, halfYs, negYs, series.Color);
+            if (!_designMode)
+                DrawLineFill(plot, series.Xs, halfYs, negYs, series.Color);
 
             var top = plot.Add.Scatter(series.Xs, halfYs);
             top.LegendText = series.Name;
@@ -305,15 +370,43 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             bot.Color      = series.Color;
         }
 
-        if (_showDesignLayer)
-            RenderSegmentOverlay(plot);
+        // Orientation labels — always show in design mode so the user knows which end is which
+        if (_designMode && _segmentNodes.Count >= 2)
+        {
+            var sorted = _segmentNodes.OrderBy(n => n.X).ToList();
+            double xMin = sorted[0].X;
+            double xMax = sorted[^1].X;
+            double yTop = sorted.Max(n => n.Y) / 2.0;
 
-        plot.Title(GetChartTitle());
-        plot.XLabel("Lunghezza (cm)");
-        plot.YLabel("Diametro (mm)");
+            var tipLbl = plot.Add.Text("◀ FLY TIP", xMin, yTop);
+            tipLbl.LabelFontSize        = 10;
+            tipLbl.LabelBold            = true;
+            tipLbl.LabelFontColor       = new ScottColor(80, 200, 255);
+            tipLbl.LabelBackgroundColor = ScottPlot.Colors.Transparent;
+            tipLbl.LabelBorderColor     = ScottPlot.Colors.Transparent;
+            tipLbl.LabelAlignment       = Alignment.UpperLeft;
+
+            var reelLbl = plot.Add.Text("REEL ▶", xMax, yTop);
+            reelLbl.LabelFontSize        = 10;
+            reelLbl.LabelBold            = true;
+            reelLbl.LabelFontColor       = new ScottColor(80, 200, 255);
+            reelLbl.LabelBackgroundColor = ScottPlot.Colors.Transparent;
+            reelLbl.LabelBorderColor     = ScottPlot.Colors.Transparent;
+            reelLbl.LabelAlignment       = Alignment.UpperRight;
+        }
+
+        plot.XLabel("Length (cm)");
+        plot.YLabel("Diameter (mm)");
         plot.ShowLegend();
 
-        if (_autoFitEnabled) plot.Axes.AutoScale();
+        if (_autoFitEnabled)
+        {
+            plot.Axes.AutoScale();
+            // Add extra bottom margin so node labels don't clip against the canvas edge
+            var yRange = plot.Axes.GetLimits().Rect.Height;
+            var limits = plot.Axes.GetLimits();
+            plot.Axes.SetLimitsY(limits.Bottom - yRange * 0.12, limits.Top);
+        }
         PlotControl.Refresh();
         RefreshStatusBar();
     }
@@ -326,6 +419,177 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     {
         PlotControl.Plot.Axes.AutoScale();
         PlotControl.Refresh();
+    }
+
+    // ── Analysis chart: mass/unit-length + cumulative grain weight ────────────
+    private void RefreshAnalysisPlot()
+    {
+        if (!_plotInitialized || !_designMode) return;
+        var segs = ProjectSegments;
+        var ap   = AnalysisPlotControl.Plot;
+        ap.Clear();
+
+        if (segs.Count == 0) { AnalysisPlotControl.Refresh(); return; }
+
+        const double GramsToGrains = 15.4324;
+        const double CmToFt        = 1.0 / 30.48;
+        const double AfftaBoundCm  = 914.4;   // 30 ft
+
+        // ── Compute gr/ft per segment ──────────────────────────────────────
+        var grPerFtList = new List<double>();
+        foreach (var seg in segs)
+        {
+            double v = (seg.MassG > 0 && seg.LengthCm > 0)
+                ? (seg.MassG * GramsToGrains) / (seg.LengthCm * CmToFt)
+                : 0;
+            grPerFtList.Add(v);
+        }
+        double maxGrPerFt = grPerFtList.Max();
+        if (maxGrPerFt <= 0) maxGrPerFt = 1;
+
+        // ── Compute cumulative grains ──────────────────────────────────────
+        var cumXs = new List<double>();
+        var cumRaw = new List<double>(); // actual grains
+        double running = 0;
+        cumXs.Add(segs[0].StartCm); cumRaw.Add(0);
+        foreach (var seg in segs)
+        {
+            running += seg.MassG * GramsToGrains;
+            cumXs.Add(seg.EndCm);
+            cumRaw.Add(running);
+        }
+        double totalGrains = running;
+        // Scale cumulative line to 90% of the bar height range so it fits on same axis
+        double scale = totalGrains > 0 ? (maxGrPerFt * 0.9) / totalGrains : 1;
+        double[] cumScaled = cumRaw.Select(v => v * scale).ToArray();
+
+        // ── Per-segment gr/ft bars + per-segment CoM dots ─────────────────
+        double totalMassWeightedX = 0;
+        double totalMassForCoM    = 0;
+
+        for (int i = 0; i < segs.Count; i++)
+        {
+            var seg = segs[i];
+            bool isHead = !_isFullLine || seg.IsHead;
+
+            if (grPerFtList[i] > 0)
+            {
+                var rect = ap.Add.Rectangle(seg.StartCm, seg.EndCm, 0, grPerFtList[i]);
+                rect.FillColor = isHead
+                    ? new ScottColor(220, 80, 80).WithAlpha(0.55f)
+                    : new ScottColor(80, 140, 220).WithAlpha(0.45f);
+                rect.LineWidth = 0;
+            }
+
+            // Per-segment center of mass (exact frustum formula)
+            if (seg.MassG > 0 && seg.LengthCm > 0)
+            {
+                double r1 = seg.StartDiameterMm / 2.0;
+                double r2 = seg.EndDiameterMm   / 2.0;
+                double denom = r1 * r1 + r1 * r2 + r2 * r2;
+                double f = denom > 0
+                    ? (r1 * r1 + 2 * r1 * r2 + 3 * r2 * r2) / (4.0 * denom)
+                    : 0.5;
+                double comX = seg.StartCm + f * seg.LengthCm;
+
+                // Accumulate for total CoM — head segments only
+                if (isHead)
+                {
+                    totalMassWeightedX += seg.MassG * comX;
+                    totalMassForCoM    += seg.MassG;
+                }
+
+                // Draw a small tick at the CoM position at bar height
+                if (grPerFtList[i] > 0)
+                {
+                    double barH = grPerFtList[i];
+                    var tick = ap.Add.Scatter(new[] { comX }, new[] { barH });
+                    tick.MarkerSize  = 7;
+                    tick.MarkerShape = ScottPlot.MarkerShape.FilledDiamond;
+                    tick.Color       = isHead
+                        ? new ScottColor(255, 120, 120)
+                        : new ScottColor(120, 180, 255);
+                    tick.LineWidth   = 0;
+                }
+            }
+        }
+
+        // ── Cumulative line (scaled, same axis) ────────────────────────────
+        var cumLine = ap.Add.Scatter(cumXs.ToArray(), cumScaled);
+        cumLine.LegendText = $"Cumul. (total {totalGrains:0} gr)";
+        cumLine.LineWidth  = 2;
+        cumLine.MarkerSize = 0;
+        cumLine.Color      = new ScottColor(80, 220, 160);
+
+        // ── Total center of mass vertical line ─────────────────────────────
+        if (totalMassForCoM > 0)
+        {
+            double totalComX = totalMassWeightedX / totalMassForCoM;
+            var headSegs  = segs.Where(s => !_isFullLine || s.IsHead).ToList();
+            double headStart = headSegs.Count > 0 ? headSegs[0].StartCm  : segs[0].StartCm;
+            double headEnd   = headSegs.Count > 0 ? headSegs[^1].EndCm   : segs[^1].EndCm;
+            double comPct    = (totalComX - headStart) / (headEnd - headStart) * 100.0;
+
+            var (comChar, comColor) = comPct switch
+            {
+                < 40  => ("Very tip-heavy — nymphing/streamer", new ScottColor(255, 100, 100)),
+                < 47  => ("Slightly front — versatile/presentation", new ScottColor(100, 220, 100)),
+                < 53  => ("Neutral — distance/loop efficiency", new ScottColor(100, 200, 255)),
+                < 58  => ("Slightly rear — distance oriented", new ScottColor(255, 180, 50)),
+                _     => ("Very rear-heavy — max distance", new ScottColor(255, 80, 80)),
+            };
+
+            var comLine = ap.Add.VerticalLine(totalComX);
+            comLine.Color       = comColor.WithAlpha(0.9f);
+            comLine.LineWidth   = 2f;
+            comLine.LinePattern = ScottPlot.LinePattern.Dashed;
+
+            var comLbl = ap.Add.Text($"CoM {comPct:0.0}%  {comChar}", totalComX, maxGrPerFt);
+            comLbl.LabelFontSize        = 9;
+            comLbl.LabelBold            = true;
+            comLbl.LabelFontColor       = comColor;
+            comLbl.LabelBackgroundColor = new ScottColor(20, 20, 30).WithAlpha(0.75f);
+            comLbl.LabelBorderColor     = ScottPlot.Colors.Transparent;
+            comLbl.LabelAlignment       = Alignment.UpperCenter;
+        }
+
+        // ── AFFTA 30 ft boundary ───────────────────────────────────────────
+        var vline = ap.Add.VerticalLine(AfftaBoundCm);
+        vline.Color       = new ScottColor(255, 200, 50).WithAlpha(0.85f);
+        vline.LineWidth   = 1.5f;
+        vline.LinePattern = ScottPlot.LinePattern.Dashed;
+
+        // Use the same frustum-volume formula as ComputeAfftaBadge so the two numbers always agree
+        double grAt30   = 0;
+        double covered30 = 0;
+        foreach (var seg in segs)
+        {
+            if (covered30 >= AfftaBoundCm || seg.StartCm >= AfftaBoundCm) break;
+            double segLen  = seg.LengthCm;
+            double usedLen = Math.Min(segLen, AfftaBoundCm - covered30);
+            if (usedLen <= 0 || seg.SpecWeightGCm3 <= 0) { covered30 += usedLen; continue; }
+            double frac   = usedLen / segLen;
+            double r1     = seg.StartDiameterMm / 2.0;
+            double r2p    = r1 + (seg.EndDiameterMm / 2.0 - r1) * frac;
+            double lenMm  = usedLen * 10.0;
+            double volMm3 = Math.PI * lenMm / 3.0 * (r1*r1 + r1*r2p + r2p*r2p);
+            grAt30   += volMm3 / 1000.0 * seg.SpecWeightGCm3 * GramsToGrains;
+            covered30 += usedLen;
+        }
+        var lbl = ap.Add.Text($"30ft: {grAt30:0} gr", AfftaBoundCm, 0);
+        lbl.LabelFontSize        = 9;
+        lbl.LabelFontColor       = new ScottColor(255, 200, 50);
+        lbl.LabelBackgroundColor = ScottPlot.Colors.Transparent;
+        lbl.LabelBorderColor     = ScottPlot.Colors.Transparent;
+        lbl.LabelAlignment       = Alignment.LowerLeft;
+        lbl.OffsetX              = 4;
+
+        ap.Title("Mass Distribution  |  red = head  blue = running  ◆ = segment CoM  — = total CoM");
+        ap.XLabel("Position (cm)");
+        ap.YLabel("gr / ft");
+        ap.ShowLegend();
+        ap.Axes.AutoScale();
+        AnalysisPlotControl.Refresh();
     }
 
     // ── Project helpers ──────────────────────────────────────────────────────
@@ -360,6 +624,15 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _importedSeries.Clear();
         _segmentNodes.Clear();
         _segmentUndoStack.Clear();
+        _nodeLabelOffsets.Clear();
+        ColorSections.Clear();
+        _colorNote = string.Empty;
+        OnPropertyChanged(nameof(ColorNote));
+        // Reset profile colour field to default red (no side-effects during clear)
+        _designLineColor = new ScottColor(220, 50, 50);
+        if (ProfileColorBtn != null)
+            ProfileColorBtn.Background = new System.Windows.Media.SolidColorBrush(
+                System.Windows.Media.Color.FromRgb(220, 50, 50));
         foreach (var seg in ProjectSegments) seg.PropertyChanged -= OnSegmentPropertyChanged;
         _segmentMetadata.Clear();
         ProjectSegments.Clear();
@@ -369,6 +642,13 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _useSharedDensity = true;
         _sharedDensity    = 0.0;
         _waterIsSalt      = false;
+
+        // Clear analysis chart
+        if (_plotInitialized)
+        {
+            AnalysisPlotControl.Plot.Clear();
+            AnalysisPlotControl.Refresh();
+        }
         _waterTempC       = 20.0;
         OnPropertyChanged(nameof(UseSharedDensity));
         OnPropertyChanged(nameof(SharedDensity));
@@ -385,6 +665,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             CreatedAt          = _projectCreatedAt,
             UseSharedDensity   = _useSharedDensity,
             SharedDensityGCm3  = _sharedDensity,
+            IsSinking          = _isSinking,
+            IsFullLine         = _isFullLine,
             WaterType          = _waterIsSalt ? "salt" : "fresh",
             WaterTempC         = _waterTempC,
             ScanPoints = _vm.Points
@@ -404,6 +686,18 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                             .OrderBy(n => n.X)
                             .Select(n => new ProjectDesignNode { X = n.X, Y = n.Y })
                             .ToList(),
+            NodeLabelOffsets = _nodeLabelOffsets
+                            .Select(kv => new NodeLabelOffset { NodeX = kv.Key, LX = kv.Value.LX, LY = kv.Value.LY })
+                            .ToList(),
+            DesignLineColorHex = $"{_designLineColor.R:X2}{_designLineColor.G:X2}{_designLineColor.B:X2}",
+            ColorNote     = _colorNote,
+            ColorSections = ColorSections.Select(s => new LineColorSection
+                            {
+                                StartCm  = s.StartCm,
+                                EndCm    = s.EndCm,
+                                ColorHex = s.ColorHex,
+                                Label    = s.Label
+                            }).ToList(),
             SegmentMetadata = ProjectSegments
                                 .Select(s => new ProjectSegmentMeta
                                 {
@@ -412,8 +706,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                                     Name       = s.Name,
                                     SpecWeight = s.SpecWeightGCm3,
                                     IsHead     = s.IsHead
-                                })
-                                .ToList()
+                               })
+                               .ToList(),
         };
 
         ProjectService.Save(project, path);
@@ -447,6 +741,29 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         foreach (var n in project.DesignNodes)
             _segmentNodes.Add((n.X, n.Y));
 
+        // Restore label offsets — skip stale entries (LX==0 && LY==0 means old-format data)
+        _nodeLabelOffsets.Clear();
+        foreach (var lo in project.NodeLabelOffsets)
+            if (lo.LX != 0 || lo.LY != 0)
+                _nodeLabelOffsets[lo.NodeX] = (lo.LX, lo.LY);
+
+        // Restore profile line colour
+        if (!string.IsNullOrWhiteSpace(project.DesignLineColorHex))
+            ApplyDesignColor(project.DesignLineColorHex);
+
+        // Restore colour sections
+        ColorSections.Clear();
+        foreach (var cs in project.ColorSections)
+            ColorSections.Add(new LineColorSectionVm
+            {
+                StartCm  = cs.StartCm,
+                EndCm    = cs.EndCm,
+                ColorHex = cs.ColorHex,
+                Label    = cs.Label
+            });
+        _colorNote = project.ColorNote ?? string.Empty;
+        OnPropertyChanged(nameof(ColorNote));
+
         // Restore segment metadata (names, spec weights, head flag)
         _segmentMetadata.Clear();
         foreach (var m in project.SegmentMetadata)
@@ -454,10 +771,14 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         _useSharedDensity = project.UseSharedDensity;
         _sharedDensity    = project.SharedDensityGCm3;
+        _isSinking        = project.IsSinking;
+        _isFullLine       = project.IsFullLine;
         _waterIsSalt      = project.WaterType == "salt";
         _waterTempC       = project.WaterTempC;
         OnPropertyChanged(nameof(UseSharedDensity));
         OnPropertyChanged(nameof(SharedDensity));
+        OnPropertyChanged(nameof(IsSinking));
+        OnPropertyChanged(nameof(IsFullLine));
         OnPropertyChanged(nameof(WaterIsSalt));
         OnPropertyChanged(nameof(WaterTempC));
 
@@ -621,20 +942,28 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         // Design-only elements
         DesignToolsPanel.Visibility          = designVis;
         DesignProjectExpander.Visibility     = designVis;
+        AnalysisChartPanel.Visibility        = designVis;
+        MainGrid.RowDefinitions[4].Height    = _designMode ? new GridLength(180) : new GridLength(0);
 
         // Hide scan layer by default when entering design mode; restore when leaving
         if (_designMode)
         {
-            _showScanLayer = false;
-            if (ShowScanToggle != null) ShowScanToggle.IsChecked = false;
+            SetShowScanLayer(false, updateToggle: true);
         }
         else
         {
-            _showScanLayer = true;
-            if (ShowScanToggle != null) ShowScanToggle.IsChecked = true;
+            SetShowScanLayer(true, updateToggle: true);
         }
 
         RefreshPlot();
+        RefreshAnalysisPlot();
+    }
+
+    private void SetShowScanLayer(bool show, bool updateToggle)
+    {
+        _showScanLayer = show;
+        if (updateToggle && ShowScanBtn != null)
+            ShowScanBtn.Content = show ? "Hide Scan" : "Show Scan";
     }
 
     private string GetChartTitle()
@@ -774,6 +1103,106 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         return values;
     }
 
+    // ── Scan layer renderer ─────────────────────────────────────────────────
+    // In scan mode: filled gradient band (same as before).
+    // In design mode: outline only on top of the design fill so the scan stays visible.
+    private void RenderScanLayer(Plot plot, List<MeasurementPoint> pts, double[] displayedYs)
+    {
+        if (!_showScanLayer || pts.Count == 0) return;
+
+        double[] xs    = pts.Select(p => p.X).ToArray();
+        bool     inDesign = _designMode;
+
+        if (_vm.Settings.Chart.ShowFilteredSeries)
+        {
+            var alpha = (float)Math.Clamp(_vm.Settings.Chart.FilteredOpacity, 0.0, 1.0);
+            // In design mode use a bright contrasting colour (yellow-green) so the scan outline
+            // reads clearly against the blue design fill.
+            var col = inDesign
+                ? new ScottColor(180, 255, 80).WithAlpha(0.90f)
+                : Colors.Blue.WithAlpha(alpha);
+            int lw = inDesign ? 2 : _vm.Settings.Chart.LineWidth;
+
+            double[] topYs = displayedYs.Select(y =>  y / 2.0).ToArray();
+            double[] botYs = displayedYs.Select(y => -y / 2.0).ToArray();
+
+            if (!inDesign)
+                DrawLineFill(plot, xs, topYs, botYs, col);
+
+            var top = plot.Add.Scatter(xs, topYs);
+            top.LegendText = "Scan";
+            top.LineWidth  = lw;
+            top.MarkerSize = 0;
+            top.Color      = col;
+
+            var bot = plot.Add.Scatter(xs, botYs);
+            bot.LineWidth  = lw;
+            bot.MarkerSize = 0;
+            bot.Color      = col;
+        }
+
+        if (_vm.Settings.Chart.ShowRawSeries)
+        {
+            var rawAlpha = (float)Math.Clamp(_vm.Settings.Chart.RawOpacity, 0.0, 1.0);
+            var rawCol   = Colors.Orange.WithAlpha(rawAlpha);
+
+            var rawTop = plot.Add.Scatter(xs, pts.Select(p =>  p.RawY / 2.0).ToArray());
+            rawTop.LegendText = "Raw";
+            rawTop.LineWidth  = 1;
+            rawTop.MarkerSize = 0;
+            rawTop.Color      = rawCol;
+
+            var rawBot = plot.Add.Scatter(xs, pts.Select(p => -p.RawY / 2.0).ToArray());
+            rawBot.LineWidth  = 1;
+            rawBot.MarkerSize = 0;
+            rawBot.Color      = rawCol;
+        }
+
+        // Centre axis
+        var hline = plot.Add.HorizontalLine(0);
+        hline.Color     = Colors.Gray.WithAlpha(0.4f);
+        hline.LineWidth = 0.8f;
+
+        // Live scan annotation
+        if (_vm.ScanReceiving && displayedYs.Length > 0)
+        {
+            double lastX    = pts[^1].X;
+            double lastDiam = displayedYs[^1];
+            var ann = plot.Add.Text($"Ø {lastDiam:0.00} mm\n{lastX:0.0} cm",
+                                    lastX, lastDiam / 2.0);
+            ann.LabelFontSize        = 11;
+            ann.LabelBold            = true;
+            ann.LabelFontColor       = Colors.DarkRed;
+            ann.LabelBackgroundColor = Colors.White.WithAlpha(0.90f);
+            ann.LabelBorderColor     = Colors.DarkRed;
+            ann.LabelBorderWidth     = 1f;
+            ann.LabelPadding         = 4;
+            ann.OffsetX              = 10;
+            ann.OffsetY              = -10;
+        }
+
+        // Imported comparison series
+        foreach (var series in _importedSeries)
+        {
+            double[] halfYs = series.Ys.Select(y =>  y / 2.0).ToArray();
+            double[] negYs  = series.Ys.Select(y => -y / 2.0).ToArray();
+
+            if (!inDesign)
+                DrawLineFill(plot, series.Xs, halfYs, negYs, series.Color);
+
+            var top = plot.Add.Scatter(series.Xs, halfYs);
+            top.LegendText = series.Name;
+            top.LineWidth  = 2;
+            top.MarkerSize = 0;
+            top.Color      = series.Color;
+
+            var bot = plot.Add.Scatter(series.Xs, negYs);
+            bot.LineWidth  = 2;
+            bot.MarkerSize = 0;
+            bot.Color      = series.Color;
+        }
+    }
+
     // ── Sink-speed heat-map overlay ──────────────────────────────────────────
     // Each ~12 cm slice is drawn as a colour-coded trapezoid, inserted between
     // the gradient fill and the profile outline so it's always visible.
@@ -859,6 +1288,75 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         return new ScottColor(r, g, b);
     }
 
+    /// <summary>Linear interpolation of the design profile diameter at an arbitrary X position.</summary>
+    private static double InterpolateProfileY(List<(double X, double Y)> sorted, double x)
+    {
+        if (x <= sorted[0].X)  return sorted[0].Y;
+        if (x >= sorted[^1].X) return sorted[^1].Y;
+        for (int i = 0; i < sorted.Count - 1; i++)
+        {
+            if (x >= sorted[i].X && x <= sorted[i + 1].X)
+            {
+                double t = (x - sorted[i].X) / (sorted[i + 1].X - sorted[i].X);
+                return sorted[i].Y + t * (sorted[i + 1].Y - sorted[i].Y);
+            }
+        }
+        return sorted[^1].Y;
+    }
+
+    /// <summary>
+    /// Paints coloured bands over the profile for each defined colour section.
+    /// Uses flat Polygon fills (no Lambert shading) so colours are vivid and opaque.
+    /// </summary>
+    private void RenderColorSections(Plot plot, List<(double X, double Y)> sorted)
+    {
+        foreach (var sec in ColorSections)
+        {
+            if (sec.EndCm <= sec.StartCm) continue;
+            if (!TryParseHexColor(sec.ColorHex, out var secColor)) continue;
+
+            var pts = new List<(double X, double Y)>
+                { (sec.StartCm, InterpolateProfileY(sorted, sec.StartCm)) };
+            foreach (var n in sorted.Where(n => n.X > sec.StartCm && n.X < sec.EndCm))
+                pts.Add(n);
+            pts.Add((sec.EndCm, InterpolateProfileY(sorted, sec.EndCm)));
+
+            double[] sxs  = pts.Select(p => p.X).ToArray();
+            double[] stop = pts.Select(p =>  p.Y / 2.0).ToArray();
+            double[] sbot = pts.Select(p => -p.Y / 2.0).ToArray();
+
+            // Closed polygon: top L→R then bottom R→L
+            var poly = stop.Select((y, i) => new ScottPlot.Coordinates(sxs[i], y))
+                .Concat(sbot.Select((y, i) => new ScottPlot.Coordinates(sxs[i], y)).Reverse())
+                .ToArray();
+            var pg = plot.Add.Polygon(poly);
+            pg.FillColor = secColor;
+            pg.LineWidth = 0;
+            pg.LineColor = ScottPlot.Colors.Transparent;
+
+            // Thin coloured outline on top and bottom edges
+            var tl = plot.Add.Scatter(sxs, stop); tl.Color = secColor; tl.LineWidth = 1.5f; tl.MarkerSize = 0;
+            var bl = plot.Add.Scatter(sxs, sbot); bl.Color = secColor; bl.LineWidth = 1.5f; bl.MarkerSize = 0;
+        }
+    }
+
+    private static bool TryParseHexColor(string hex6, out ScottColor color)
+    {
+        color = new ScottColor(200, 200, 200);
+        if (string.IsNullOrWhiteSpace(hex6)) return false;
+        hex6 = hex6.TrimStart('#');
+        if (hex6.Length < 6) return false;
+        try
+        {
+            byte r = Convert.ToByte(hex6[0..2], 16);
+            byte g = Convert.ToByte(hex6[2..4], 16);
+            byte b = Convert.ToByte(hex6[4..6], 16);
+            color = new ScottColor(r, g, b);
+            return true;
+        }
+        catch { return false; }
+    }
+
     // Segment overlay rendering
     // node.Y stores full diameter in mm; chart Y axis is radius (diameter/2)
     private void RenderSegmentOverlay(Plot plot)
@@ -870,15 +1368,22 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         double[] halfYs    = sorted.Select(n =>  n.Y / 2.0).ToArray();
         double[] negHalfYs = sorted.Select(n => -n.Y / 2.0).ToArray();
 
-        var designColor = new ScottColor(220, 50, 50);
+        var designColor = _designLineColor;
         bool compActive = _showCompProfile && ProjectSegments.Any(s => s.HasCompensation);
 
         if (sorted.Count >= 2)
         {
             if (!compActive)
             {
-                // 1. Smooth cylindrical fill
-                DrawLineFill(plot, xs, halfYs, negHalfYs, designColor, solid: true);
+                // 1. Base fill: grey when colour sections exist so bands are vivid; else normal 3D shading
+                if (ColorSections.Count > 0)
+                    DrawLineFill(plot, xs, halfYs, negHalfYs, new ScottColor(200, 200, 200), solid: true);
+                else
+                    DrawLineFill(plot, xs, halfYs, negHalfYs, designColor, solid: true);
+
+                // 1b. Colour-band overlays (flat polygons, painted over the base fill)
+                if (ColorSections.Count > 0)
+                    RenderColorSections(plot, sorted);
 
                 // 2. Sink-speed heat-map (drawn over the fill)
                 if (_showSinkSpeedMap)
@@ -940,21 +1445,41 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             markersInner.MarkerSize  = 5;
             markersInner.MarkerShape = MarkerShape.FilledCircle;
 
-            // Node labels
-            foreach (var node in sorted)
+            // Node labels — positions stored in data coordinates so leader lines work
+            for (int ni = 0; ni < sorted.Count; ni++)
             {
-                double chartY = node.Y / 2.0;
-                var lbl = plot.Add.Text($"Ø {node.Y:0.000} mm\n{node.X:0.0} cm", node.X, chartY);
-                lbl.LabelFontSize        = 10;
+                var node = sorted[ni];
+                double chartYBottom = -node.Y / 2.0;
+                // Default: stagger below the profile by a fraction of the diameter
+                double gap = node.Y * 0.40;
+                double defaultLX = node.X;
+                double defaultLY = chartYBottom - gap * (ni % 2 == 0 ? 1.0 : 2.2);
+
+                var (lx, ly) = _nodeLabelOffsets.TryGetValue(node.X, out var saved)
+                               ? saved : (defaultLX, defaultLY);
+
+                // Leader line — fixed dark colour so it stays visible regardless of profile colour
+                double leaderStartY = chartYBottom * 0.85;
+                var leaderColor = new ScottColor(100, 100, 100);   // neutral dark grey
+                var leader = plot.Add.Scatter(
+                    new double[] { node.X, lx },
+                    new double[] { leaderStartY, ly });
+                leader.Color      = leaderColor;
+                leader.LineWidth  = 1.2f;
+                leader.MarkerSize = 0;
+
+                // Label at computed data position
+                var lbl = plot.Add.Text($"Ø {node.Y:0.000}  {node.X:0.0} cm", lx, ly);
+                lbl.LabelFontSize        = 11;
                 lbl.LabelBold            = true;
-                lbl.LabelFontColor       = Colors.DarkRed;
-                lbl.LabelAlignment       = Alignment.LowerLeft;
-                lbl.LabelBackgroundColor = Colors.White.WithAlpha(0.93f);
-                lbl.LabelBorderColor     = Colors.DarkRed;
-                lbl.LabelBorderWidth     = 1.5f;
+                lbl.LabelFontColor       = new ScottColor(50, 50, 50);
+                lbl.LabelAlignment       = Alignment.UpperCenter;
+                lbl.LabelBackgroundColor = ScottPlot.Colors.White.WithAlpha(0.95f);
+                lbl.LabelBorderColor     = leaderColor;
+                lbl.LabelBorderWidth     = 1f;
                 lbl.LabelPadding         = 3;
-                lbl.OffsetX              = 8;
-                lbl.OffsetY              = -8;
+                lbl.OffsetX              = 0;
+                lbl.OffsetY              = 0;
             }
         }
     }
@@ -996,7 +1521,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         if (range < 1e-9) range = 1.0;
 
         // Draw filled rectangles colored by density
-        bool legendAdded = false;
         foreach (var (x0, x1, r, dens) in allSlices)
         {
             double t = (dens - minDens) / range;
@@ -1161,12 +1685,17 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 seg.SpecWeightGCm3 = _useSharedDensity ? _sharedDensity : 0.0;
             }
 
+            // Shooting head: all segments are head by definition
+            if (!_isFullLine) seg.IsHead = true;
+
             seg.PropertyChanged += OnSegmentPropertyChanged;
             ProjectSegments.Add(seg);
         }
 
         RefreshTotals();
         UpdateSinkingSpeeds();
+        RefreshAfftaBadge();
+        RefreshAnalysisPlot();
 
         // Keep the editable node DataGrid in sync
         SyncDesignNodesToList();
@@ -1176,7 +1705,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     {
         if (e.PropertyName is nameof(ProjectSegment.IsHead) or nameof(ProjectSegment.SpecWeightGCm3))
         {
-            Dispatcher.BeginInvoke(() => { RefreshTotals(); UpdateSinkingSpeeds(); });
+            Dispatcher.BeginInvoke(() => { RefreshTotals(); UpdateSinkingSpeeds(); RefreshAfftaBadge(); RefreshAnalysisPlot(); });
             MarkDirty();
         }
     }
@@ -1199,6 +1728,132 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _segmentNodes.Clear();
         foreach (var dn in DesignNodes)
             _segmentNodes.Add((Math.Round(dn.PositionCm, 1), Math.Round(dn.DiameterMm, 3)));
+    }
+
+    // Add node directly from table — appends a new row with sensible defaults
+    // ── Colour sections ─────────────────────────────────────────────────────
+
+    private LineColorSectionVm? _editingColorSection;
+
+    private void SectionColorBtn_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is System.Windows.Controls.Button btn &&
+            btn.Tag is LineColorSectionVm sec)
+        {
+            _editingColorSection = sec;
+            SectionHexBox.Text       = sec.ColorHex.TrimStart('#');
+            SectionHexBox.Background = System.Windows.Media.Brushes.Transparent;
+            SectionColorPopup.IsOpen = true;
+            SectionHexBox.Focus();
+            SectionHexBox.SelectAll();
+        }
+    }
+
+    private void SectionSwatch_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is System.Windows.Controls.Button btn && btn.Tag is string hex)
+            ApplySectionColor(hex.TrimStart('#'));
+    }
+
+    private void ApplySectionHexColor_Click(object sender, RoutedEventArgs e)
+        => ApplySectionHexInput();
+
+    private void SectionHexBox_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter)  { ApplySectionHexInput(); e.Handled = true; }
+        if (e.Key == Key.Escape) { SectionColorPopup.IsOpen = false; e.Handled = true; }
+    }
+
+    private void ApplySectionHexInput()
+    {
+        string hex = SectionHexBox.Text.Trim().TrimStart('#');
+        if (hex.Length == 6 && ApplySectionColor(hex))
+            SectionColorPopup.IsOpen = false;
+        else
+            SectionHexBox.Background = new System.Windows.Media.SolidColorBrush(
+                System.Windows.Media.Color.FromRgb(255, 220, 220));
+    }
+
+    private bool ApplySectionColor(string hex6)
+    {
+        if (_editingColorSection == null) return false;
+        try
+        {
+            byte r = Convert.ToByte(hex6[0..2], 16);
+            byte g = Convert.ToByte(hex6[2..4], 16);
+            byte b = Convert.ToByte(hex6[4..6], 16);
+            _ = r; _ = g; _ = b; // validate parse
+            _editingColorSection.ColorHex = hex6.ToUpperInvariant();
+            SectionColorPopup.IsOpen = false;
+            // Force DataGrid to update swatch — refresh binding
+            ColorSectionsDataGrid.Items.Refresh();
+            RefreshPlot();
+            MarkDirty();
+            return true;
+        }
+        catch { return false; }
+    }
+
+    private void AddColorSection_Click(object sender, RoutedEventArgs e)
+    {
+        double start = ColorSections.Count > 0 ? ColorSections.Max(s => s.EndCm) : 0.0;
+        double end   = start + (_segmentNodes.Count > 0
+                       ? (_segmentNodes.Max(n => n.X) - _segmentNodes.Min(n => n.X)) / 3.0
+                       : 500.0);
+        string[] defaults = { "DC3232", "F5F5F5", "28A428", "3296FF", "FFB41E" };
+        string color = defaults[ColorSections.Count % defaults.Length];
+        ColorSections.Add(new LineColorSectionVm
+        {
+            StartCm  = Math.Round(start, 1),
+            EndCm    = Math.Round(end,   1),
+            ColorHex = color,
+            Label    = string.Empty
+        });
+        MarkDirty();
+    }
+
+    private void ColorSectionsDataGrid_CellEditEnding(object sender,
+        DataGridCellEditEndingEventArgs e)
+    {
+        if (e.EditAction == DataGridEditAction.Commit)
+            Dispatcher.InvokeAsync(() => { RefreshPlot(); MarkDirty(); });
+    }
+
+    private void ColorSectionsDataGrid_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Delete &&
+            sender is DataGrid dg &&
+            dg.SelectedItem is LineColorSectionVm sec)
+        {
+            ColorSections.Remove(sec);
+            RefreshPlot();
+            MarkDirty();
+            e.Handled = true;
+        }
+    }
+
+    private void AddNode_Click(object sender, RoutedEventArgs e)
+    {
+        // Default X = last node position + 100 cm, Y = last node diameter or 1.0 mm
+        double newX = DesignNodes.Count > 0
+            ? DesignNodes.Max(n => n.PositionCm) + 100.0
+            : 0.0;
+        double newY = DesignNodes.Count > 0
+            ? DesignNodes.OrderByDescending(n => n.PositionCm).First().DiameterMm
+            : 1.0;
+
+        var node = new DesignNode { PositionCm = Math.Round(newX, 1), DiameterMm = Math.Round(newY, 3) };
+        DesignNodes.Add(node);
+        SyncListFromDesignNodes();
+        RefreshPlot();
+        RefreshSegmentTable();
+        MarkDirty();
+
+        // Scroll to and begin editing the new row
+        NodesDataGrid.ScrollIntoView(node);
+        NodesDataGrid.SelectedItem = node;
+        NodesDataGrid.CurrentCell  = new DataGridCellInfo(node, NodesDataGrid.Columns[0]);
+        NodesDataGrid.BeginEdit();
     }
 
     // DataGrid event handlers for the editable nodes grid
@@ -1335,9 +1990,144 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         UiStatus = $"Compensation computed for {_compTargetSpeedIns:0.000} in/s";
     }
 
+    // ── Line type / format ────────────────────────────────────────────────────
+
+
+    private void UpdateLineTypeUI()
+    {
+        if (!IsLoaded) return;
+        // Sinking-only tools visibility
+        var sinkVis = _isSinking ? Visibility.Visible : Visibility.Collapsed;
+        SinkingToolsPanel.Visibility = sinkVis;
+        // Head column visibility (only meaningful for full line)
+        HeadColumn.Visibility = _isFullLine ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void RefreshAfftaBadge() => AfftaBadge = ComputeAfftaBadge();
+
+    private string ComputeAfftaBadge()
+    {
+        const double target30FtCm  = 914.4;   // 30 ft in cm
+        const double gramsToGrains = 15.4324;
+
+        var segs = ProjectSegments.OrderBy(s => s.StartCm).ToList();
+        if (segs.Count == 0 || segs.All(s => s.SpecWeightGCm3 <= 0))
+            return "AFFTA: —";
+
+        double totalMassG = 0;
+        double covered    = 0;
+        foreach (var seg in segs)
+        {
+            if (covered >= target30FtCm || seg.StartCm >= target30FtCm) break;
+            double segLen  = seg.LengthCm;
+            double usedLen = Math.Min(segLen, target30FtCm - covered);
+            double frac    = usedLen / segLen;
+            if (seg.SpecWeightGCm3 <= 0) { covered += usedLen; continue; }
+            double r1Mm     = seg.StartDiameterMm / 2.0;
+            double r2Mm     = seg.EndDiameterMm   / 2.0;
+            double r2pMm    = r1Mm + (r2Mm - r1Mm) * frac;
+            double lenMm    = usedLen * 10.0;
+            double volMm3   = Math.PI * lenMm / 3.0 * (r1Mm*r1Mm + r1Mm*r2pMm + r2pMm*r2pMm);
+            totalMassG     += volMm3 / 1000.0 * seg.SpecWeightGCm3;
+            covered        += usedLen;
+        }
+
+        if (totalMassG <= 0) return "AFFTA: —";
+
+        double grains = totalMassG * gramsToGrains;
+        (int lw, double gr)[] targets =
+        {
+            (1,60),(2,80),(3,100),(4,120),(5,140),(6,160),(7,185),
+            (8,210),(9,240),(10,280),(11,330),(12,380),(13,450),(14,500)
+        };
+        var best  = targets.OrderBy(t => Math.Abs(t.gr - grains)).First();
+        bool ok   = Math.Abs(best.gr - grains) <= 6.0;
+        return $"AFFTA  LW {best.lw}   {grains:0.0} gr   {(ok ? "✓" : "✗ (target " + best.gr + " gr)")}";
+    }
+
+    private void ReverseNodes_Click(object sender, RoutedEventArgs e)
+    {
+        if (_segmentNodes.Count < 2) return;
+
+        // Capture current metadata before reversing
+        var segData = ProjectSegments.OrderBy(s => s.StartCm).ToList();
+        double totalLen = _segmentNodes.Max(n => n.X);
+
+        // Mirror node positions, keep diameters
+        var mirrored = _segmentNodes
+            .Select(n => (Math.Round(totalLen - n.X, 1), n.Y))
+            .OrderBy(n => n.Item1)
+            .ToList();
+        _segmentNodes.Clear();
+        foreach (var n in mirrored) _segmentNodes.Add(n);
+
+        // Remap metadata to new (mirrored) segment boundaries
+        _segmentMetadata.Clear();
+        foreach (var seg in segData)
+        {
+            double newStart = Math.Round(totalLen - seg.EndCm,   1);
+            double newEnd   = Math.Round(totalLen - seg.StartCm, 1);
+            _segmentMetadata[(newStart, newEnd)] = (seg.Name, seg.SpecWeightGCm3, seg.IsHead);
+        }
+
+        RefreshSegmentTable();
+        RefreshPlot();
+        MarkDirty();
+        UiStatus = "Profile reversed — position 0 is now the fly tip";
+    }
+
+    // ── Label hit-test helper ────────────────────────────────────────────────
+    /// <summary>Returns the node X whose label screen centre is within LabelHitRadiusPx of pos.</summary>
+    private double? FindLabelAt(System.Windows.Point pos)
+    {
+        if (!_designMode || _segmentNodes.Count == 0) return null;
+        var sortedNodes = _segmentNodes.OrderBy(n => n.X).ToList();
+        for (int ni = 0; ni < sortedNodes.Count; ni++)
+        {
+            var node = sortedNodes[ni];
+            double gap = node.Y * 0.40;
+            double defaultLX = node.X;
+            double defaultLY = -node.Y / 2.0 - gap * (ni % 2 == 0 ? 1.0 : 2.2);
+            var (lx, ly) = _nodeLabelOffsets.TryGetValue(node.X, out var saved)
+                           ? saved : (defaultLX, defaultLY);
+            try
+            {
+                var px = PlotControl.Plot.GetPixel(new ScottPlot.Coordinates(lx, ly));
+                double dx = pos.X - px.X;
+                double dy = pos.Y - px.Y;
+                if (Math.Sqrt(dx*dx + dy*dy) <= LabelHitRadiusPx)
+                    return node.X;
+            }
+            catch { }
+        }
+        return null;
+    }
+
     // Segment drawing mouse handlers
     private void PlotControl_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
+        // ── Label drag (design mode, any sub-mode) ──────────────────────────
+        if (_designMode)
+        {
+            var labelHit = FindLabelAt(e.GetPosition(PlotControl));
+            if (labelHit.HasValue)
+            {
+                _draggingLabelNodeX  = labelHit.Value;
+                _labelDragStartMouse = e.GetPosition(PlotControl);
+                var sn   = _segmentNodes.OrderBy(n => n.X).ToList();
+                int sni  = sn.FindIndex(n => n.X == labelHit.Value);
+                var snod = sn[Math.Max(0,sni)];
+                double sg = snod.Y * 0.40;
+                _labelDragStartOffset = _nodeLabelOffsets.TryGetValue(labelHit.Value, out var cur)
+                    ? cur
+                    : (snod.X, -snod.Y/2.0 - sg*(sni%2==0 ? 1.0 : 2.2));
+                PlotControl.CaptureMouse();
+                UiStatus   = $"Drag label for node at {labelHit.Value:0} cm";
+                e.Handled  = true;
+                return;
+            }
+        }
+
         if (!_segmentDrawMode) return;
 
         var pos    = e.GetPosition(PlotControl);
@@ -1396,6 +2186,27 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         // Always update hover readout from nearest raw data point
         UpdateHoverCoords(coords.X);
 
+        // ── Label drag ──────────────────────────────────────────────────────
+        if (_draggingLabelNodeX.HasValue)
+        {
+            var curPos = e.GetPosition(PlotControl);
+            try
+            {
+                var startData = PlotControl.Plot.GetCoordinates(
+                    new ScottPlot.Pixel((float)_labelDragStartMouse.X, (float)_labelDragStartMouse.Y));
+                var curData = PlotControl.Plot.GetCoordinates(
+                    new ScottPlot.Pixel((float)curPos.X, (float)curPos.Y));
+                double dx = curData.X - startData.X;
+                double dy = curData.Y - startData.Y;
+                _nodeLabelOffsets[_draggingLabelNodeX.Value] =
+                    (_labelDragStartOffset.LX + dx, _labelDragStartOffset.LY + dy);
+                RefreshPlot();
+            }
+            catch { }
+            e.Handled = true;
+            return;
+        }
+
         if (!_segmentDrawMode || _draggingNodeX == null) return;
 
         double newX        = Math.Round(coords.X);
@@ -1432,6 +2243,16 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private void PlotControl_PreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
+        // ── End label drag ──────────────────────────────────────────────────
+        if (_draggingLabelNodeX.HasValue)
+        {
+            PlotControl.ReleaseMouseCapture();
+            _draggingLabelNodeX = null;
+            MarkDirty();
+            e.Handled = true;
+            return;
+        }
+
         if (_draggingNodeX == null) return;
         PlotControl.ReleaseMouseCapture();
         RefreshSegmentTable();
@@ -1491,6 +2312,205 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         RefreshPlot();
         MarkDirty();
         UiStatus = "Design cleared";
+    }
+
+    // ── Profile colour picker ────────────────────────────────────────────────
+    private void ProfileColorBtn_Click(object sender, RoutedEventArgs e)
+    {
+        // Pre-fill hex box with current colour
+        HexColorBox.Text = $"{_designLineColor.R:X2}{_designLineColor.G:X2}{_designLineColor.B:X2}";
+        ColorPickerPopup.IsOpen = true;
+        HexColorBox.Focus();
+        HexColorBox.SelectAll();
+    }
+
+    private void ApplyHexColor_Click(object sender, RoutedEventArgs e) => ApplyHexInput();
+
+    private void HexColorBox_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter) { ApplyHexInput(); e.Handled = true; }
+        if (e.Key == Key.Escape) { ColorPickerPopup.IsOpen = false; e.Handled = true; }
+    }
+
+    private void Swatch_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is System.Windows.Controls.Button btn && btn.Tag is string hex)
+        {
+            ApplyDesignColor(hex.TrimStart('#'));
+            ColorPickerPopup.IsOpen = false;
+        }
+    }
+
+    private void ApplyHexInput()
+    {
+        string hex = HexColorBox.Text.Trim().TrimStart('#');
+        if (hex.Length == 6 && ApplyDesignColor(hex))
+            ColorPickerPopup.IsOpen = false;
+        else
+            HexColorBox.Background = new System.Windows.Media.SolidColorBrush(
+                System.Windows.Media.Color.FromRgb(255, 220, 220));
+    }
+
+    private bool ApplyDesignColor(string hex6)
+    {
+        try
+        {
+            byte r = Convert.ToByte(hex6[0..2], 16);
+            byte g = Convert.ToByte(hex6[2..4], 16);
+            byte b = Convert.ToByte(hex6[4..6], 16);
+            _designLineColor = new ScottColor(r, g, b);
+            ProfileColorBtn.Background = new System.Windows.Media.SolidColorBrush(
+                System.Windows.Media.Color.FromRgb(r, g, b));
+            HexColorBox.Background = System.Windows.Media.Brushes.Transparent;
+            RefreshPlot();
+            MarkDirty();
+            return true;
+        }
+        catch { return false; }
+    }
+
+    // ── PDF export ──────────────────────────────────────────────────────────
+    /// <summary>
+    /// Renders a clean chart image for PDF: thinner profile lines, no legend box.
+    /// </summary>
+    private byte[] RenderPdfChart()
+    {
+        var plot = new ScottPlot.Plot();
+        plot.FigureBackground.Color = ScottPlot.Colors.White;
+        plot.DataBackground.Color   = ScottPlot.Colors.White;
+        plot.Axes.Color(new ScottColor(80, 80, 80));
+
+        var pts = _vm.Points.OrderBy(p => p.X).ToList();
+
+        // Scan data (if present)
+        if (pts.Count > 0)
+        {
+            double[] xs     = pts.Select(p => p.X).ToArray();
+            double[] topYs  = pts.Select(p =>  p.FilteredY / 2.0).ToArray();
+            double[] botYs  = pts.Select(p => -p.FilteredY / 2.0).ToArray();
+            var scanCol = new ScottColor(255, 220, 0).WithAlpha(0.80f);
+            var top = plot.Add.Scatter(xs, topYs); top.Color = scanCol; top.LineWidth = 1; top.MarkerSize = 0;
+            var bot = plot.Add.Scatter(xs, botYs); bot.Color = scanCol; bot.LineWidth = 1; bot.MarkerSize = 0;
+        }
+
+        // Design overlay — thinner lines for print
+        if (_segmentNodes.Count >= 2)
+        {
+            var sorted     = _segmentNodes.OrderBy(n => n.X).ToList();
+            double[] xs    = sorted.Select(n => n.X).ToArray();
+            double[] topYs = sorted.Select(n =>  n.Y / 2.0).ToArray();
+            double[] botYs = sorted.Select(n => -n.Y / 2.0).ToArray();
+            var dc = _designLineColor;
+
+            if (ColorSections.Count == 0)
+            {
+                // No colour sections: use the normal 3D shaded fill
+                DrawLineFill(plot, xs, topYs, botYs, dc, solid: true);
+            }
+            else
+            {
+                // Colour sections defined: light neutral base so sections are vivid
+                DrawLineFill(plot, xs, topYs, botYs, new ScottColor(200, 200, 200), solid: true);
+                // Draw each section as a flat opaque polygon
+                foreach (var sec in ColorSections)
+                {
+                    if (sec.EndCm <= sec.StartCm) continue;
+                    if (!TryParseHexColor(sec.ColorHex, out var secColor)) continue;
+                    var pts2 = new List<(double X, double Y)>
+                        { (sec.StartCm, InterpolateProfileY(sorted, sec.StartCm)) };
+                    foreach (var n in sorted.Where(n => n.X > sec.StartCm && n.X < sec.EndCm))
+                        pts2.Add(n);
+                    pts2.Add((sec.EndCm, InterpolateProfileY(sorted, sec.EndCm)));
+                    double[] sxs  = pts2.Select(p => p.X).ToArray();
+                    double[] stop = pts2.Select(p =>  p.Y / 2.0).ToArray();
+                    double[] sbot = pts2.Select(p => -p.Y / 2.0).ToArray();
+                    // Build closed polygon: top left→right, then bottom right→left
+                    var poly = stop.Select((y, i) => new ScottPlot.Coordinates(sxs[i], y))
+                        .Concat(sbot.Select((y, i) => new ScottPlot.Coordinates(sxs[i], y)).Reverse())
+                        .ToArray();
+                    var pg = plot.Add.Polygon(poly);
+                    pg.FillColor = secColor;
+                    pg.LineWidth = 0;
+                    pg.LineColor = ScottPlot.Colors.Transparent;
+                }
+            }
+
+            var tl = plot.Add.Scatter(xs, topYs); tl.Color = dc; tl.LineWidth = 1.2f; tl.MarkerSize = 0;
+            var bl = plot.Add.Scatter(xs, botYs); bl.Color = dc; bl.LineWidth = 1.2f; bl.MarkerSize = 0;
+
+            // Node labels + leaders (same logic as live chart)
+            var leaderColor = new ScottColor(100, 100, 100);
+            for (int ni = 0; ni < sorted.Count; ni++)
+            {
+                var node         = sorted[ni];
+                double chartYBot = -node.Y / 2.0;
+                double gap       = node.Y * 0.40;
+                double defaultLX = node.X;
+                double defaultLY = chartYBot - gap * (ni % 2 == 0 ? 1.0 : 2.2);
+                var (lx, ly)     = _nodeLabelOffsets.TryGetValue(node.X, out var saved)
+                                   ? saved : (defaultLX, defaultLY);
+
+                var leader = plot.Add.Scatter(
+                    new double[] { node.X, lx },
+                    new double[] { chartYBot * 0.85, ly });
+                leader.Color      = leaderColor;
+                leader.LineWidth  = 1.0f;
+                leader.MarkerSize = 0;
+
+                var lbl = plot.Add.Text($"Ø {node.Y:0.000}  {node.X:0.0} cm", lx, ly);
+                lbl.LabelFontSize        = 11;
+                lbl.LabelBold            = true;
+                lbl.LabelFontColor       = new ScottColor(50, 50, 50);
+                lbl.LabelAlignment       = Alignment.UpperCenter;
+                lbl.LabelBackgroundColor = ScottPlot.Colors.White.WithAlpha(0.95f);
+                lbl.LabelBorderColor     = leaderColor;
+                lbl.LabelBorderWidth     = 1f;
+                lbl.LabelPadding         = 3;
+                lbl.OffsetX              = 0;
+                lbl.OffsetY              = 0;
+            }
+        }
+
+        plot.XLabel("Length (cm)");
+        plot.YLabel("Diameter (mm)");
+        plot.Axes.AutoScale();
+        var yRange = plot.Axes.GetLimits().Rect.Height;
+        var lim    = plot.Axes.GetLimits();
+        plot.Axes.SetLimitsY(lim.Bottom - yRange * 0.12, lim.Top);
+
+        return plot.GetImage(1600, 420).GetImageBytes(ScottPlot.ImageFormat.Png);
+    }
+
+    private void ExportPdf_Click(object sender, RoutedEventArgs e)
+    {
+        if (ProjectSegments.Count == 0)
+        {
+            MessageBox.Show("No design segments to export.", "Export PDF", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        var dlg = new Microsoft.Win32.SaveFileDialog
+        {
+            Filter      = "PDF files (*.pdf)|*.pdf",
+            DefaultExt  = ".pdf",
+            FileName    = $"{_projectName}_design.pdf"
+        };
+        if (dlg.ShowDialog() != true) return;
+
+        try
+        {
+            var pdfSections = ColorSections
+                .Select(s => new LineColorSection
+                    { StartCm = s.StartCm, EndCm = s.EndCm, ColorHex = s.ColorHex, Label = s.Label })
+                .ToList();
+            FlyLinePdfExporter.Export(dlg.FileName, _projectName, RenderPdfChart(), ProjectSegments.ToList(),
+                _isSinking, _isFullLine, _waterIsSalt, _waterTempC, AfftaBadge, _colorNote, pdfSections);
+            UiStatus = $"PDF exported: {System.IO.Path.GetFileName(dlg.FileName)}";
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"PDF export failed:\n{ex.Message}", "Export PDF", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
     }
 
     // Export segments: full segment table with geometry
@@ -1972,9 +2992,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         UiStatus = "Imported series cleared";
     }
 
-    private void ShowScanLayer_Click(object sender, RoutedEventArgs e)
+    private void ShowScanBtn_Click(object sender, RoutedEventArgs e)
     {
-        _showScanLayer = ShowScanToggle.IsChecked ?? true;
+        SetShowScanLayer(!_showScanLayer, updateToggle: true);
         RefreshPlot();
         UiStatus = _showScanLayer ? "Scan layer visible" : "Scan layer hidden";
     }

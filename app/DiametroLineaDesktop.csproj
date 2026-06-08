@@ -5,17 +5,25 @@
     <UseWPF>true</UseWPF>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <AssemblyName>DiametroLineaDesktop</AssemblyName>
+    <AssemblyName>FlyLineProfiler</AssemblyName>
     <RootNamespace>DiametroLineaDesktop</RootNamespace>
+    <Product>FlyLine Profiler</Product>
+    <ApplicationIcon>Assets\icon.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
     <PackageReference Include="Fluent.Ribbon" Version="10.0.3" />
+    <PackageReference Include="QuestPDF" Version="2024.10.4" />
     <PackageReference Include="ScottPlot.WPF" Version="5.0.52" />
   </ItemGroup>
   <ItemGroup>
     <None Update="appsettings.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+    <None Update="Assets\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <Resource Include="Assets\icon.ico" />
+    <EmbeddedResource Include="Assets\RazorBladeFlyLines.jpg" />
   </ItemGroup>
 </Project>

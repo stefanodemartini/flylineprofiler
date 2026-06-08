@@ -9,6 +9,7 @@
         xmlns:local="clr-namespace:DiametroLineaDesktop.Views"
         mc:Ignorable="d"
         Title="FlyLine Profiler"
+        Icon="/Assets/icon.ico"
         Height="900"
         Width="1400"
         MinHeight="780"
@@ -32,6 +33,7 @@
         <SolidColorBrush x:Key="LogBg"        Color="#0D0F16"/>
 
         <local:InverseBoolConverter x:Key="InverseBoolConverter"/>
+        <local:HexToBrushConverter  x:Key="HexToBrush"/>
 
         <Style x:Key="BtnBase" TargetType="Button">
             <Setter Property="Height"          Value="34"/>
@@ -201,8 +203,9 @@
             <RowDefinition Height="52"/>
             <RowDefinition Height="72"/>
             <RowDefinition Height="*" MinHeight="200"/>
+            <RowDefinition x:Name="AnalysisRow" Height="180"/>
             <RowDefinition Height="Auto"/>
-            <RowDefinition Height="230"/>
+            <RowDefinition Height="Auto" MinHeight="230"/>
             <RowDefinition Height="28"/>
         </Grid.RowDefinitions>
 
@@ -264,6 +267,7 @@
                     <ToggleButton x:Name="DesignModeToggle"
                                   Content="Design Mode"
                                   Style="{StaticResource ToggleBase}"
+                                  IsChecked="True"
                                   Click="DesignModeToggle_Click"
                                   ToolTip="Hide scan controls and focus on line design"
                                   Margin="0,0,12,0"/>
@@ -379,12 +383,6 @@
                             Style="{StaticResource BtnGhost}"
                             Click="ClearImported_Click"/>
 
-                    <ToggleButton x:Name="ShowScanToggle"
-                                  Content="Show Scan"
-                                  Style="{StaticResource ToggleBase}"
-                                  IsChecked="True"
-                                  Click="ShowScanLayer_Click"/>
-
                     <!-- Design-mode-only toolbar items — collapsed in scan mode -->
                     <StackPanel x:Name="DesignToolsPanel" Orientation="Horizontal">
                         <Separator Style="{StaticResource ToolSep}"/>
@@ -400,53 +398,123 @@
                         <Button Content="Clear Nodes"
                                 Style="{StaticResource BtnGhost}"
                                 Click="ClearSegments_Click"/>
-                        <Button Content="Save Nodes"
+                        <Button Content="⇄ Reverse"
                                 Style="{StaticResource BtnGhost}"
-                                Click="SaveNodes_Click"/>
-                        <Button Content="Load Nodes"
-                                Style="{StaticResource BtnGhost}"
-                                Click="LoadNodes_Click"/>
+                                Click="ReverseNodes_Click"
+                                ToolTip="Flip the profile so the other end becomes the fly tip (position 0)"/>
                         <Button Content="Export Seg. CSV"
                                 Style="{StaticResource BtnGhost}"
                                 Click="ExportSegmentsCsv_Click"/>
-                        <TextBlock Text="Desired sink:" Foreground="{StaticResource TextMuted}" VerticalAlignment="Center" Margin="4,0,2,0"/>
-                        <TextBox x:Name="CompTargetBox"
-                                 Text="1.000"
-                                 Width="58"
-                                 VerticalAlignment="Center"
-                                 LostFocus="CompTargetBox_LostFocus"
-                                 KeyDown="CompTargetBox_KeyDown"
-                                 ToolTip="Target uniform sinking speed for the compensated profile.&#x0a;Typical sink tip classes (AFTM):&#x0a;  Class I : 1.25–2.00 in/s  (slow intermediate)&#x0a;  Class II : 2.00–3.00 in/s&#x0a;  Class III: 2.50–3.50 in/s&#x0a;  Class IV : 3.50–4.50 in/s&#x0a;  Class V  : 4.50–6.00 in/s&#x0a;  Class VI : 6.00–8.00 in/s&#x0a;  Class VII: &gt; 8.00 in/s (very fast)"/>
-                        <TextBlock Text="in/s" Foreground="{StaticResource TextMuted}" VerticalAlignment="Center" Margin="2,0,2,0"/>
-                        <TextBlock x:Name="CompTargetCmsLabel"
-                                   Foreground="{StaticResource TextMuted}"
-                                   VerticalAlignment="Center"
-                                   FontStyle="Italic"
-                                   Margin="0,0,4,0"/>
-                        <Button Content="⚖ Compensate"
-                                Style="{StaticResource BtnSecondary}"
-                                Click="Compensate_Click"
-                                ToolTip="Compute per-slice compensated diameter profile for the target sink speed (slice mass preserved)"/>
-
-                        <Separator Style="{StaticResource ToolSep}"/>
+                        <!-- Profile colour picker -->
+                        <Grid Margin="4,0,0,0">
+                            <Button x:Name="ProfileColorBtn"
+                                    Width="28" Height="22"
+                                    Background="#DC3232"
+                                    BorderBrush="#555" BorderThickness="1"
+                                    Click="ProfileColorBtn_Click"
+                                    ToolTip="Click to open colour picker"/>
+                            <Popup x:Name="ColorPickerPopup"
+                                   StaysOpen="False"
+                                   Placement="Bottom"
+                                   PlacementTarget="{Binding ElementName=ProfileColorBtn}"
+                                   AllowsTransparency="True">
+                                <Border Background="White"
+                                        BorderBrush="#BBBBBB" BorderThickness="1"
+                                        CornerRadius="6" Padding="10"
+                                        Effect="{DynamicResource DropShadow}">
+                                    <StackPanel Width="180">
+                                        <TextBlock Text="Profile Colour"
+                                                   Foreground="#555" FontSize="10"
+                                                   Margin="0,0,0,7"/>
+                                        <!-- Hex input row -->
+                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,9">
+                                            <Border Background="White"
+                                                    BorderBrush="#AAAAAA" BorderThickness="1"
+                                                    CornerRadius="3" Padding="4,2">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <TextBlock Text="#" Foreground="#666"
+                                                               VerticalAlignment="Center"
+                                                               FontSize="11" Margin="0,0,1,0"/>
+                                                    <TextBox x:Name="HexColorBox"
+                                                             Width="68" Height="18"
+                                                             FontSize="11" MaxLength="6"
+                                                             CharacterCasing="Upper"
+                                                             Background="Transparent"
+                                                             Foreground="#222"
+                                                             BorderThickness="0"
+                                                             VerticalContentAlignment="Center"
+                                                             KeyDown="HexColorBox_KeyDown"/>
+                                                </StackPanel>
+                                            </Border>
+                                            <Button Content="✓"
+                                                    Width="26" Height="26" Margin="4,0,0,0"
+                                                    FontSize="12"
+                                                    Click="ApplyHexColor_Click"
+                                                    ToolTip="Apply hex colour"/>
+                                        </StackPanel>
+                                        <!-- Preset swatches -->
+                                        <WrapPanel>
+                                            <Button Click="Swatch_Click" Tag="#DC3232" Width="22" Height="22" Margin="2" Background="#DC3232" BorderThickness="0" ToolTip="#DC3232"/>
+                                            <Button Click="Swatch_Click" Tag="#3296FF" Width="22" Height="22" Margin="2" Background="#3296FF" BorderThickness="0" ToolTip="#3296FF"/>
+                                            <Button Click="Swatch_Click" Tag="#32D278" Width="22" Height="22" Margin="2" Background="#32D278" BorderThickness="0" ToolTip="#32D278"/>
+                                            <Button Click="Swatch_Click" Tag="#FFB41E" Width="22" Height="22" Margin="2" Background="#FFB41E" BorderThickness="0" ToolTip="#FFB41E"/>
+                                            <Button Click="Swatch_Click" Tag="#C850DC" Width="22" Height="22" Margin="2" Background="#C850DC" BorderThickness="0" ToolTip="#C850DC"/>
+                                            <Button Click="Swatch_Click" Tag="#FF6B35" Width="22" Height="22" Margin="2" Background="#FF6B35" BorderThickness="0" ToolTip="#FF6B35"/>
+                                            <Button Click="Swatch_Click" Tag="#28C996" Width="22" Height="22" Margin="2" Background="#28C996" BorderThickness="0" ToolTip="#28C996"/>
+                                            <Button Click="Swatch_Click" Tag="#FFFFFF" Width="22" Height="22" Margin="2" Background="#FFFFFF" BorderThickness="0" ToolTip="#FFFFFF"/>
+                                            <Button Click="Swatch_Click" Tag="#FFD700" Width="22" Height="22" Margin="2" Background="#FFD700" BorderThickness="0" ToolTip="#FFD700"/>
+                                            <Button Click="Swatch_Click" Tag="#00CFFF" Width="22" Height="22" Margin="2" Background="#00CFFF" BorderThickness="0" ToolTip="#00CFFF"/>
+                                            <Button Click="Swatch_Click" Tag="#FF3CAC" Width="22" Height="22" Margin="2" Background="#FF3CAC" BorderThickness="0" ToolTip="#FF3CAC"/>
+                                            <Button Click="Swatch_Click" Tag="#AAAAAA" Width="22" Height="22" Margin="2" Background="#AAAAAA" BorderThickness="0" ToolTip="#AAAAAA"/>
+                                        </WrapPanel>
+                                    </StackPanel>
+                                </Border>
+                            </Popup>
+                        </Grid>
+                        <Button Content="📄 Export PDF"
+                                Style="{StaticResource BtnGhost}"
+                                Click="ExportPdf_Click"
+                                ToolTip="Export design sheet as PDF"/>
+                        <!-- Sinking-only tools — hidden for floating lines -->
+                        <StackPanel x:Name="SinkingToolsPanel" Orientation="Horizontal" VerticalAlignment="Center">
+                            <TextBlock Text="Desired sink:" Foreground="{StaticResource TextMuted}" VerticalAlignment="Center" Margin="4,0,2,0"/>
+                            <TextBox x:Name="CompTargetBox"
+                                     Text="1.000"
+                                     Width="58"
+                                     VerticalAlignment="Center"
+                                     LostFocus="CompTargetBox_LostFocus"
+                                     KeyDown="CompTargetBox_KeyDown"
+                                     ToolTip="Target uniform sinking speed for the compensated profile.&#x0a;Typical sink tip classes (AFTM):&#x0a;  Class I : 1.25–2.00 in/s  (slow intermediate)&#x0a;  Class II : 2.00–3.00 in/s&#x0a;  Class III: 2.50–3.50 in/s&#x0a;  Class IV : 3.50–4.50 in/s&#x0a;  Class V  : 4.50–6.00 in/s&#x0a;  Class VI : 6.00–8.00 in/s&#x0a;  Class VII: &gt; 8.00 in/s (very fast)"/>
+                            <TextBlock Text="in/s" Foreground="{StaticResource TextMuted}" VerticalAlignment="Center" Margin="2,0,2,0"/>
+                            <TextBlock x:Name="CompTargetCmsLabel"
+                                       Foreground="{StaticResource TextMuted}"
+                                       VerticalAlignment="Center"
+                                       FontStyle="Italic"
+                                       Margin="0,0,4,0"/>
+                            <Button Content="⚖ Compensate"
+                                    Style="{StaticResource BtnSecondary}"
+                                    Click="Compensate_Click"
+                                    ToolTip="Compute per-slice compensated diameter profile for the target sink speed (slice mass preserved)"/>
+                            <Separator Style="{StaticResource ToolSep}"/>
+                            <ToggleButton x:Name="SinkMapToggle"
+                                          Content="Sink Map"
+                                          Style="{StaticResource ToggleBase}"
+                                          IsChecked="False"
+                                          Click="ShowSinkMap_Click"
+                                          ToolTip="Show sinking speed heat-map overlay (blue=slow, red=fast)"/>
+                            <ToggleButton x:Name="CompProfileToggle"
+                                          Content="Comp. Profile"
+                                          Style="{StaticResource ToggleBase}"
+                                          IsChecked="False"
+                                          Click="ShowCompProfile_Click"
+                                          ToolTip="Show compensated step profile — equivalent cylinders per segment (same mass, uniform sink speed)"/>
+                        </StackPanel>
 
                         <ToggleButton x:Name="ShowDesignToggle"
                                       Content="Show Design"
                                       Style="{StaticResource ToggleBase}"
                                       IsChecked="True"
                                       Click="ShowDesignLayer_Click"/>
-                        <ToggleButton x:Name="SinkMapToggle"
-                                      Content="Sink Map"
-                                      Style="{StaticResource ToggleBase}"
-                                      IsChecked="False"
-                                      Click="ShowSinkMap_Click"
-                                      ToolTip="Show sinking speed heat-map overlay (blue=slow, red=fast)"/>
-                        <ToggleButton x:Name="CompProfileToggle"
-                                      Content="Comp. Profile"
-                                      Style="{StaticResource ToggleBase}"
-                                      IsChecked="False"
-                                      Click="ShowCompProfile_Click"
-                                      ToolTip="Show compensated step profile — equivalent cylinders per segment (same mass, uniform sink speed)"/>
 
                         <Separator Style="{StaticResource ToolSep}"/>
                     </StackPanel>
@@ -455,6 +523,11 @@
                             Style="{StaticResource BtnGhost}"
                             Click="FitView_Click"
                             ToolTip="Fit chart to all visible data"/>
+                    <Button x:Name="ShowScanBtn"
+                            Content="Hide Scan"
+                            Style="{StaticResource BtnGhost}"
+                            Click="ShowScanBtn_Click"
+                            Margin="10,0,0,0"/>
 
                     <Separator Style="{StaticResource ToolSep}"/>
 
@@ -574,8 +647,20 @@
             <ScottPlot:WpfPlot x:Name="PlotControl" Margin="4"/>
         </Border>
 
+        <!-- Analysis chart: mass distribution + cumulative grain weight (design mode only) -->
+        <Border x:Name="AnalysisChartPanel"
+                Grid.Row="4"
+                Background="#161922"
+                Margin="12,4,12,0"
+                CornerRadius="8"
+                BorderBrush="{StaticResource BorderBrush2}"
+                BorderThickness="1"
+                Visibility="Collapsed">
+            <ScottPlot:WpfPlot x:Name="AnalysisPlotControl" Margin="2"/>
+        </Border>
+
         <!-- Collapsible log + chart controls -->
-        <Expander x:Name="LogExpander" Grid.Row="4"
+        <Expander x:Name="LogExpander" Grid.Row="5"
                   Margin="12,6,12,0"
                   IsExpanded="False">
             <Expander.Header>
@@ -684,7 +769,7 @@
 
         <!-- Project panel: Design nodes + Segment table with volumes -->
         <Expander x:Name="DesignProjectExpander"
-                  Grid.Row="5"
+                  Grid.Row="6"
                   Margin="12,4,12,0"
                   IsExpanded="True">
             <Expander.Header>
@@ -693,12 +778,49 @@
                                FontSize="12" FontWeight="SemiBold"
                                Foreground="{StaticResource TextMuted}"
                                VerticalAlignment="Center"
-                               Margin="0,0,20,0"/>
+                               Margin="0,0,16,0"/>
+
+                    <!-- Line type: Floating / Sinking -->
+                    <Border Background="#1C2030" CornerRadius="5" Padding="4,2" Margin="0,0,12,0">
+                        <StackPanel Orientation="Horizontal">
+                            <RadioButton Content="Floating"
+                                         IsChecked="{Binding ElementName=MainWin, Path=IsSinking, Converter={StaticResource InverseBoolConverter}}"
+                                         FontSize="11" Foreground="{StaticResource TextMuted}"
+                                         VerticalAlignment="Center" Margin="0,0,8,0"/>
+                            <RadioButton Content="Sinking"
+                                         IsChecked="{Binding ElementName=MainWin, Path=IsSinking}"
+                                         FontSize="11" Foreground="{StaticResource TextMuted}"
+                                         VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Line format: Shooting Head / Full Line -->
+                    <Border Background="#1C2030" CornerRadius="5" Padding="4,2" Margin="0,0,16,0">
+                        <StackPanel Orientation="Horizontal">
+                            <RadioButton Content="Shooting Head"
+                                         IsChecked="{Binding ElementName=MainWin, Path=IsFullLine, Converter={StaticResource InverseBoolConverter}}"
+                                         FontSize="11" Foreground="{StaticResource TextMuted}"
+                                         VerticalAlignment="Center" Margin="0,0,8,0"/>
+                            <RadioButton Content="Full Line"
+                                         IsChecked="{Binding ElementName=MainWin, Path=IsFullLine}"
+                                         FontSize="11" Foreground="{StaticResource TextMuted}"
+                                         VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- AFFTA badge -->
+                    <Border Background="#1A2A1A" CornerRadius="5" Padding="8,2" Margin="0,0,16,0">
+                        <TextBlock Text="{Binding ElementName=MainWin, Path=AfftaBadge}"
+                                   FontSize="11" FontWeight="SemiBold" FontFamily="Consolas"
+                                   Foreground="{StaticResource Success}"
+                                   VerticalAlignment="Center"/>
+                    </Border>
+
                     <TextBlock Text="{Binding ElementName=MainWin, Path=TotalVolumeText}"
                                FontSize="11" FontWeight="SemiBold"
                                Foreground="{StaticResource Success}"
                                VerticalAlignment="Center"
-                               Margin="0,0,24,0"/>
+                               Margin="0,0,16,0"/>
                     <!-- Shared density controls -->
                     <CheckBox Content="Same density"
                               IsChecked="{Binding ElementName=MainWin, Path=UseSharedDensity}"
@@ -752,6 +874,7 @@
                 </StackPanel>
             </Expander.Header>
 
+            <StackPanel>
             <Grid Height="195" Margin="0,2,0,0">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="240"/>
@@ -759,29 +882,35 @@
                 </Grid.ColumnDefinitions>
 
                 <!-- Editable nodes DataGrid -->
-                <Border Grid.Column="0"
-                        BorderBrush="{StaticResource BorderBrush2}"
-                        BorderThickness="1"
-                        Margin="0,0,4,0">
-                    <DataGrid x:Name="NodesDataGrid"
-                              Style="{StaticResource DarkGrid}"
-                              ItemsSource="{Binding ElementName=MainWin, Path=DesignNodes}"
-                              AutoGenerateColumns="False"
-                              CanUserAddRows="True"
-                              CanUserDeleteRows="True"
-                              CellEditEnding="NodesDataGrid_CellEditEnding"
-                              PreviewKeyDown="NodesDataGrid_PreviewKeyDown"
-                              ToolTip="Double-click chart nodes to edit. Or type here directly.">
-                        <DataGrid.Columns>
-                            <DataGridTextColumn Header="Position (cm)"
-                                               Binding="{Binding PositionCm, StringFormat='0.0'}"
-                                               Width="*"/>
-                            <DataGridTextColumn Header="Diameter (mm)"
-                                               Binding="{Binding DiameterMm, StringFormat='0.000'}"
-                                               Width="*"/>
-                        </DataGrid.Columns>
-                    </DataGrid>
-                </Border>
+                <DockPanel Grid.Column="0" Margin="0,0,4,0">
+                    <Button DockPanel.Dock="Top"
+                            Content="＋ Add Node"
+                            Click="AddNode_Click"
+                            Margin="0,0,0,2"
+                            Padding="4,2"
+                            FontSize="11"
+                            ToolTip="Append a new node row — edit Position and Diameter directly in the table"/>
+                    <Border BorderBrush="{StaticResource BorderBrush2}" BorderThickness="1">
+                        <DataGrid x:Name="NodesDataGrid"
+                                  Style="{StaticResource DarkGrid}"
+                                  ItemsSource="{Binding ElementName=MainWin, Path=DesignNodes}"
+                                  AutoGenerateColumns="False"
+                                  CanUserAddRows="False"
+                                  CanUserDeleteRows="True"
+                                  CellEditEnding="NodesDataGrid_CellEditEnding"
+                                  PreviewKeyDown="NodesDataGrid_PreviewKeyDown"
+                                  ToolTip="Edit position/diameter directly. Del key removes selected row.">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Position (cm)"
+                                                   Binding="{Binding PositionCm, StringFormat='0.0'}"
+                                                   Width="*"/>
+                                <DataGridTextColumn Header="Diameter (mm)"
+                                                   Binding="{Binding DiameterMm, StringFormat='0.000'}"
+                                                   Width="*"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </Border>
+                </DockPanel>
 
                 <!-- Segment table -->
                 <Border Grid.Column="1"
@@ -811,7 +940,8 @@
                                                Binding="{Binding Index}"
                                                Width="28"
                                                IsReadOnly="True"/>
-                            <DataGridCheckBoxColumn Header="Head"
+                            <DataGridCheckBoxColumn x:Name="HeadColumn"
+                                                   Header="Head"
                                                    Binding="{Binding IsHead, UpdateSourceTrigger=PropertyChanged}"
                                                    Width="44"/>
                             <DataGridTextColumn Header="Name"
@@ -866,10 +996,138 @@
                     </DataGrid>
                 </Border>
             </Grid>
+
+            <!-- ── Colour sections panel ──────────────────────────────── -->
+            <Grid Margin="0,6,0,4" Height="140">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="260"/>
+                </Grid.ColumnDefinitions>
+
+                <!-- Left: colour sections DataGrid -->
+                <DockPanel Grid.Column="0" Margin="0,0,6,0">
+                    <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,3">
+                        <TextBlock Text="Colour Sections"
+                                   FontSize="11" FontWeight="SemiBold"
+                                   Foreground="{StaticResource TextMuted}"
+                                   VerticalAlignment="Center" Margin="0,0,10,0"/>
+                        <Button Content="＋ Add Section"
+                                Click="AddColorSection_Click"
+                                Padding="6,2" FontSize="11"
+                                ToolTip="Add a colour band (start/end in cm, hex colour)"/>
+                    </StackPanel>
+                    <Border BorderBrush="{StaticResource BorderBrush2}" BorderThickness="1">
+                        <DataGrid x:Name="ColorSectionsDataGrid"
+                                  Style="{StaticResource DarkGrid}"
+                                  ItemsSource="{Binding ElementName=MainWin, Path=ColorSections}"
+                                  AutoGenerateColumns="False"
+                                  CanUserAddRows="False"
+                                  CanUserDeleteRows="True"
+                                  CellEditEnding="ColorSectionsDataGrid_CellEditEnding"
+                                  PreviewKeyDown="ColorSectionsDataGrid_PreviewKeyDown"
+                                  ToolTip="Define coloured bands. Del removes selected row.">
+                            <DataGrid.Columns>
+                                <!-- Colour picker button -->
+                                <DataGridTemplateColumn Header="Color" Width="44" IsReadOnly="True">
+                                    <DataGridTemplateColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <Button Width="32" Height="18" Margin="2,1"
+                                                    Background="{Binding ColorHex, Converter={StaticResource HexToBrush}}"
+                                                    BorderBrush="#888" BorderThickness="1"
+                                                    Tag="{Binding}"
+                                                    Click="SectionColorBtn_Click"
+                                                    ToolTip="Click to pick colour"/>
+                                        </DataTemplate>
+                                    </DataGridTemplateColumn.CellTemplate>
+                                </DataGridTemplateColumn>
+                                <DataGridTextColumn Header="Start (cm)"
+                                                   Binding="{Binding StartCm, StringFormat='0.0'}"
+                                                   Width="80"/>
+                                <DataGridTextColumn Header="End (cm)"
+                                                   Binding="{Binding EndCm, StringFormat='0.0'}"
+                                                   Width="80"/>
+                                <DataGridTextColumn Header="Color (hex)"
+                                                   Binding="{Binding ColorHex}"
+                                                   Width="90"/>
+                                <DataGridTextColumn Header="Label"
+                                                   Binding="{Binding Label}"
+                                                   Width="*"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </Border>
+                </DockPanel>
+
+                <!-- Right: colour note field -->
+                <DockPanel Grid.Column="1">
+                    <TextBlock DockPanel.Dock="Top"
+                               Text="Color note (printed in PDF)"
+                               FontSize="11" FontWeight="SemiBold"
+                               Foreground="{StaticResource TextMuted}"
+                               Margin="0,0,0,3"/>
+                    <TextBox Text="{Binding ElementName=MainWin, Path=ColorNote, UpdateSourceTrigger=PropertyChanged}"
+                             AcceptsReturn="True"
+                             TextWrapping="Wrap"
+                             VerticalScrollBarVisibility="Auto"
+                             Background="#1A1E2A"
+                             Foreground="{StaticResource TextPrimary}"
+                             BorderBrush="{StaticResource BorderBrush2}"
+                             BorderThickness="1"
+                             FontSize="11"
+                             Padding="6,4"
+                             ToolTip="Free text description of the line colour (e.g. Red / White / Green in equal parts)"/>
+                </DockPanel>
+            </Grid>
+
+            </StackPanel>
         </Expander>
 
+        <!-- ── Section colour picker popup (shared, opened from DataGrid swatch buttons) ── -->
+        <Popup x:Name="SectionColorPopup"
+               StaysOpen="False"
+               Placement="Mouse"
+               AllowsTransparency="True">
+            <Border Background="White" BorderBrush="#BBBBBB" BorderThickness="1"
+                    CornerRadius="6" Padding="10">
+                <StackPanel Width="180">
+                    <TextBlock Text="Section Colour" Foreground="#555" FontSize="10" Margin="0,0,0,7"/>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,9">
+                        <Border Background="White" BorderBrush="#AAAAAA" BorderThickness="1"
+                                CornerRadius="3" Padding="4,2">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="#" Foreground="#666" VerticalAlignment="Center"
+                                           FontSize="11" Margin="0,0,1,0"/>
+                                <TextBox x:Name="SectionHexBox"
+                                         Width="68" Height="18" FontSize="11" MaxLength="6"
+                                         CharacterCasing="Upper" Background="Transparent"
+                                         Foreground="#222" BorderThickness="0"
+                                         VerticalContentAlignment="Center"
+                                         KeyDown="SectionHexBox_KeyDown"/>
+                            </StackPanel>
+                        </Border>
+                        <Button Content="✓" Width="26" Height="26" Margin="4,0,0,0"
+                                FontSize="12" Click="ApplySectionHexColor_Click"
+                                ToolTip="Apply"/>
+                    </StackPanel>
+                    <WrapPanel>
+                        <Button Click="SectionSwatch_Click" Tag="#DC3232" Width="22" Height="22" Margin="2" Background="#DC3232" BorderThickness="0" ToolTip="Red"/>
+                        <Button Click="SectionSwatch_Click" Tag="#F5F5F5" Width="22" Height="22" Margin="2" Background="#F5F5F5" BorderThickness="1" BorderBrush="#CCC" ToolTip="White"/>
+                        <Button Click="SectionSwatch_Click" Tag="#28A428" Width="22" Height="22" Margin="2" Background="#28A428" BorderThickness="0" ToolTip="Green"/>
+                        <Button Click="SectionSwatch_Click" Tag="#3296FF" Width="22" Height="22" Margin="2" Background="#3296FF" BorderThickness="0" ToolTip="Blue"/>
+                        <Button Click="SectionSwatch_Click" Tag="#FFB41E" Width="22" Height="22" Margin="2" Background="#FFB41E" BorderThickness="0" ToolTip="Amber"/>
+                        <Button Click="SectionSwatch_Click" Tag="#C850DC" Width="22" Height="22" Margin="2" Background="#C850DC" BorderThickness="0" ToolTip="Purple"/>
+                        <Button Click="SectionSwatch_Click" Tag="#FF6B35" Width="22" Height="22" Margin="2" Background="#FF6B35" BorderThickness="0" ToolTip="Orange"/>
+                        <Button Click="SectionSwatch_Click" Tag="#FFD700" Width="22" Height="22" Margin="2" Background="#FFD700" BorderThickness="0" ToolTip="Yellow"/>
+                        <Button Click="SectionSwatch_Click" Tag="#00CFFF" Width="22" Height="22" Margin="2" Background="#00CFFF" BorderThickness="0" ToolTip="Cyan"/>
+                        <Button Click="SectionSwatch_Click" Tag="#FF3CAC" Width="22" Height="22" Margin="2" Background="#FF3CAC" BorderThickness="0" ToolTip="Pink"/>
+                        <Button Click="SectionSwatch_Click" Tag="#222222" Width="22" Height="22" Margin="2" Background="#222222" BorderThickness="0" ToolTip="Black"/>
+                        <Button Click="SectionSwatch_Click" Tag="#AAAAAA" Width="22" Height="22" Margin="2" Background="#AAAAAA" BorderThickness="0" ToolTip="Grey"/>
+                    </WrapPanel>
+                </StackPanel>
+            </Border>
+        </Popup>
+
         <!-- Status bar -->
-        <Border Grid.Row="6"
+        <Border Grid.Row="7"
                 Background="{StaticResource PanelBg}"
                 BorderBrush="{StaticResource BorderBrush2}"
                 BorderThickness="0,1,0,0"
