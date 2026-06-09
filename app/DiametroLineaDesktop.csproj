@@ -9,6 +9,8 @@
     <RootNamespace>DiametroLineaDesktop</RootNamespace>
     <Product>FlyLine Profiler</Product>
     <ApplicationIcon>Assets\icon.ico</ApplicationIcon>
+    <!-- Bundle native DLLs (WPF/SkiaSharp) into the single-file exe so it runs standalone -->
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />

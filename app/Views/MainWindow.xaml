@@ -416,11 +416,10 @@
                             <Popup x:Name="ColorPickerPopup"
                                    StaysOpen="False"
                                    Placement="Bottom"
-                                   PlacementTarget="{Binding ElementName=ProfileColorBtn}"
-                                   AllowsTransparency="True">
+                                   PlacementTarget="{Binding ElementName=ProfileColorBtn}">
                                 <Border Background="White"
                                         BorderBrush="#BBBBBB" BorderThickness="1"
-                                        CornerRadius="6" Padding="10"
+                                        Padding="10"
                                         Effect="{DynamicResource DropShadow}">
                                     <StackPanel Width="180">
                                         <TextBlock Text="Profile Colour"
