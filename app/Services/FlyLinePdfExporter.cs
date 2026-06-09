@@ -261,7 +261,7 @@ public static class FlyLinePdfExporter
                     col.Item().LineHorizontal(0.5f).LineColor(ColBorder);
 
                     // ── Segment data table ─────────────────────────────────
-                    col.Item().Extend().Table(table =>
+                    col.Item().Table(table =>
                     {
                         table.ColumnsDefinition(c =>
                         {
