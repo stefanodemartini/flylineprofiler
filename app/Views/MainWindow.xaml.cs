@@ -1341,15 +1341,16 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 double cx      = (sec.StartCm + sec.EndCm) / 2.0;
                 double topAtCx = InterpolateProfileY(sorted, cx) / 2.0;
                 double gap     = InterpolateProfileY(sorted, cx) * 0.18;
+                var labelColor = new ScottColor(40, 40, 40);  // always dark, readable on any bg
                 var lbl = plot.Add.Text(text, cx, topAtCx + gap);
-                lbl.LabelFontSize        = 11;
+                lbl.LabelFontSize        = 14;
                 lbl.LabelBold            = true;
-                lbl.LabelFontColor       = secColor;
+                lbl.LabelFontColor       = labelColor;
                 lbl.LabelAlignment       = Alignment.LowerCenter;
-                lbl.LabelBackgroundColor = ScottPlot.Colors.White.WithAlpha(0.75f);
-                lbl.LabelBorderColor     = secColor;
+                lbl.LabelBackgroundColor = ScottPlot.Colors.White.WithAlpha(0.85f);
+                lbl.LabelBorderColor     = labelColor;
                 lbl.LabelBorderWidth     = 1f;
-                lbl.LabelPadding         = 3;
+                lbl.LabelPadding         = 4;
                 lbl.OffsetX              = 0;
                 lbl.OffsetY              = 0;
             }
