@@ -357,9 +357,13 @@ public static class FlyLinePdfExporter
                         TotCell(""); TotCell(""); TotCell("");
                     });
 
-                    // ── Footer ─────────────────────────────────────────────
-                    col.Item().LineHorizontal(0.5f).LineColor(ColBorder);
-                    col.Item().Row(row =>
+                });
+
+                // ── Footer — pinned to page bottom, never in content flow ──
+                page.Footer().Column(fc =>
+                {
+                    fc.Item().LineHorizontal(0.5f).LineColor(ColBorder);
+                    fc.Item().PaddingTop(3).Row(row =>
                     {
                         row.RelativeItem().Text(t =>
                         {
@@ -369,7 +373,6 @@ public static class FlyLinePdfExporter
                             t.Span($"{totalMassGr:0.0} gr").Bold().FontColor(ColText);
                             t.Span($"   {afftaBadge}").FontColor(ColAccent);
                         });
-
                         row.ConstantItem(260).AlignRight().Text(t =>
                         {
                             t.Span("Confidential  ·  ").FontColor(ColRed).Bold().FontSize(7);
