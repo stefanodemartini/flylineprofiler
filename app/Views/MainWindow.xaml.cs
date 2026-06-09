@@ -1334,13 +1334,14 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             var tl = plot.Add.Scatter(sxs, stop); tl.Color = secColor; tl.LineWidth = 1.5f; tl.MarkerSize = 0;
             var bl = plot.Add.Scatter(sxs, sbot); bl.Color = secColor; bl.LineWidth = 1.5f; bl.MarkerSize = 0;
 
-            // Section label — centred above the section if the Label field is set
-            if (!string.IsNullOrWhiteSpace(sec.Label))
+            // Section label — always shown; uses Label field or falls back to S1, S2…
             {
+                int    idx     = ColorSections.IndexOf(sec);
+                string text    = string.IsNullOrWhiteSpace(sec.Label) ? $"S{idx + 1}" : sec.Label;
                 double cx      = (sec.StartCm + sec.EndCm) / 2.0;
                 double topAtCx = InterpolateProfileY(sorted, cx) / 2.0;
-                double gap     = InterpolateProfileY(sorted, cx) * 0.18; // 18 % of diameter
-                var lbl = plot.Add.Text(sec.Label, cx, topAtCx + gap);
+                double gap     = InterpolateProfileY(sorted, cx) * 0.18;
+                var lbl = plot.Add.Text(text, cx, topAtCx + gap);
                 lbl.LabelFontSize        = 11;
                 lbl.LabelBold            = true;
                 lbl.LabelFontColor       = secColor;
