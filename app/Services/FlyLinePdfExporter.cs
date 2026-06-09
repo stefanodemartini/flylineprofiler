@@ -105,13 +105,13 @@ public static class FlyLinePdfExporter
             container.Page(page =>
             {
                 page.Size(PageSizes.A4.Landscape());
-                page.Margin(18);
+                page.Margin(14);
                 page.PageColor(BgPage);
                 page.DefaultTextStyle(x => x.FontFamily("Arial").FontColor(ColText).FontSize(7.5f));
 
                 page.Content().Column(col =>
                 {
-                    col.Spacing(7);
+                    col.Spacing(4);
 
                     // ── Confidentiality header ─────────────────────────────
                     col.Item().Text(
@@ -125,7 +125,7 @@ public static class FlyLinePdfExporter
                     col.Item().Row(row =>
                     {
                         // Left: RazorBlade logo
-                        row.ConstantItem(150).AlignMiddle().Column(c =>
+                        row.ConstantItem(110).AlignMiddle().Column(c =>
                         {
                             if (logoBytes != null)
                                 c.Item().Image(logoBytes).FitWidth();
@@ -137,7 +137,7 @@ public static class FlyLinePdfExporter
                         // Centre: project title
                         row.RelativeItem().AlignMiddle().AlignCenter()
                             .Text(projectName)
-                            .FontSize(18).Bold().FontColor(ColText);
+                            .FontSize(16).Bold().FontColor(ColText);
 
                         // Right: line specs only (AFFTA already in spec row below)
                         row.ConstantItem(200).AlignRight().Column(c =>
@@ -152,7 +152,7 @@ public static class FlyLinePdfExporter
                     // ── Notes block ────────────────────────────────────────
                     col.Item().Background(C("F3F4F7"))
                         .Border(0.5f).BorderColor(ColBorder)
-                        .Padding(6).Row(nr =>
+                        .Padding(4).Row(nr =>
                     {
                         nr.RelativeItem().Text(weightNote).FontSize(7).FontColor(ColText);
                         nr.ConstantItem(8);
@@ -203,47 +203,47 @@ public static class FlyLinePdfExporter
 
                     col.Item().Background(C("F7F8FA"))
                         .Border(0.5f).BorderColor(ColBorder)
-                        .Padding(5).Column(legCol =>
+                        .PaddingVertical(3).PaddingHorizontal(5).Row(legRow =>
                     {
-                        legCol.Item().Text("Colour")
-                            .FontSize(7).Bold().FontColor(ColMuted);
-                        legCol.Item().Height(3);
-                        legCol.Item().Row(legRow =>
+                        legRow.AutoItem().AlignMiddle()
+                            .Text("Colour  ").FontSize(6.5f).Bold().FontColor(ColMuted);
+                        foreach (var (hex, label, range) in legendEntries)
                         {
-                            foreach (var (hex, label, range) in legendEntries)
+                            if (hex.Length < 6) continue;
+                            try
                             {
-                                if (hex.Length < 6) continue;
-                                try
+                                byte r = System.Convert.ToByte(hex[0..2], 16);
+                                byte g = System.Convert.ToByte(hex[2..4], 16);
+                                byte b = System.Convert.ToByte(hex[4..6], 16);
+                                var swatchColor = PdfColor.FromRGB(r, g, b);
+                                legRow.AutoItem().AlignMiddle().Column(sCol =>
                                 {
-                                    byte r = System.Convert.ToByte(hex[0..2], 16);
-                                    byte g = System.Convert.ToByte(hex[2..4], 16);
-                                    byte b = System.Convert.ToByte(hex[4..6], 16);
-                                    var swatchColor = PdfColor.FromRGB(r, g, b);
-                                    legRow.AutoItem().Column(sCol =>
+                                    sCol.Item().Row(sr =>
                                     {
-                                        // Coloured swatch
-                                        sCol.Item().Width(52).Height(12)
+                                        // Coloured swatch rectangle
+                                        sr.ConstantItem(28).Height(10)
                                             .Background(swatchColor)
                                             .Border(0.5f).BorderColor(ColBorder);
-                                        sCol.Item().Height(2);
-                                        // Hex code always shown
-                                        sCol.Item().Width(52).Text($"#{hex.ToUpperInvariant()}")
-                                            .FontSize(6.5f).Bold().FontColor(ColText).AlignCenter();
-                                        // Label / range (if any)
-                                        if (!string.IsNullOrWhiteSpace(label) || !string.IsNullOrWhiteSpace(range))
+                                        sr.ConstantItem(3);
+                                        // Hex + label stacked
+                                        sr.RelativeItem().AlignMiddle().Column(tc =>
                                         {
-                                            string sub = string.IsNullOrWhiteSpace(label) ? range
-                                                       : string.IsNullOrWhiteSpace(range)  ? label
-                                                       : $"{label}  {range}";
-                                            sCol.Item().Width(52).Text(sub)
-                                                .FontSize(6).FontColor(ColMuted).AlignCenter();
-                                        }
+                                            tc.Item().Text($"#{hex.ToUpperInvariant()}")
+                                                .FontSize(6.5f).Bold().FontColor(ColText);
+                                            if (!string.IsNullOrWhiteSpace(label) || !string.IsNullOrWhiteSpace(range))
+                                            {
+                                                string sub = string.IsNullOrWhiteSpace(label) ? range
+                                                           : string.IsNullOrWhiteSpace(range)  ? label
+                                                           : $"{label}  {range}";
+                                                tc.Item().Text(sub).FontSize(6).FontColor(ColMuted);
+                                            }
+                                        });
                                     });
-                                    legRow.ConstantItem(8);
-                                }
-                                catch { /* ignore bad hex */ }
+                                });
+                                legRow.ConstantItem(14);
                             }
-                        });
+                            catch { /* ignore bad hex */ }
+                        }
                     });
 
                     // ── Colour note (if defined) ───────────────────────────
@@ -285,7 +285,7 @@ public static class FlyLinePdfExporter
                         static IContainer Hdr(IContainer c) =>
                             c.Background(PdfColor.FromHex("EEEFF2"))
                              .BorderBottom(0.8f).BorderColor(PdfColor.FromHex("C8CBD4"))
-                             .Padding(3);
+                             .PaddingVertical(2).PaddingHorizontal(2);
 
                         var hdrs = new[]
                         {
@@ -312,7 +312,7 @@ public static class FlyLinePdfExporter
                             {
                                 var cell = table.Cell().Background(bg)
                                     .BorderBottom(0.3f).BorderColor(ColBorder)
-                                    .PaddingVertical(1).PaddingHorizontal(2);
+                                    .PaddingVertical(0).PaddingHorizontal(2);
                                 var t = cell.Text(text).FontSize(7);
                                 if (bold) t.Bold();
                                 if (fc.HasValue) t.FontColor(fc.Value);

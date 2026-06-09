@@ -2502,7 +2502,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         var lim    = plot.Axes.GetLimits();
         plot.Axes.SetLimitsY(lim.Bottom - yRange * 0.12, lim.Top);
 
-        return plot.GetImage(1600, 420).GetImageBytes(ScottPlot.ImageFormat.Png);
+        return plot.GetImage(1600, 300).GetImageBytes(ScottPlot.ImageFormat.Png);
     }
 
     private void ExportPdf_Click(object sender, RoutedEventArgs e)
