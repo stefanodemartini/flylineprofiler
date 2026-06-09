@@ -1306,8 +1306,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     /// <summary>
     /// Paints coloured bands over the profile for each defined colour section.
-    /// Uses semi-transparent polygons (alpha ≈ 0.82) so the Lambert shading drawn
-    /// beneath shows through — edges stay dark, centre stays bright, preserving 3D.
+    /// Each section is rendered with its own full Lambert cylindrical shading so the
+    /// dark-edge / bright-centre gradient is just as dramatic as the rest of the profile.
     /// </summary>
     private void RenderColorSections(Plot plot, List<(double X, double Y)> sorted)
     {
@@ -1326,15 +1326,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             double[] stop = pts.Select(p =>  p.Y / 2.0).ToArray();
             double[] sbot = pts.Select(p => -p.Y / 2.0).ToArray();
 
-            // Semi-transparent polygon: the grey Lambert base underneath shows through,
-            // preserving the dark-edge / bright-centre 3D cylinder illusion.
-            var poly = stop.Select((y, i) => new ScottPlot.Coordinates(sxs[i], y))
-                .Concat(sbot.Select((y, i) => new ScottPlot.Coordinates(sxs[i], y)).Reverse())
-                .ToArray();
-            var pg = plot.Add.Polygon(poly);
-            pg.FillColor = secColor.WithAlpha(0.82f);
-            pg.LineWidth = 0;
-            pg.LineColor = ScottPlot.Colors.Transparent;
+            // Full Lambert cylindrical shading with the section colour — paints over
+            // the design-colour base in this band, preserving the full gradient.
+            DrawLineFill(plot, sxs, stop, sbot, secColor, solid: true);
 
             // Thin coloured outline on top and bottom edges
             var tl = plot.Add.Scatter(sxs, stop); tl.Color = secColor; tl.LineWidth = 1.5f; tl.MarkerSize = 0;
@@ -1377,11 +1371,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         {
             if (!compActive)
             {
-                // 1. Base fill: grey when colour sections exist so bands are vivid; else normal 3D shading
-                if (ColorSections.Count > 0)
-                    DrawLineFill(plot, xs, halfYs, negHalfYs, new ScottColor(200, 200, 200), solid: true);
-                else
-                    DrawLineFill(plot, xs, halfYs, negHalfYs, designColor, solid: true);
+                // 1. Base fill: always use the design colour Lambert shading
+                DrawLineFill(plot, xs, halfYs, negHalfYs, designColor, solid: true);
 
                 // 1b. Colour-band overlays (flat polygons, painted over the base fill)
                 if (ColorSections.Count > 0)
@@ -2411,10 +2402,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             }
             else
             {
-                // Colour sections: grey Lambert base preserves 3D shading,
-                // then each section is a semi-transparent polygon so the
-                // dark edges and bright centre still show through.
-                DrawLineFill(plot, xs, topYs, botYs, new ScottColor(200, 200, 200), solid: true);
+                // Design-colour Lambert base (whole profile), then each section
+                // gets its own full Lambert shading drawn on top.
+                DrawLineFill(plot, xs, topYs, botYs, dc, solid: true);
                 foreach (var sec in ColorSections)
                 {
                     if (sec.EndCm <= sec.StartCm) continue;
@@ -2427,13 +2417,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     double[] sxs  = pts2.Select(p => p.X).ToArray();
                     double[] stop = pts2.Select(p =>  p.Y / 2.0).ToArray();
                     double[] sbot = pts2.Select(p => -p.Y / 2.0).ToArray();
-                    var poly = stop.Select((y, i) => new ScottPlot.Coordinates(sxs[i], y))
-                        .Concat(sbot.Select((y, i) => new ScottPlot.Coordinates(sxs[i], y)).Reverse())
-                        .ToArray();
-                    var pg = plot.Add.Polygon(poly);
-                    pg.FillColor = secColor.WithAlpha(0.82f);
-                    pg.LineWidth = 0;
-                    pg.LineColor = ScottPlot.Colors.Transparent;
+                    DrawLineFill(plot, sxs, stop, sbot, secColor, solid: true);
                 }
             }
 
