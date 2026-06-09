@@ -1084,10 +1084,9 @@
         <!-- ── Section colour picker popup (shared, opened from DataGrid swatch buttons) ── -->
         <Popup x:Name="SectionColorPopup"
                StaysOpen="False"
-               Placement="Mouse"
-               AllowsTransparency="True">
+               Placement="Mouse">
             <Border Background="White" BorderBrush="#BBBBBB" BorderThickness="1"
-                    CornerRadius="6" Padding="10">
+                    Padding="10">
                 <StackPanel Width="180">
                     <TextBlock Text="Section Colour" Foreground="#555" FontSize="10" Margin="0,0,0,7"/>
                     <StackPanel Orientation="Horizontal" Margin="0,0,0,9">

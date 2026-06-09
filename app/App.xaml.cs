@@ -41,6 +41,17 @@ public partial class App : Application
         sb.AppendLine();
         sb.AppendLine(ex?.ToString() ?? "Eccezione nulla");
 
+        // Write to log file FIRST (safe — no window creation)
+        try
+        {
+            string logPath = System.IO.Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.Desktop),
+                "FlyLineProfiler_crash.log");
+            System.IO.File.AppendAllText(logPath,
+                $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}]\n{sb}\n---\n");
+        }
+        catch { }
+
         try
         {
             MessageBox.Show(
