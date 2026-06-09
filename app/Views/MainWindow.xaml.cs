@@ -1306,7 +1306,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     /// <summary>
     /// Paints coloured bands over the profile for each defined colour section.
-    /// Uses flat Polygon fills (no Lambert shading) so colours are vivid and opaque.
+    /// Uses semi-transparent polygons (alpha ≈ 0.82) so the Lambert shading drawn
+    /// beneath shows through — edges stay dark, centre stays bright, preserving 3D.
     /// </summary>
     private void RenderColorSections(Plot plot, List<(double X, double Y)> sorted)
     {
@@ -1325,12 +1326,13 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             double[] stop = pts.Select(p =>  p.Y / 2.0).ToArray();
             double[] sbot = pts.Select(p => -p.Y / 2.0).ToArray();
 
-            // Closed polygon: top L→R then bottom R→L
+            // Semi-transparent polygon: the grey Lambert base underneath shows through,
+            // preserving the dark-edge / bright-centre 3D cylinder illusion.
             var poly = stop.Select((y, i) => new ScottPlot.Coordinates(sxs[i], y))
                 .Concat(sbot.Select((y, i) => new ScottPlot.Coordinates(sxs[i], y)).Reverse())
                 .ToArray();
             var pg = plot.Add.Polygon(poly);
-            pg.FillColor = secColor;
+            pg.FillColor = secColor.WithAlpha(0.82f);
             pg.LineWidth = 0;
             pg.LineColor = ScottPlot.Colors.Transparent;
 
@@ -2409,9 +2411,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             }
             else
             {
-                // Colour sections defined: light neutral base so sections are vivid
+                // Colour sections: grey Lambert base preserves 3D shading,
+                // then each section is a semi-transparent polygon so the
+                // dark edges and bright centre still show through.
                 DrawLineFill(plot, xs, topYs, botYs, new ScottColor(200, 200, 200), solid: true);
-                // Draw each section as a flat opaque polygon
                 foreach (var sec in ColorSections)
                 {
                     if (sec.EndCm <= sec.StartCm) continue;
@@ -2424,12 +2427,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     double[] sxs  = pts2.Select(p => p.X).ToArray();
                     double[] stop = pts2.Select(p =>  p.Y / 2.0).ToArray();
                     double[] sbot = pts2.Select(p => -p.Y / 2.0).ToArray();
-                    // Build closed polygon: top left→right, then bottom right→left
                     var poly = stop.Select((y, i) => new ScottPlot.Coordinates(sxs[i], y))
                         .Concat(sbot.Select((y, i) => new ScottPlot.Coordinates(sxs[i], y)).Reverse())
                         .ToArray();
                     var pg = plot.Add.Polygon(poly);
-                    pg.FillColor = secColor;
+                    pg.FillColor = secColor.WithAlpha(0.82f);
                     pg.LineWidth = 0;
                     pg.LineColor = ScottPlot.Colors.Transparent;
                 }
