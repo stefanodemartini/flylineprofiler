@@ -216,31 +216,24 @@ public static class FlyLinePdfExporter
                                 byte g = System.Convert.ToByte(hex[2..4], 16);
                                 byte b = System.Convert.ToByte(hex[4..6], 16);
                                 var swatchColor = PdfColor.FromRGB(r, g, b);
-                                legRow.AutoItem().AlignMiddle().Column(sCol =>
+                                // Each entry: swatch + hex + optional label, all stacked vertically
+                                legRow.AutoItem().Column(sCol =>
                                 {
-                                    sCol.Item().Row(sr =>
+                                    sCol.Item().Width(44).Height(10)
+                                        .Background(swatchColor)
+                                        .Border(0.5f).BorderColor(ColBorder);
+                                    sCol.Item().Width(44).Text($"#{hex.ToUpperInvariant()}")
+                                        .FontSize(6.5f).Bold().FontColor(ColText).AlignCenter();
+                                    if (!string.IsNullOrWhiteSpace(label) || !string.IsNullOrWhiteSpace(range))
                                     {
-                                        // Coloured swatch rectangle
-                                        sr.ConstantItem(28).Height(10)
-                                            .Background(swatchColor)
-                                            .Border(0.5f).BorderColor(ColBorder);
-                                        sr.ConstantItem(3);
-                                        // Hex + label stacked
-                                        sr.RelativeItem().AlignMiddle().Column(tc =>
-                                        {
-                                            tc.Item().Text($"#{hex.ToUpperInvariant()}")
-                                                .FontSize(6.5f).Bold().FontColor(ColText);
-                                            if (!string.IsNullOrWhiteSpace(label) || !string.IsNullOrWhiteSpace(range))
-                                            {
-                                                string sub = string.IsNullOrWhiteSpace(label) ? range
-                                                           : string.IsNullOrWhiteSpace(range)  ? label
-                                                           : $"{label}  {range}";
-                                                tc.Item().Text(sub).FontSize(6).FontColor(ColMuted);
-                                            }
-                                        });
-                                    });
+                                        string sub = string.IsNullOrWhiteSpace(label) ? range
+                                                   : string.IsNullOrWhiteSpace(range)  ? label
+                                                   : $"{label}  {range}";
+                                        sCol.Item().Width(44).Text(sub)
+                                            .FontSize(6).FontColor(ColMuted).AlignCenter();
+                                    }
                                 });
-                                legRow.ConstantItem(14);
+                                legRow.ConstantItem(10);
                             }
                             catch { /* ignore bad hex */ }
                         }
