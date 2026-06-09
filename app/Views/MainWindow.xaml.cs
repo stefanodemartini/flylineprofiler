@@ -405,7 +405,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             // Add extra bottom margin so node labels don't clip against the canvas edge
             var yRange = plot.Axes.GetLimits().Rect.Height;
             var limits = plot.Axes.GetLimits();
-            plot.Axes.SetLimitsY(limits.Bottom - yRange * 0.12, limits.Top);
+            plot.Axes.SetLimitsY(limits.Bottom - yRange * 0.12, limits.Top + yRange * 0.18);
         }
         PlotControl.Refresh();
         RefreshStatusBar();
@@ -2528,7 +2528,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         plot.Axes.AutoScale();
         var yRange = plot.Axes.GetLimits().Rect.Height;
         var lim    = plot.Axes.GetLimits();
-        plot.Axes.SetLimitsY(lim.Bottom - yRange * 0.12, lim.Top);
+        plot.Axes.SetLimitsY(lim.Bottom - yRange * 0.12, lim.Top + yRange * 0.18);
 
         return plot.GetImage(1600, 300).GetImageBytes(ScottPlot.ImageFormat.Png);
     }
