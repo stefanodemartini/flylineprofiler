@@ -1333,27 +1333,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             // Thin coloured outline on top and bottom edges
             var tl = plot.Add.Scatter(sxs, stop); tl.Color = secColor; tl.LineWidth = 1.5f; tl.MarkerSize = 0;
             var bl = plot.Add.Scatter(sxs, sbot); bl.Color = secColor; bl.LineWidth = 1.5f; bl.MarkerSize = 0;
-
-            // Section label — always shown; uses Label field or falls back to S1, S2…
-            {
-                int    idx     = ColorSections.IndexOf(sec);
-                string text    = string.IsNullOrWhiteSpace(sec.Label) ? $"S{idx + 1}" : sec.Label;
-                double cx      = (sec.StartCm + sec.EndCm) / 2.0;
-                double topAtCx = InterpolateProfileY(sorted, cx) / 2.0;
-                double gap     = InterpolateProfileY(sorted, cx) * 0.18;
-                var labelColor = new ScottColor(40, 40, 40);  // always dark, readable on any bg
-                var lbl = plot.Add.Text(text, cx, topAtCx + gap);
-                lbl.LabelFontSize        = 14;
-                lbl.LabelBold            = true;
-                lbl.LabelFontColor       = labelColor;
-                lbl.LabelAlignment       = Alignment.LowerCenter;
-                lbl.LabelBackgroundColor = ScottPlot.Colors.White.WithAlpha(0.85f);
-                lbl.LabelBorderColor     = labelColor;
-                lbl.LabelBorderWidth     = 1f;
-                lbl.LabelPadding         = 4;
-                lbl.OffsetX              = 0;
-                lbl.OffsetY              = 0;
-            }
         }
     }
 
