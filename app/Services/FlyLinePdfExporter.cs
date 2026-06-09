@@ -43,7 +43,8 @@ public static class FlyLinePdfExporter
         double tempC,
         string afftaBadge,
         string colorNote = "",
-        List<LineColorSection>? colorSections = null)
+        List<LineColorSection>? colorSections = null,
+        string designColorHex = "DC3232")
     {
         QuestPDF.Settings.License = LicenseType.Community;
 
@@ -184,51 +185,66 @@ public static class FlyLinePdfExporter
                     // ── Profile chart ──────────────────────────────────────
                     col.Item().Image(chartBytes).FitWidth();
 
-                    // ── Colour section legend ──────────────────────────────
+                    // ── Colour legend — always present ────────────────────
+                    // Build list of entries: sections if defined, else single design-colour entry
+                    var legendEntries = new List<(string Hex, string Label, string Range)>();
                     if (colorSections != null && colorSections.Count > 0)
                     {
-                        col.Item().Background(C("F7F8FA"))
-                            .Border(0.5f).BorderColor(ColBorder)
-                            .Padding(5).Column(legCol =>
+                        foreach (var cs in colorSections)
                         {
-                            legCol.Item().Text("Color Sections")
-                                .FontSize(7).Bold().FontColor(ColMuted);
-                            legCol.Item().Height(3);
-                            legCol.Item().Row(legRow =>
-                            {
-                                foreach (var cs in colorSections)
-                                {
-                                    if (string.IsNullOrWhiteSpace(cs.ColorHex)) continue;
-                                    string hex = cs.ColorHex.TrimStart('#');
-                                    if (hex.Length < 6) continue;
-                                    try
-                                    {
-                                        byte r = System.Convert.ToByte(hex[0..2], 16);
-                                        byte g = System.Convert.ToByte(hex[2..4], 16);
-                                        byte b = System.Convert.ToByte(hex[4..6], 16);
-                                        var swatchColor = PdfColor.FromRGB(r, g, b);
-                                        legRow.AutoItem().Column(sCol =>
-                                        {
-                                            // Coloured rectangle swatch
-                                            sCol.Item().Width(40).Height(10)
-                                                .Background(swatchColor)
-                                                .Border(0.5f).BorderColor(ColBorder);
-                                            sCol.Item().Height(2);
-                                            // Label + position range
-                                            string rangeText = $"{cs.StartCm:0.0}–{cs.EndCm:0.0} cm";
-                                            string labelText = string.IsNullOrWhiteSpace(cs.Label)
-                                                ? rangeText
-                                                : $"{cs.Label}\n{rangeText}";
-                                            sCol.Item().Width(40).Text(labelText)
-                                                .FontSize(6).FontColor(ColText).AlignCenter();
-                                        });
-                                        legRow.ConstantItem(8);
-                                    }
-                                    catch { /* ignore bad hex */ }
-                                }
-                            });
-                        });
+                            string range = $"{cs.StartCm:0.0}–{cs.EndCm:0.0} cm";
+                            legendEntries.Add((cs.ColorHex.TrimStart('#'), cs.Label ?? "", range));
+                        }
                     }
+                    else
+                    {
+                        legendEntries.Add((designColorHex.TrimStart('#'), "Line colour", ""));
+                    }
+
+                    col.Item().Background(C("F7F8FA"))
+                        .Border(0.5f).BorderColor(ColBorder)
+                        .Padding(5).Column(legCol =>
+                    {
+                        legCol.Item().Text("Colour")
+                            .FontSize(7).Bold().FontColor(ColMuted);
+                        legCol.Item().Height(3);
+                        legCol.Item().Row(legRow =>
+                        {
+                            foreach (var (hex, label, range) in legendEntries)
+                            {
+                                if (hex.Length < 6) continue;
+                                try
+                                {
+                                    byte r = System.Convert.ToByte(hex[0..2], 16);
+                                    byte g = System.Convert.ToByte(hex[2..4], 16);
+                                    byte b = System.Convert.ToByte(hex[4..6], 16);
+                                    var swatchColor = PdfColor.FromRGB(r, g, b);
+                                    legRow.AutoItem().Column(sCol =>
+                                    {
+                                        // Coloured swatch
+                                        sCol.Item().Width(52).Height(12)
+                                            .Background(swatchColor)
+                                            .Border(0.5f).BorderColor(ColBorder);
+                                        sCol.Item().Height(2);
+                                        // Hex code always shown
+                                        sCol.Item().Width(52).Text($"#{hex.ToUpperInvariant()}")
+                                            .FontSize(6.5f).Bold().FontColor(ColText).AlignCenter();
+                                        // Label / range (if any)
+                                        if (!string.IsNullOrWhiteSpace(label) || !string.IsNullOrWhiteSpace(range))
+                                        {
+                                            string sub = string.IsNullOrWhiteSpace(label) ? range
+                                                       : string.IsNullOrWhiteSpace(range)  ? label
+                                                       : $"{label}  {range}";
+                                            sCol.Item().Width(52).Text(sub)
+                                                .FontSize(6).FontColor(ColMuted).AlignCenter();
+                                        }
+                                    });
+                                    legRow.ConstantItem(8);
+                                }
+                                catch { /* ignore bad hex */ }
+                            }
+                        });
+                    });
 
                     // ── Colour note (if defined) ───────────────────────────
                     if (!string.IsNullOrWhiteSpace(colorNote))

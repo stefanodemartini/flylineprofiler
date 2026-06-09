@@ -2527,8 +2527,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 .Select(s => new LineColorSection
                     { StartCm = s.StartCm, EndCm = s.EndCm, ColorHex = s.ColorHex, Label = s.Label })
                 .ToList();
+            string designHex = $"{_designLineColor.Red:X2}{_designLineColor.Green:X2}{_designLineColor.Blue:X2}";
             FlyLinePdfExporter.Export(dlg.FileName, _projectName, RenderPdfChart(), ProjectSegments.ToList(),
-                _isSinking, _isFullLine, _waterIsSalt, _waterTempC, AfftaBadge, _colorNote, pdfSections);
+                _isSinking, _isFullLine, _waterIsSalt, _waterTempC, AfftaBadge, _colorNote, pdfSections, designHex);
             UiStatus = $"PDF exported: {System.IO.Path.GetFileName(dlg.FileName)}";
         }
         catch (Exception ex)
