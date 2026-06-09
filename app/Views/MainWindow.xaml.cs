@@ -1495,6 +1495,25 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 lbl.OffsetX              = 0;
                 lbl.OffsetY              = 0;
             }
+
+            // Segment labels S1, S2… — centred between consecutive nodes, above the profile
+            var segLabelColor = new ScottColor(40, 40, 40);
+            for (int si = 0; si < sorted.Count - 1; si++)
+            {
+                double cx      = (sorted[si].X + sorted[si + 1].X) / 2.0;
+                double topAtCx = InterpolateProfileY(sorted, cx) / 2.0;
+                double gap     = InterpolateProfileY(sorted, cx) * 0.25;
+                var sl = plot.Add.Text($"S{si + 1}", cx, topAtCx + gap);
+                sl.LabelFontSize        = 12;
+                sl.LabelBold            = false;
+                sl.LabelFontColor       = segLabelColor;
+                sl.LabelAlignment       = Alignment.LowerCenter;
+                sl.LabelBackgroundColor = ScottPlot.Colors.Transparent;
+                sl.LabelBorderWidth     = 0;
+                sl.LabelPadding         = 2;
+                sl.OffsetX              = 0;
+                sl.OffsetY              = 0;
+            }
         }
     }
 
@@ -2475,6 +2494,25 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 lbl.LabelPadding         = 3;
                 lbl.OffsetX              = 0;
                 lbl.OffsetY              = 0;
+            }
+
+            // Segment labels S1, S2… for PDF
+            var segLabelColor = new ScottColor(40, 40, 40);
+            for (int si = 0; si < sorted.Count - 1; si++)
+            {
+                double cx      = (sorted[si].X + sorted[si + 1].X) / 2.0;
+                double topAtCx = InterpolateProfileY(sorted, cx) / 2.0;
+                double gap     = InterpolateProfileY(sorted, cx) * 0.25;
+                var sl = plot.Add.Text($"S{si + 1}", cx, topAtCx + gap);
+                sl.LabelFontSize        = 12;
+                sl.LabelBold            = false;
+                sl.LabelFontColor       = segLabelColor;
+                sl.LabelAlignment       = Alignment.LowerCenter;
+                sl.LabelBackgroundColor = ScottPlot.Colors.Transparent;
+                sl.LabelBorderWidth     = 0;
+                sl.LabelPadding         = 2;
+                sl.OffsetX              = 0;
+                sl.OffsetY              = 0;
             }
         }
 
