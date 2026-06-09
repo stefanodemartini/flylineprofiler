@@ -1481,9 +1481,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             {
                 double cx      = (sorted[si].X + sorted[si + 1].X) / 2.0;
                 double topAtCx = InterpolateProfileY(sorted, cx) / 2.0;
-                double gap     = InterpolateProfileY(sorted, cx) * 0.25;
+                double gap     = InterpolateProfileY(sorted, cx) * 0.08;
                 var sl = plot.Add.Text($"S{si + 1}", cx, topAtCx + gap);
-                sl.LabelFontSize        = 12;
+                sl.LabelFontSize        = 15;
                 sl.LabelBold            = false;
                 sl.LabelFontColor       = segLabelColor;
                 sl.LabelAlignment       = Alignment.LowerCenter;
@@ -2481,9 +2481,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             {
                 double cx      = (sorted[si].X + sorted[si + 1].X) / 2.0;
                 double topAtCx = InterpolateProfileY(sorted, cx) / 2.0;
-                double gap     = InterpolateProfileY(sorted, cx) * 0.25;
+                double gap     = InterpolateProfileY(sorted, cx) * 0.08;
                 var sl = plot.Add.Text($"S{si + 1}", cx, topAtCx + gap);
-                sl.LabelFontSize        = 12;
+                sl.LabelFontSize        = 15;
                 sl.LabelBold            = false;
                 sl.LabelFontColor       = segLabelColor;
                 sl.LabelAlignment       = Alignment.LowerCenter;
