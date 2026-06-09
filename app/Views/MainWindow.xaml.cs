@@ -1333,6 +1333,25 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             // Thin coloured outline on top and bottom edges
             var tl = plot.Add.Scatter(sxs, stop); tl.Color = secColor; tl.LineWidth = 1.5f; tl.MarkerSize = 0;
             var bl = plot.Add.Scatter(sxs, sbot); bl.Color = secColor; bl.LineWidth = 1.5f; bl.MarkerSize = 0;
+
+            // Section label — centred above the section if the Label field is set
+            if (!string.IsNullOrWhiteSpace(sec.Label))
+            {
+                double cx      = (sec.StartCm + sec.EndCm) / 2.0;
+                double topAtCx = InterpolateProfileY(sorted, cx) / 2.0;
+                double gap     = InterpolateProfileY(sorted, cx) * 0.18; // 18 % of diameter
+                var lbl = plot.Add.Text(sec.Label, cx, topAtCx + gap);
+                lbl.LabelFontSize        = 11;
+                lbl.LabelBold            = true;
+                lbl.LabelFontColor       = secColor;
+                lbl.LabelAlignment       = Alignment.LowerCenter;
+                lbl.LabelBackgroundColor = ScottPlot.Colors.White.WithAlpha(0.75f);
+                lbl.LabelBorderColor     = secColor;
+                lbl.LabelBorderWidth     = 1f;
+                lbl.LabelPadding         = 3;
+                lbl.OffsetX              = 0;
+                lbl.OffsetY              = 0;
+            }
         }
     }
 
