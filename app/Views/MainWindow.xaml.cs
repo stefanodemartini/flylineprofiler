@@ -1475,6 +1475,20 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 lbl.OffsetY              = 0;
             }
 
+            // Vertical divider lines at each node (top edge → bottom edge)
+            var dividerColor = new ScottColor(80, 80, 80);
+            foreach (var node in sorted)
+            {
+                double topY =  node.Y / 2.0;
+                double botY = -node.Y / 2.0;
+                var div = plot.Add.Scatter(
+                    new double[] { node.X, node.X },
+                    new double[] { topY, botY });
+                div.Color      = dividerColor;
+                div.LineWidth  = 1.2f;
+                div.MarkerSize = 0;
+            }
+
             // Segment labels S1, S2… — centred between consecutive nodes, above the profile
             var segLabelColor = new ScottColor(40, 40, 40);
             for (int si = 0; si < sorted.Count - 1; si++)
@@ -2473,6 +2487,20 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 lbl.LabelPadding         = 3;
                 lbl.OffsetX              = 0;
                 lbl.OffsetY              = 0;
+            }
+
+            // Vertical divider lines at each node for PDF
+            var dividerColor = new ScottColor(80, 80, 80);
+            foreach (var node in sorted)
+            {
+                double topY =  node.Y / 2.0;
+                double botY = -node.Y / 2.0;
+                var div = plot.Add.Scatter(
+                    new double[] { node.X, node.X },
+                    new double[] { topY, botY });
+                div.Color      = dividerColor;
+                div.LineWidth  = 1.0f;
+                div.MarkerSize = 0;
             }
 
             // Segment labels S1, S2… for PDF
