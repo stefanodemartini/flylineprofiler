@@ -380,6 +380,10 @@
                     <Button Content="Import CSV"
                             Style="{StaticResource BtnSecondary}"
                             Click="ImportCsv_Click"/>
+                    <Button Content="Overlay Project"
+                            Style="{StaticResource BtnSecondary}"
+                            Click="OverlayProject_Click"
+                            ToolTip="Load another .flp project as a comparison overlay (design profile + scan)"/>
                     <Button Content="Export CSV"
                             Style="{StaticResource BtnSecondary}"
                             Click="ExportCsv_Click"/>
@@ -398,10 +402,10 @@
                                       Content="Draw Segments"
                                       Style="{StaticResource ToggleBase}"
                                       Click="ToggleDrawMode_Click"/>
-                        <Button Content="Undo Node"
+                        <Button Content="Undo"
                                 Style="{StaticResource BtnGhost}"
                                 Click="UndoLastNode_Click"
-                                ToolTip="Undo last node"/>
+                                ToolTip="Undo last node change (Ctrl+Z) — add, move, delete, edit, reverse, clear"/>
                         <Button Content="Clear Nodes"
                                 Style="{StaticResource BtnGhost}"
                                 Click="ClearSegments_Click"/>

@@ -36,7 +36,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     // Segment drawing — node.Y stores FULL DIAMETER in mm (not radius)
     private readonly List<(double X, double Y)> _segmentNodes = new();
-    private readonly Stack<double> _segmentUndoStack = new();
+    // Multi-step undo: snapshots of the full node list, taken before every change
+    private readonly Stack<List<(double X, double Y)>> _undoHistory = new();
+    private const int MaxUndoSteps = 100;
     private bool _segmentDrawMode = false;
 
     // Segment table (bound to Project DataGrid in XAML)
@@ -205,6 +207,17 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         };
 
         Closing += MainWindow_Closing;
+
+        // Ctrl+Z → undo node changes (ignored while typing in a textbox/grid cell)
+        PreviewKeyDown += (_, ke) =>
+        {
+            if (ke.Key == Key.Z && Keyboard.Modifiers == ModifierKeys.Control
+                && Keyboard.FocusedElement is not System.Windows.Controls.TextBox)
+            {
+                UndoChange();
+                ke.Handled = true;
+            }
+        };
     }
 
     private void InitializeChartControls()
@@ -369,26 +382,46 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             }
         }
 
-        // Imported comparison series (gated by _showScanLayer)
-        if (_showScanLayer)
+        // Imported comparison series.  Design overlays are always visible; scan-type
+        // series (imported CSVs and "(scan)" overlays) follow the Show/Hide Scan button.
         foreach (var series in _importedSeries)
         {
+            bool isScanSeries = !series.Name.EndsWith("(design)", StringComparison.OrdinalIgnoreCase);
+            if (isScanSeries && !_showScanLayer) continue;
+
             double[] halfYs = series.Ys.Select(y =>  y / 2.0).ToArray();
             double[] negYs  = series.Ys.Select(y => -y / 2.0).ToArray();
 
             if (!_designMode)
+            {
                 DrawLineFill(plot, series.Xs, halfYs, negYs, series.Color);
+            }
+            else if (series.Xs.Length >= 2)
+            {
+                // Design mode: semi-transparent filled silhouette so this profile
+                // and the design profile both stay readable when they overlap.
+                var coords = new ScottPlot.Coordinates[series.Xs.Length * 2];
+                for (int i = 0; i < series.Xs.Length; i++)
+                    coords[i] = new ScottPlot.Coordinates(series.Xs[i], halfYs[i]);
+                for (int i = 0; i < series.Xs.Length; i++)
+                    coords[series.Xs.Length + i] =
+                        new ScottPlot.Coordinates(series.Xs[series.Xs.Length - 1 - i],
+                                                  negYs[series.Xs.Length - 1 - i]);
+                var silhouette = plot.Add.Polygon(coords);
+                silhouette.FillColor = series.Color.WithAlpha(0.30f);
+                silhouette.LineWidth = 0;
+            }
 
             var top = plot.Add.Scatter(series.Xs, halfYs);
             top.LegendText = series.Name;
             top.LineWidth  = 2;
             top.MarkerSize = 0;
-            top.Color      = series.Color;
+            top.Color      = series.Color.WithAlpha(0.85f);
 
             var bot = plot.Add.Scatter(series.Xs, negYs);
             bot.LineWidth  = 2;
             bot.MarkerSize = 0;
-            bot.Color      = series.Color;
+            bot.Color      = series.Color.WithAlpha(0.85f);
         }
 
         // Orientation labels — always show in design mode so the user knows which end is which
@@ -671,7 +704,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _vm.ClearAllData();
         _importedSeries.Clear();
         _segmentNodes.Clear();
-        _segmentUndoStack.Clear();
+        _undoHistory.Clear();
         _nodeLabelOffsets.Clear();
         ColorSections.Clear();
         _colorNote = string.Empty;
@@ -1916,6 +1949,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             ? DesignNodes.OrderByDescending(n => n.PositionCm).First().DiameterMm
             : 1.0;
 
+        PushUndo();
         var node = new DesignNode { PositionCm = Math.Round(newX, 1), DiameterMm = Math.Round(newY, 3) };
         DesignNodes.Add(node);
         SyncListFromDesignNodes();
@@ -1934,6 +1968,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private void NodesDataGrid_CellEditEnding(object sender, DataGridCellEditEndingEventArgs e)
     {
         if (e.EditAction == DataGridEditAction.Cancel) return;
+        PushUndo(); // snapshot taken before the deferred sync applies the edit
         // Defer so DataGrid can commit the edited value before we read it
         Dispatcher.BeginInvoke(new Action(() =>
         {
@@ -1947,9 +1982,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     {
         if (e.Key != Key.Delete) return;
         if (NodesDataGrid.SelectedItem is not DesignNode dn) return;
+        PushUndo();
         DesignNodes.Remove(dn);
         SyncListFromDesignNodes();
-        _segmentUndoStack.Clear(); // undo stack no longer valid after direct delete
         RefreshPlot();
         RefreshSegmentTable();
         e.Handled = true;
@@ -2127,6 +2162,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         var segData = ProjectSegments.OrderBy(s => s.StartCm).ToList();
         double totalLen = _segmentNodes.Max(n => n.X);
 
+        PushUndo();
         // Mirror node positions, keep diameters
         var mirrored = _segmentNodes
             .Select(n => (Math.Round(totalLen - n.X, 1), n.Y))
@@ -2202,21 +2238,27 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             }
         }
 
-        if (!_segmentDrawMode) return;
-
         var pos    = e.GetPosition(PlotControl);
         var coords = PlotControl.Plot.GetCoordinates(new Pixel((float)pos.X, (float)pos.Y));
 
-        // Check if click is within DragHitRadiusPx of an existing node → start drag
-        var hit = FindNearestNode(pos);
-        if (hit.HasValue)
+        // Node drag works in design mode even with Draw Segments off.
+        // Click within DragHitRadiusPx of an existing node → start drag.
+        if (_designMode || _segmentDrawMode)
         {
-            _draggingNodeX = hit.Value.X;
-            PlotControl.CaptureMouse();
-            UiStatus = $"Drag node at {hit.Value.X:0} cm";
-            e.Handled = true;
-            return;
+            var hit = FindNearestNode(pos);
+            if (hit.HasValue)
+            {
+                PushUndo();
+                _draggingNodeX = hit.Value.X;
+                PlotControl.CaptureMouse();
+                UiStatus = $"Drag node at {hit.Value.X:0} cm";
+                e.Handled = true;
+                return;
+            }
         }
+
+        // Adding new nodes still requires Draw Segments mode
+        if (!_segmentDrawMode) return;
 
         // No nearby node → add new node
         // coords.Y is in radius (chart Y = diameter/2), so diameter = coords.Y * 2
@@ -2238,9 +2280,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             diameter = Math.Round(Math.Abs(coords.Y) * 2.0, 3);
         }
 
+        PushUndo();
         _segmentNodes.RemoveAll(n => n.X == snappedX);
         _segmentNodes.Add((snappedX, diameter));
-        _segmentUndoStack.Push(snappedX);
 
         RefreshPlot();   // redraws + AutoScale (if _autoFitEnabled) — may collapse X range
 
@@ -2287,7 +2329,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             return;
         }
 
-        if (!_segmentDrawMode || _draggingNodeX == null) return;
+        if (_draggingNodeX == null) return;
 
         double newX        = Math.Round(coords.X);
         double newDiameter = Math.Round(Math.Abs(coords.Y) * 2.0, 3);
@@ -2339,6 +2381,25 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 .First()
                 .index;
             parts.Add($"Scan Ø {displayedYs[nearestIndex]:0.000} mm");
+        }
+
+        // ── Imported/overlay series: interpolated diameter at cursor X ──────
+        foreach (var s in _importedSeries)
+        {
+            bool isScanSeries = !s.Name.EndsWith("(design)", StringComparison.OrdinalIgnoreCase);
+            if (isScanSeries && !_showScanLayer) continue;
+            if (s.Xs.Length < 2 || plotX < s.Xs[0] || plotX > s.Xs[^1]) continue;
+            for (int i = 0; i < s.Xs.Length - 1; i++)
+            {
+                if (plotX >= s.Xs[i] && plotX <= s.Xs[i + 1])
+                {
+                    double span = s.Xs[i + 1] - s.Xs[i];
+                    double t    = span > 0 ? (plotX - s.Xs[i]) / span : 0;
+                    double d    = s.Ys[i] + t * (s.Ys[i + 1] - s.Ys[i]);
+                    parts.Add($"{s.Name} Ø {d:0.000} mm");
+                    break;
+                }
+            }
         }
 
         if (parts.Count == 0)
@@ -2428,6 +2489,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         var coords = PlotControl.Plot.GetCoordinates(new Pixel((float)pos.X, (float)pos.Y));
 
         var closest = _segmentNodes.OrderBy(n => Math.Abs(n.X - coords.X)).First();
+        PushUndo();
         _segmentNodes.Remove(closest);
 
         RefreshPlot();
@@ -2448,21 +2510,36 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         RefreshStatusBar();
     }
 
-    private void UndoLastNode_Click(object sender, RoutedEventArgs e)
+    /// <summary>Snapshot the node list before a change so it can be rolled back.</summary>
+    private void PushUndo()
     {
-        if (_segmentUndoStack.Count == 0) return;
-        double lastX = _segmentUndoStack.Pop();
-        _segmentNodes.RemoveAll(n => n.X == lastX);
+        if (_undoHistory.Count >= MaxUndoSteps) return; // soft cap; oldest steps just stop accumulating
+        _undoHistory.Push(_segmentNodes.ToList());
+    }
+
+    /// <summary>Roll back the last node change (add, move, delete, edit, reverse, clear…).</summary>
+    private void UndoChange()
+    {
+        if (_undoHistory.Count == 0)
+        {
+            UiStatus = "Nothing to undo";
+            return;
+        }
+        var snapshot = _undoHistory.Pop();
+        _segmentNodes.Clear();
+        _segmentNodes.AddRange(snapshot);
         RefreshPlot();
         RefreshSegmentTable();
         MarkDirty();
-        UiStatus = $"Undone node at {lastX:0} cm  ({_segmentNodes.Count} remaining)";
+        UiStatus = $"Undo  ({_segmentNodes.Count} nodes, {_undoHistory.Count} steps left)";
     }
+
+    private void UndoLastNode_Click(object sender, RoutedEventArgs e) => UndoChange();
 
     private void ClearSegments_Click(object sender, RoutedEventArgs e)
     {
+        PushUndo();   // Clear is undoable too
         _segmentNodes.Clear();
-        _segmentUndoStack.Clear();
         ProjectSegments.Clear();
         DesignNodes.Clear();
         TotalVolumeText = string.Empty;
@@ -2799,7 +2876,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             }
 
             _segmentNodes.Clear();
-            _segmentUndoStack.Clear();
+            _undoHistory.Clear();
             _segmentNodes.AddRange(loaded);
 
             RefreshPlot();
@@ -2854,6 +2931,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         var result = ShowNodeEditDialog(hit.Value.X, hit.Value.Y);
         if (result == null) { e.Handled = true; return; }
 
+        PushUndo();
         _segmentNodes.RemoveAll(n => n.X == hit.Value.X);
         _segmentNodes.RemoveAll(n => n.X == result.Value.cm);
         _segmentNodes.Add((result.Value.cm, result.Value.mm));
@@ -3156,6 +3234,74 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         {
             UiStatus = "CSV import error";
             MessageBox.Show("CSV import error:\n" + ex.Message, "Error");
+        }
+    }
+
+    /// <summary>
+    /// Loads another .flp project as comparison overlays: its design profile
+    /// (from nodes) and/or its scan trace are added to _importedSeries, so they
+    /// render, list in the legend and clear exactly like imported CSVs.
+    /// </summary>
+    private void OverlayProject_Click(object sender, RoutedEventArgs e)
+    {
+        var dlg = new OpenFileDialog
+        {
+            Filter           = ProjectService.FileFilter,
+            Title            = "Overlay project for comparison",
+            InitialDirectory = ProjectService.DefaultProjectFolder
+        };
+        if (dlg.ShowDialog() != true) return;
+
+        try
+        {
+            var proj  = ProjectService.Load(dlg.FileName);
+            int added = 0;
+
+            if (proj.DesignNodes.Count >= 2)
+            {
+                var sorted = proj.DesignNodes.OrderBy(n => n.X).ToList();
+                _importedSeries.Add(new ImportedSeries
+                {
+                    Name  = $"{proj.Name} (design)",
+                    Xs    = sorted.Select(n => n.X).ToArray(),
+                    Ys    = sorted.Select(n => n.Y).ToArray(),
+                    Color = PickImportColor(_importedSeries.Count)
+                });
+                added++;
+            }
+
+            if (proj.ScanPoints.Count > 0)
+            {
+                var pts = proj.ScanPoints.OrderBy(p => p.X).ToList();
+                _importedSeries.Add(new ImportedSeries
+                {
+                    Name  = $"{proj.Name} (scan)",
+                    Xs    = pts.Select(p => p.X).ToArray(),
+                    Ys    = pts.Select(p => p.FilteredY).ToArray(),
+                    Color = PickImportColor(_importedSeries.Count)
+                });
+                added++;
+            }
+
+            if (added == 0)
+            {
+                MessageBox.Show("The selected project contains no design nodes and no scan points.",
+                                "Overlay Project", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            _lastImportedFile = Path.GetFileName(dlg.FileName);
+            RefreshPlot();
+            FitAfterRefresh();
+            RefreshStatusBar();
+            MarkDirty();
+            UiStatus = $"Overlay loaded: {proj.Name}  ({added} series)";
+        }
+        catch (Exception ex)
+        {
+            UiStatus = "Overlay import error";
+            MessageBox.Show("Could not load project overlay:\n" + ex.Message, "Error",
+                            MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 
