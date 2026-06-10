@@ -264,6 +264,13 @@
                 </StackPanel>
 
                 <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button Content="?"
+                            Style="{StaticResource BtnGhost}"
+                            Click="AboutBtn_Click"
+                            ToolTip="About FlyLine Profiler"
+                            Width="32" Height="32"
+                            FontSize="14" FontWeight="Bold"
+                            Margin="0,0,8,0"/>
                     <ToggleButton x:Name="DesignModeToggle"
                                   Content="Design Mode"
                                   Style="{StaticResource ToggleBase}"

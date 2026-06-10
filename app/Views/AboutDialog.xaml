@@ -1,0 +1,111 @@
+<Window
+    x:Class="DiametroLineaDesktop.Views.AboutDialog"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="About FlyLine Profiler"
+    Width="420" Height="320"
+    WindowStartupLocation="CenterOwner"
+    ResizeMode="NoResize"
+    Background="#12151C"
+    FontFamily="Segoe UI"
+    ShowInTaskbar="False">
+
+    <Window.Resources>
+        <SolidColorBrush x:Key="Accent"      Color="#2D7DD2"/>
+        <SolidColorBrush x:Key="TextPrimary" Color="#E2E8F4"/>
+        <SolidColorBrush x:Key="TextMuted"   Color="#7A8499"/>
+        <SolidColorBrush x:Key="PanelBg"     Color="#1C2030"/>
+        <SolidColorBrush x:Key="BorderCol"   Color="#2E3548"/>
+    </Window.Resources>
+
+    <Border Background="#1C2030" BorderBrush="#2E3548" BorderThickness="1" CornerRadius="10"
+            Margin="1">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <!-- Content -->
+            <StackPanel Grid.Row="0" VerticalAlignment="Center" HorizontalAlignment="Center"
+                        Margin="36,28,36,12">
+
+                <!-- Logo row -->
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,0,0,18">
+                    <Ellipse Width="14" Height="14" Fill="{StaticResource Accent}"
+                             VerticalAlignment="Center" Margin="0,0,10,0"/>
+                    <TextBlock Text="FlyLine Profiler"
+                               FontSize="22" FontWeight="Bold"
+                               Foreground="{StaticResource TextPrimary}"
+                               VerticalAlignment="Center"/>
+                </StackPanel>
+
+                <!-- Version -->
+                <TextBlock x:Name="VersionText"
+                           HorizontalAlignment="Center"
+                           FontSize="13" Foreground="{StaticResource Accent}"
+                           FontWeight="SemiBold" Margin="0,0,0,4"/>
+
+                <!-- Tagline -->
+                <TextBlock Text="Fly line diameter profiler &amp; design tool"
+                           HorizontalAlignment="Center"
+                           FontSize="12" Foreground="{StaticResource TextMuted}"
+                           Margin="0,0,0,20"/>
+
+                <!-- Divider -->
+                <Rectangle Height="1" Fill="#2E3548" Margin="0,0,0,16"/>
+
+                <!-- Author / company / year -->
+                <StackPanel HorizontalAlignment="Center" Margin="0,0,0,6">
+                    <TextBlock x:Name="AuthorText"
+                               HorizontalAlignment="Center"
+                               FontSize="12" Foreground="{StaticResource TextPrimary}"
+                               Margin="0,0,0,3"/>
+                    <TextBlock x:Name="CompanyText"
+                               HorizontalAlignment="Center"
+                               FontSize="11" Foreground="{StaticResource TextMuted}"
+                               Margin="0,0,0,3"/>
+                    <TextBlock x:Name="CopyrightText"
+                               HorizontalAlignment="Center"
+                               FontSize="11" Foreground="{StaticResource TextMuted}"/>
+                </StackPanel>
+
+                <!-- Framework note -->
+                <TextBlock Text=".NET 8 · WPF · ScottPlot 5"
+                           HorizontalAlignment="Center"
+                           FontSize="10" Foreground="#444D62"
+                           Margin="0,14,0,0"/>
+            </StackPanel>
+
+            <!-- Footer button -->
+            <Border Grid.Row="1"
+                    BorderBrush="#2E3548" BorderThickness="0,1,0,0"
+                    Padding="0,12">
+                <Button Content="OK"
+                        Click="OkBtn_Click"
+                        Width="90" Height="32"
+                        HorizontalAlignment="Center"
+                        FontSize="12" FontWeight="SemiBold"
+                        Foreground="White" BorderThickness="0"
+                        Cursor="Hand">
+                    <Button.Template>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="Bd" Background="#2D7DD2" CornerRadius="8"
+                                    Padding="{TemplateBinding Padding}">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="Bd" Property="Opacity" Value="0.80"/>
+                                </Trigger>
+                                <Trigger Property="IsPressed" Value="True">
+                                    <Setter TargetName="Bd" Property="Opacity" Value="0.60"/>
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Button.Template>
+                </Button>
+            </Border>
+        </Grid>
+    </Border>
+</Window>

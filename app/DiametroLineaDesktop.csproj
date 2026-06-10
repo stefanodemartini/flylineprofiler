@@ -8,6 +8,9 @@
     <AssemblyName>FlyLineProfiler</AssemblyName>
     <RootNamespace>DiametroLineaDesktop</RootNamespace>
     <Product>FlyLine Profiler</Product>
+    <Version>1.0.0</Version>
+    <Copyright>© 2026 Stefano De Martini</Copyright>
+    <Company>RazorBlade Fly Lines</Company>
     <ApplicationIcon>Assets\icon.ico</ApplicationIcon>
     <!-- Bundle native DLLs (WPF/SkiaSharp) into the single-file exe so it runs standalone -->
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>

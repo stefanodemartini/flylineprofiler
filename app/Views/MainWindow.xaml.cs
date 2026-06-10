@@ -55,6 +55,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         set { _colorNote = value; OnPropertyChanged(nameof(ColorNote)); MarkDirty(); }
     }
 
+    // Hover measurement annotation on the chart (re-created each mouse move)
+    private ScottPlot.Plottables.Text?         _hoverLabel;
+    private ScottPlot.Plottables.VerticalLine? _hoverLine;
+
     // Node drag state
     private double? _draggingNodeX = null;
     private const double DragHitRadiusPx = 12.0;
@@ -185,6 +189,19 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             RefreshStatusBar();
             UpdateProjectTitle();
             ApplyCompTarget(); // populate cm/s label with initial value
+
+            // Open .flp passed on the command line (double-click via file association)
+            var args = Environment.GetCommandLineArgs();
+            if (args.Length > 1 && System.IO.File.Exists(args[1])
+                && args[1].EndsWith(".flp", StringComparison.OrdinalIgnoreCase))
+            {
+                try { LoadProjectFromFile(args[1]); }
+                catch (Exception ex)
+                {
+                    MessageBox.Show($"Could not open project:\n{ex.Message}", "Error",
+                                    MessageBoxButton.OK, MessageBoxImage.Error);
+                }
+            }
         };
 
         Closing += MainWindow_Closing;
@@ -230,7 +247,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         PlotControl.PreviewMouseMove            += PlotControl_PreviewMouseMove;
         PlotControl.PreviewMouseLeftButtonUp    += PlotControl_PreviewMouseLeftButtonUp;
         PlotControl.PreviewMouseDoubleClick     += PlotControl_PreviewMouseDoubleClick;
-        PlotControl.MouseLeave                  += (_, _) => HoverCoordsStatus = string.Empty;
+        PlotControl.MouseLeave                  += (_, _) =>
+        {
+            HoverCoordsStatus = string.Empty;
+            UpdateHoverAnnotation(null, 0, 0);
+        };
 
         _plotInitialized = true;
         ColorSections.CollectionChanged += (_, _) => { RefreshPlot(); MarkDirty(); };
@@ -419,6 +440,33 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     {
         PlotControl.Plot.Axes.AutoScale();
         PlotControl.Refresh();
+    }
+
+    /// <summary>
+    /// Called after adding/dragging a node.  Guarantees the chart X range is wide
+    /// enough that the user can click at new integer positions to place more nodes.
+    /// Without this, AutoScale collapses to just the node span (e.g. X:[0,1]) and
+    /// every subsequent click rounds to an already-existing node X, replacing it.
+    /// </summary>
+    private void EnsureWideDrawingView(double anchorX)
+    {
+        const double MinViewWidth = 1500.0; // cm — enough to cover any fly line
+
+        var lim = PlotControl.Plot.Axes.GetLimits();
+
+        // Derive a span that covers all nodes + generous margins.
+        double nodesXMin = _segmentNodes.Count > 0 ? _segmentNodes.Min(n => n.X) : anchorX;
+        double nodesXMax = _segmentNodes.Count > 0 ? _segmentNodes.Max(n => n.X) : anchorX;
+        double wantLeft  = Math.Min(nodesXMin - 150, 0);
+        double wantRight = Math.Max(nodesXMax + 500, wantLeft + MinViewWidth);
+
+        // Only intervene when the current X range is too narrow.
+        // (If the user scrolled/zoomed to a useful view, respect it.)
+        if (lim.Rect.Width < MinViewWidth)
+        {
+            PlotControl.Plot.Axes.SetLimits(wantLeft, wantRight, lim.Bottom, lim.Top);
+            PlotControl.Refresh();
+        }
     }
 
     // ── Analysis chart: mass/unit-length + cumulative grain weight ────────────
@@ -2194,8 +2242,14 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _segmentNodes.Add((snappedX, diameter));
         _segmentUndoStack.Push(snappedX);
 
-        RefreshPlot();
-        FitAfterRefresh();
+        RefreshPlot();   // redraws + AutoScale (if _autoFitEnabled) — may collapse X range
+
+        // After AutoScale the X range can collapse to the pixel-width of the node span
+        // (e.g. [0, 1] for two consecutive nodes), making Math.Round(coords.X) always
+        // return an existing node X and preventing new nodes from ever being placed.
+        // Fix: always ensure at least 1500 cm is visible so the user can click freely.
+        EnsureWideDrawingView(snappedX);
+
         RefreshSegmentTable();
         MarkDirty();
         var hint = (Keyboard.IsKeyDown(Key.LeftShift) || Keyboard.IsKeyDown(Key.RightShift))
@@ -2210,7 +2264,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         var coords = PlotControl.Plot.GetCoordinates(new Pixel((float)pos.X, (float)pos.Y));
 
         // Always update hover readout from nearest raw data point
-        UpdateHoverCoords(coords.X);
+        UpdateHoverCoords(coords.X, coords.Y);
 
         // ── Label drag ──────────────────────────────────────────────────────
         if (_draggingLabelNodeX.HasValue)
@@ -2245,26 +2299,103 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _draggingNodeX = newX;
 
         RefreshPlot();
-        FitAfterRefresh();
+        EnsureWideDrawingView(newX);
         RefreshSegmentTable();
         UiStatus = $"Node: {newX:0} cm  Ø {newDiameter:0.000} mm";
         e.Handled = true;
     }
 
-    private void UpdateHoverCoords(double plotX)
+    private void UpdateHoverCoords(double plotX, double plotY = double.NaN)
     {
+        var parts = new List<string>();
+
+        // ── Design layer: interpolated diameter between the two surrounding nodes ──
+        if (_designMode && _segmentNodes.Count >= 2)
+        {
+            var sorted = _segmentNodes.OrderBy(n => n.X).ToList();
+            if (plotX >= sorted[0].X && plotX <= sorted[^1].X)
+            {
+                // Which segment (S1, S2, …) is the cursor inside?
+                int segIdx = -1;
+                for (int i = 0; i < sorted.Count - 1; i++)
+                {
+                    if (plotX >= sorted[i].X && plotX <= sorted[i + 1].X) { segIdx = i; break; }
+                }
+                double designDiam = InterpolateProfileY(sorted, plotX);
+                string segName = segIdx >= 0 ? $"S{segIdx + 1}  " : "";
+                parts.Add($"{segName}Design Ø {designDiam:0.000} mm");
+            }
+        }
+
+        // ── Scan layer: nearest measured point ──────────────────────────────
         var pts = _vm.Points;
-        if (pts.Count == 0) { HoverCoordsStatus = string.Empty; return; }
+        if (pts.Count > 0)
+        {
+            var orderedPoints = pts.OrderBy(p => p.X).ToList();
+            var displayedYs = GetDisplayedSeries(orderedPoints);
+            int nearestIndex = orderedPoints
+                .Select((point, index) => new { point, index })
+                .OrderBy(item => Math.Abs(item.point.X - plotX))
+                .First()
+                .index;
+            parts.Add($"Scan Ø {displayedYs[nearestIndex]:0.000} mm");
+        }
 
-        var orderedPoints = pts.OrderBy(p => p.X).ToList();
-        var displayedYs = GetDisplayedSeries(orderedPoints);
-        int nearestIndex = orderedPoints
-            .Select((point, index) => new { point, index })
-            .OrderBy(item => Math.Abs(item.point.X - plotX))
-            .First()
-            .index;
+        if (parts.Count == 0)
+        {
+            HoverCoordsStatus = string.Empty;
+            UpdateHoverAnnotation(null, plotX, plotY);
+            return;
+        }
+        HoverCoordsStatus = $"{string.Join("   |   ", parts)}  @  {plotX:0.0} cm";
 
-        HoverCoordsStatus = $"Ø {displayedYs[nearestIndex]:0.000} mm  @  {orderedPoints[nearestIndex].X:0.0} cm";
+        // On-chart annotation: same info, stacked on multiple lines
+        string chartText = $"{string.Join("\n", parts)}\n@ {plotX:0.0} cm";
+        UpdateHoverAnnotation(chartText, plotX, plotY);
+    }
+
+    /// <summary>
+    /// Draws/updates the hover measurement on the chart: a dotted vertical tracking
+    /// line at the cursor X and a small label box with the measurements.
+    /// Pass null text to remove the annotation.
+    /// </summary>
+    private void UpdateHoverAnnotation(string? text, double x, double y)
+    {
+        var plot = PlotControl.Plot;
+        bool hadAnnotation = _hoverLabel != null || _hoverLine != null;
+
+        if (_hoverLabel != null) { plot.Remove(_hoverLabel); _hoverLabel = null; }
+        if (_hoverLine  != null) { plot.Remove(_hoverLine);  _hoverLine  = null; }
+
+        if (string.IsNullOrEmpty(text))
+        {
+            if (hadAnnotation) PlotControl.Refresh();
+            return;
+        }
+
+        _hoverLine = plot.Add.VerticalLine(x);
+        _hoverLine.Color       = new ScottColor(120, 120, 120).WithAlpha(0.45f);
+        _hoverLine.LineWidth   = 1f;
+        _hoverLine.LinePattern = LinePattern.Dotted;
+
+        // Anchor the label near the cursor; flip side past the middle so it stays inside the view
+        var lim = plot.Axes.GetLimits();
+        bool rightHalf = x > (lim.Left + lim.Right) / 2.0;
+        double ly = double.IsNaN(y) ? (lim.Bottom + lim.Top) / 2.0 : y;
+
+        _hoverLabel = plot.Add.Text(text, x, ly);
+        _hoverLabel.LabelFontSize        = 11;
+        _hoverLabel.LabelBold            = false;
+        _hoverLabel.LabelFontColor       = new ScottColor(30, 30, 30);
+        _hoverLabel.LabelBackgroundColor = ScottPlot.Colors.White.WithAlpha(0.92f);
+        _hoverLabel.LabelBorderColor     = new ScottColor(120, 120, 120);
+        _hoverLabel.LabelBorderWidth     = 1f;
+        _hoverLabel.LabelPadding         = 5;
+        _hoverLabel.LabelAlignment       = rightHalf ? Alignment.MiddleRight : Alignment.MiddleLeft;
+        _hoverLabel.OffsetX              = rightHalf ? -12 : 12;
+        _hoverLabel.OffsetY              = 0;
+
+        PlotControl.Refresh();
     }
 
     private void PlotControl_PreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
@@ -3398,6 +3529,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     {
         ScottColor[] palette = { Colors.Green, Colors.Red, Colors.Purple, Colors.Brown, Colors.Cyan, Colors.Magenta };
         return palette[index % palette.Length];
+    }
+
+    private void AboutBtn_Click(object sender, RoutedEventArgs e)
+    {
+        var dlg = new AboutDialog { Owner = this };
+        dlg.ShowDialog();
     }
 
     private class ImportedSeries
