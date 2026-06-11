@@ -128,7 +128,7 @@ public static class FlyLinePdfExporter
                         row.ConstantItem(110).AlignMiddle().Column(c =>
                         {
                             if (logoBytes != null)
-                                c.Item().Image(logoBytes).FitWidth();
+                                c.Item().PaddingBottom(8).Image(logoBytes).FitWidth();
                             else
                                 c.Item().Text("FlyLine Profiler")
                                     .FontSize(7).FontColor(ColMuted).Italic();
@@ -177,7 +177,11 @@ public static class FlyLinePdfExporter
                         SpecBlock("Head length",   headLenMm > 0 ? $"{headLenMm / 10.0:0.0} cm  ({headLenMm / 304.8:0.0} ft)" : "—", ColText);
                         SpecBlock("Head weight",   headMassGr > 0 ? $"{headMassGr:0.0} gr" : "—", ColAccent2);
                         SpecBlock("Total weight",  totalMassGr > 0 ? $"{totalMassGr:0.0} gr" : "—", ColText);
-                        SpecBlock("AFFTA",         afftaBadge,    ColAccent2);
+                        // Column header already says "AFFTA" — drop the word from the value
+                        string afftaValue = afftaBadge.StartsWith("AFFTA", StringComparison.OrdinalIgnoreCase)
+                            ? afftaBadge.Substring(5).TrimStart()
+                            : afftaBadge;
+                        SpecBlock("AFFTA",         afftaValue,    ColAccent2);
                     });
 
                     col.Item().LineHorizontal(0.5f).LineColor(ColBorder);

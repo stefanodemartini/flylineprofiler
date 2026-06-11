@@ -390,9 +390,10 @@
                     <Button Content="Export PNG"
                             Style="{StaticResource BtnSecondary}"
                             Click="ExportPng_Click"/>
-                    <Button Content="Clear Imported"
+                    <Button Content="Clear Overlays"
                             Style="{StaticResource BtnGhost}"
-                            Click="ClearImported_Click"/>
+                            Click="ClearImported_Click"
+                            ToolTip="Remove all comparison overlays (imported CSVs and overlaid projects)"/>
 
                     <!-- Design-mode-only toolbar items — collapsed in scan mode -->
                     <StackPanel x:Name="DesignToolsPanel" Orientation="Horizontal">

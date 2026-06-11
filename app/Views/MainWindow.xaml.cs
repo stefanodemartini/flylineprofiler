@@ -740,6 +740,20 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private void SaveProjectToFile(string path)
     {
+        // Overlays are comparison aids, not project data — only persist them on request
+        var seriesToSave = _importedSeries;
+        if (_importedSeries.Count > 0)
+        {
+            string names = string.Join("\n", _importedSeries.Select(s => "  • " + s.Name));
+            var answer = MessageBox.Show(
+                $"Include the comparison overlays in the saved project?\n\n{names}\n\n" +
+                "Yes — overlays reappear when you reopen this project\n" +
+                "No — save the project without them (overlays stay on screen)",
+                "Save Overlays?", MessageBoxButton.YesNo, MessageBoxImage.Question);
+            if (answer != MessageBoxResult.Yes)
+                seriesToSave = new List<ImportedSeries>();
+        }
+
         var project = new FlyLineProject
         {
             Name               = _projectName,
@@ -754,7 +768,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                            .OrderBy(p => p.X)
                            .Select(p => new MeasurementPoint { X = p.X, RawY = p.RawY, FilteredY = p.FilteredY })
                            .ToList(),
-            ImportedSeries = _importedSeries
+            ImportedSeries = seriesToSave
                                .Select(s => new ProjectImportedSeries
                                {
                                    Name     = s.Name,
@@ -2665,15 +2679,25 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             var tl = plot.Add.Scatter(xs, topYs); tl.Color = dc; tl.LineWidth = 1.2f; tl.MarkerSize = 0;
             var bl = plot.Add.Scatter(xs, botYs); bl.Color = dc; bl.LineWidth = 1.2f; bl.MarkerSize = 0;
 
-            // Node labels + leaders (same logic as live chart)
+            // Node labels + leaders.  Collision-aware stagger: labels whose X is too
+            // close to an already-placed label on the same row get pushed one row down,
+            // so closely spaced nodes (e.g. 1750/1830/1850 cm) never overlap.
             var leaderColor = new ScottColor(100, 100, 100);
+            double xSpan    = sorted[^1].X - sorted[0].X;
+            double minXGap  = xSpan * 0.055;   // labels closer than this can't share a row
+            var lastXAtRow  = new double[] { double.NegativeInfinity, double.NegativeInfinity,
+                                             double.NegativeInfinity, double.NegativeInfinity };
+            double maxDiam  = sorted.Max(n => n.Y);
             for (int ni = 0; ni < sorted.Count; ni++)
             {
                 var node         = sorted[ni];
                 double chartYBot = -node.Y / 2.0;
-                double gap       = node.Y * 0.40;
+                double gap       = maxDiam * 0.40;   // uniform row height regardless of local diameter
+                int row = 0;
+                while (row < lastXAtRow.Length - 1 && node.X - lastXAtRow[row] < minXGap) row++;
+                lastXAtRow[row]  = node.X;
                 double defaultLX = node.X;
-                double defaultLY = chartYBot - gap * (ni % 2 == 0 ? 1.0 : 2.2);
+                double defaultLY = chartYBot - gap * (1.0 + row * 1.2);
                 var (lx, ly)     = _nodeLabelOffsets.TryGetValue(node.X, out var saved)
                                    ? saved : (defaultLX, defaultLY);
 
@@ -2736,7 +2760,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         plot.Axes.AutoScale();
         var yRange = plot.Axes.GetLimits().Rect.Height;
         var lim    = plot.Axes.GetLimits();
-        plot.Axes.SetLimitsY(lim.Bottom - yRange * 0.12, lim.Top + yRange * 0.18);
+        // Extra bottom margin: staggered node labels can occupy up to 4 rows below the profile
+        plot.Axes.SetLimitsY(lim.Bottom - yRange * 0.18, lim.Top + yRange * 0.18);
 
         return plot.GetImage(1600, 300).GetImageBytes(ScottPlot.ImageFormat.Png);
     }
@@ -3315,11 +3340,28 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private void ClearImported_Click(object sender, RoutedEventArgs e)
     {
+        if (_importedSeries.Count == 0)
+        {
+            UiStatus = "No overlays to remove";
+            return;
+        }
+
+        // With multiple overlays, let the user confirm what gets removed
+        if (_importedSeries.Count > 1)
+        {
+            string names = string.Join("\n", _importedSeries.Select(s => "  • " + s.Name));
+            var answer = MessageBox.Show(
+                $"Remove all {_importedSeries.Count} overlays?\n\n{names}",
+                "Clear Overlays", MessageBoxButton.YesNo, MessageBoxImage.Question);
+            if (answer != MessageBoxResult.Yes) return;
+        }
+
+        int removed = _importedSeries.Count;
         _importedSeries.Clear();
         _lastImportedFile = "-";
         RefreshPlot();
         MarkDirty();
-        UiStatus = "Imported series cleared";
+        UiStatus = $"Removed {removed} overlay(s)";
     }
 
     private void ShowScanBtn_Click(object sender, RoutedEventArgs e)
