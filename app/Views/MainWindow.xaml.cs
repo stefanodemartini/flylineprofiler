@@ -10,6 +10,10 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using WpfColor    = System.Windows.Media.Color;
 using ScottColor  = ScottPlot.Color;
+// WinForms is referenced only for ColorDialog — disambiguate the colliding event types
+using MouseEventArgs = System.Windows.Input.MouseEventArgs;
+using KeyEventArgs   = System.Windows.Input.KeyEventArgs;
+using MessageBox     = System.Windows.MessageBox;
 using Microsoft.Win32;
 using DiametroLineaDesktop.Models;
 using DiametroLineaDesktop.Services;
@@ -55,6 +59,13 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     {
         get => _colorNote;
         set { _colorNote = value; OnPropertyChanged(nameof(ColorNote)); MarkDirty(); }
+    }
+
+    private string _coreType = string.Empty;
+    public string CoreType
+    {
+        get => _coreType;
+        set { _coreType = value; OnPropertyChanged(nameof(CoreType)); MarkDirty(); }
     }
 
     // Hover measurement annotation on the chart (re-created each mouse move)
@@ -222,6 +233,16 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private void InitializeChartControls()
     {
+        CoreTypeCombo.ItemsSource = new[]
+        {
+            "Braided multifilament nylon",
+            "Braided monofilament nylon",
+            "Monofilament nylon (single strand)",
+            "GSP braid (Spectra / Dyneema)",
+            "Polyester (Dacron) braid",
+            "Kevlar / aramid braid",
+            "Coreless / PU monocore",
+        };
         SmoothingToggle.IsChecked = _vm.SmoothingEnabled;
         SmoothingAlphaSlider.Value = Math.Clamp(_vm.Settings.Chart.SmoothingAlpha, SmoothingAlphaSlider.Minimum, SmoothingAlphaSlider.Maximum);
         LineWidthSlider.Value = Math.Clamp(_vm.Settings.Chart.LineWidth, (int)LineWidthSlider.Minimum, (int)LineWidthSlider.Maximum);
@@ -611,13 +632,14 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             double headEnd   = headSegs.Count > 0 ? headSegs[^1].EndCm   : segs[^1].EndCm;
             double comPct    = (totalComX - headStart) / (headEnd - headStart) * 100.0;
 
-            var (comChar, comColor) = comPct switch
+            string comChar = FlyLinePdfExporter.ClassifyCom(comPct);
+            var comColor = comPct switch
             {
-                < 40  => ("Very tip-heavy — nymphing/streamer", new ScottColor(255, 100, 100)),
-                < 47  => ("Slightly front — versatile/presentation", new ScottColor(100, 220, 100)),
-                < 53  => ("Neutral — distance/loop efficiency", new ScottColor(100, 200, 255)),
-                < 58  => ("Slightly rear — distance oriented", new ScottColor(255, 180, 50)),
-                _     => ("Very rear-heavy — max distance", new ScottColor(255, 80, 80)),
+                < 40   => new ScottColor(255, 100, 100),
+                < 47   => new ScottColor(100, 220, 100),
+                <= 53  => new ScottColor(100, 200, 255),
+                <= 60  => new ScottColor(255, 180, 50),
+                _      => new ScottColor(255, 80, 80),
             };
 
             var comLine = ap.Add.VerticalLine(totalComX);
@@ -709,6 +731,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         ColorSections.Clear();
         _colorNote = string.Empty;
         OnPropertyChanged(nameof(ColorNote));
+        _coreType = string.Empty;
+        OnPropertyChanged(nameof(CoreType));
         // Reset profile colour field to default red (no side-effects during clear)
         _designLineColor = new ScottColor(220, 50, 50);
         if (ProfileColorBtn != null)
@@ -786,6 +810,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                             .ToList(),
             DesignLineColorHex = $"{_designLineColor.R:X2}{_designLineColor.G:X2}{_designLineColor.B:X2}",
             ColorNote     = _colorNote,
+            CoreType      = _coreType,
             ColorSections = ColorSections.Select(s => new LineColorSection
                             {
                                 StartCm  = s.StartCm,
@@ -858,6 +883,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             });
         _colorNote = project.ColorNote ?? string.Empty;
         OnPropertyChanged(nameof(ColorNote));
+        _coreType = project.CoreType ?? string.Empty;
+        OnPropertyChanged(nameof(CoreType));
 
         // Restore segment metadata (names, spec weights, head flag)
         _segmentMetadata.Clear();
@@ -2011,6 +2038,14 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         set { _totalVolumeText = value; OnPropertyChanged(nameof(TotalVolumeText)); }
     }
 
+    // Hover description of the taper character (null hides the tooltip entirely)
+    private string? _taperDescription;
+    public string? TaperDescription
+    {
+        get => _taperDescription;
+        set { _taperDescription = value; OnPropertyChanged(nameof(TaperDescription)); }
+    }
+
     public bool UseSharedDensity
     {
         get => _useSharedDensity;
@@ -2599,6 +2634,44 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 System.Windows.Media.Color.FromRgb(255, 220, 220));
     }
 
+    /// <summary>Opens the full Windows colour dialog; returns 6-char hex or null if cancelled.</summary>
+    private string? ShowColorDialog(string currentHex)
+    {
+        var dlg = new System.Windows.Forms.ColorDialog
+        {
+            FullOpen = true,   // open with the custom-colour panel already expanded
+            AnyColor = true
+        };
+        try
+        {
+            string h = currentHex.TrimStart('#');
+            if (h.Length == 6)
+                dlg.Color = System.Drawing.Color.FromArgb(
+                    Convert.ToByte(h[0..2], 16), Convert.ToByte(h[2..4], 16), Convert.ToByte(h[4..6], 16));
+        }
+        catch { }
+
+        return dlg.ShowDialog() == System.Windows.Forms.DialogResult.OK
+            ? $"{dlg.Color.R:X2}{dlg.Color.G:X2}{dlg.Color.B:X2}"
+            : null;
+    }
+
+    private void PickProfileColor_Click(object sender, RoutedEventArgs e)
+    {
+        var hex = ShowColorDialog(HexColorBox.Text);
+        if (hex == null) return;
+        HexColorBox.Text = hex;
+        if (ApplyDesignColor(hex)) ColorPickerPopup.IsOpen = false;
+    }
+
+    private void PickSectionColor_Click(object sender, RoutedEventArgs e)
+    {
+        var hex = ShowColorDialog(SectionHexBox.Text);
+        if (hex == null) return;
+        SectionHexBox.Text = hex;
+        if (ApplySectionColor(hex)) SectionColorPopup.IsOpen = false;
+    }
+
     private bool ApplyDesignColor(string hex6)
     {
         try
@@ -2790,7 +2863,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 .ToList();
             string designHex = $"{_designLineColor.Red:X2}{_designLineColor.Green:X2}{_designLineColor.Blue:X2}";
             FlyLinePdfExporter.Export(dlg.FileName, _projectName, RenderPdfChart(), ProjectSegments.ToList(),
-                _isSinking, _isFullLine, _waterIsSalt, _waterTempC, AfftaBadge, _colorNote, pdfSections, designHex);
+                _isSinking, _isFullLine, _waterIsSalt, _waterTempC, AfftaBadge, _colorNote, pdfSections, designHex,
+                _coreType);
             UiStatus = $"PDF exported: {System.IO.Path.GetFileName(dlg.FileName)}";
         }
         catch (Exception ex)
@@ -3596,7 +3670,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private void RefreshTotals()
     {
-        if (ProjectSegments.Count == 0) { TotalVolumeText = string.Empty; return; }
+        if (ProjectSegments.Count == 0) { TotalVolumeText = string.Empty; TaperDescription = null; return; }
 
         double totalVol  = ProjectSegments.Sum(s => s.VolumeCm3);
         bool   hasMass   = ProjectSegments.All(s => s.SpecWeightGCm3 > 0);
@@ -3615,6 +3689,26 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             sb.Append($"  |  Head: {headVol:0.00} cm³");
             if (hasMass) sb.Append($" / {headMass:0.00} g");
         }
+
+        // Centre of mass of the head (whole line if no head flagged), % from front tip
+        var comSegs = hasHeads ? headSegs : ProjectSegments.ToList();
+        var (comPct, rgPct, _) = FlyLinePdfExporter.ComputeMassCentroid(comSegs);
+        if (comPct >= 0)
+            sb.Append($"  |  CoM: {comPct:0.0}%  Rg: {rgPct:0.0}%  —  {FlyLinePdfExporter.ClassifyCom(comPct)}");
+        string desc = FlyLinePdfExporter.DescribeTaper(comPct, rgPct);
+        TaperDescription = string.IsNullOrEmpty(desc) ? null : desc;
+
+        // Set tooltip directly — ElementName bindings don't resolve inside ToolTips
+        TotalsText.ToolTip = TaperDescription == null
+            ? null
+            : new System.Windows.Controls.TextBlock
+              {
+                  Text = TaperDescription,
+                  MaxWidth = 420,
+                  TextWrapping = TextWrapping.Wrap,
+                  FontSize = 12
+              };
+
         sb.Append($"  |  {ProjectSegments.Count} segments");
 
         TotalVolumeText = sb.ToString();

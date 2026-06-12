@@ -3,6 +3,8 @@
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
+    <!-- WinForms only for System.Windows.Forms.ColorDialog (visual colour picker) -->
+    <UseWindowsForms>true</UseWindowsForms>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>FlyLineProfiler</AssemblyName>
@@ -15,6 +17,12 @@
     <!-- Bundle native DLLs (WPF/SkiaSharp) into the single-file exe so it runs standalone -->
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
   </PropertyGroup>
+  <ItemGroup>
+    <!-- WinForms is only for ColorDialog; drop its implicit global using so it
+         doesn't collide with WPF types (Application, TextBox, Cursors, …) -->
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
+  </ItemGroup>
   <ItemGroup>
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
     <PackageReference Include="Fluent.Ribbon" Version="10.0.3" />

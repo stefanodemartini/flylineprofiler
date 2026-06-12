@@ -478,6 +478,10 @@
                                             <Button Click="Swatch_Click" Tag="#FF3CAC" Width="22" Height="22" Margin="2" Background="#FF3CAC" BorderThickness="0" ToolTip="#FF3CAC"/>
                                             <Button Click="Swatch_Click" Tag="#AAAAAA" Width="22" Height="22" Margin="2" Background="#AAAAAA" BorderThickness="0" ToolTip="#AAAAAA"/>
                                         </WrapPanel>
+                                        <Button Content="🎨 More colours…"
+                                                Margin="0,8,0,0" Height="24" FontSize="11"
+                                                Click="PickProfileColor_Click"
+                                                ToolTip="Open the full colour picker"/>
                                     </StackPanel>
                                 </Border>
                             </Popup>
@@ -827,11 +831,13 @@
                                    VerticalAlignment="Center"/>
                     </Border>
 
-                    <TextBlock Text="{Binding ElementName=MainWin, Path=TotalVolumeText}"
+                    <TextBlock x:Name="TotalsText"
+                               Text="{Binding ElementName=MainWin, Path=TotalVolumeText}"
                                FontSize="11" FontWeight="SemiBold"
                                Foreground="{StaticResource Success}"
                                VerticalAlignment="Center"
-                               Margin="0,0,16,0"/>
+                               Margin="0,0,16,0"
+                               ToolTipService.ShowDuration="60000"/>
                     <!-- Shared density controls -->
                     <CheckBox Content="Same density"
                               IsChecked="{Binding ElementName=MainWin, Path=UseSharedDensity}"
@@ -1068,8 +1074,20 @@
                     </Border>
                 </DockPanel>
 
-                <!-- Right: colour note field -->
+                <!-- Right: core + colour note fields -->
                 <DockPanel Grid.Column="1">
+                    <TextBlock DockPanel.Dock="Top"
+                               Text="Core (printed in PDF)"
+                               FontSize="11" FontWeight="SemiBold"
+                               Foreground="{StaticResource TextMuted}"
+                               Margin="0,0,0,3"/>
+                    <ComboBox x:Name="CoreTypeCombo"
+                              DockPanel.Dock="Top"
+                              IsEditable="True"
+                              Text="{Binding ElementName=MainWin, Path=CoreType, UpdateSourceTrigger=LostFocus}"
+                              FontSize="11"
+                              Margin="0,0,0,8"
+                              ToolTip="Core material — pick a common type or type your own"/>
                     <TextBlock DockPanel.Dock="Top"
                                Text="Color note (printed in PDF)"
                                FontSize="11" FontWeight="SemiBold"
@@ -1132,6 +1150,10 @@
                         <Button Click="SectionSwatch_Click" Tag="#222222" Width="22" Height="22" Margin="2" Background="#222222" BorderThickness="0" ToolTip="Black"/>
                         <Button Click="SectionSwatch_Click" Tag="#AAAAAA" Width="22" Height="22" Margin="2" Background="#AAAAAA" BorderThickness="0" ToolTip="Grey"/>
                     </WrapPanel>
+                    <Button Content="🎨 More colours…"
+                            Margin="0,8,0,0" Height="24" FontSize="11"
+                            Click="PickSectionColor_Click"
+                            ToolTip="Open the full colour picker"/>
                 </StackPanel>
             </Border>
         </Popup>

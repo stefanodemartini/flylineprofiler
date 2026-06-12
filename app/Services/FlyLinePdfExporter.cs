@@ -32,6 +32,126 @@ public static class FlyLinePdfExporter
     private static readonly PdfColor ColRed      = C("C0392B");
     private static readonly PdfColor ColBlue     = C("1A5276");
 
+    /// <summary>
+    /// Centre of mass and radius of gyration of a segment set, both as % of its
+    /// total length measured from the front (lowest StartCm).
+    /// Mass inside each segment is distributed proportionally to diameter², so
+    /// tapers weigh more toward their thick end; per-segment densities are
+    /// honoured because each segment's own MassG is what gets distributed.
+    /// Returns (-1, -1) when no mass is defined.
+    /// </summary>
+    public static (double ComPct, double RgPct, double ComCm) ComputeMassCentroid(List<ProjectSegment> segs)
+    {
+        var withMass = segs.Where(s => s.MassG > 0 && s.EndCm > s.StartCm).ToList();
+        if (withMass.Count == 0) return (-1, -1, -1);
+
+        double x0 = withMass.Min(s => s.StartCm);
+        double x1 = withMass.Max(s => s.EndCm);
+        double len = x1 - x0;
+        if (len <= 0) return (-1, -1, -1);
+
+        const int SlicesPerSegment = 100;
+        double m = 0, mx = 0, mxx = 0;
+        foreach (var seg in withMass)
+        {
+            double dx = (seg.EndCm - seg.StartCm) / SlicesPerSegment;
+            // raw d² weights of each slice, then scale so they sum to the segment's mass
+            double wSum = 0;
+            var w  = new double[SlicesPerSegment];
+            var xc = new double[SlicesPerSegment];
+            for (int i = 0; i < SlicesPerSegment; i++)
+            {
+                double t = (i + 0.5) / SlicesPerSegment;
+                double d = seg.StartDiameterMm + t * (seg.EndDiameterMm - seg.StartDiameterMm);
+                w[i]  = d * d;
+                xc[i] = seg.StartCm + (i + 0.5) * dx;
+                wSum += w[i];
+            }
+            if (wSum <= 0) continue;
+            double scale = seg.MassG / wSum;
+            for (int i = 0; i < SlicesPerSegment; i++)
+            {
+                double mi = w[i] * scale;
+                m   += mi;
+                mx  += mi * xc[i];
+                mxx += mi * xc[i] * xc[i];
+            }
+        }
+        if (m <= 0) return (-1, -1, -1);
+
+        double com = mx / m;
+        double var = Math.Max(0, mxx / m - com * com);
+        double rg  = Math.Sqrt(var);
+        return ((com - x0) / len * 100.0, rg / len * 100.0, com);
+    }
+
+    /// <summary>Taper character from head CoM%: power ↔ distance spectrum.</summary>
+    public static string ClassifyCom(double comPct) => comPct switch
+    {
+        < 0    => "",
+        < 40   => "Front-loaded · power",
+        < 47   => "Semi front-loaded",
+        <= 53  => "Neutral · all-round",
+        <= 60  => "Semi rear-loaded",
+        _      => "Rear-loaded · distance",
+    };
+
+    /// <summary>
+    /// Full plain-language character description for any (CoM%, Rg%) combination.
+    /// Composed from a CoM clause (where the mass sits → energy release timing),
+    /// an Rg clause (how concentrated → punchy vs smooth), and a combined verdict.
+    /// </summary>
+    public static string DescribeTaper(double comPct, double rgPct)
+    {
+        if (comPct < 0) return "";
+
+        // ── CoM: where the punch is ────────────────────────────────────────
+        string comTxt = comPct switch
+        {
+            < 40  => $"CoM {comPct:0.0}% — strongly front-loaded. The mass is concentrated toward the tip, " +
+                     "so energy is released early and violently: turnover is guaranteed and forceful, " +
+                     "ideal for heavy/bulky flies, sink tips and wind, at the cost of delicacy and distance.",
+            < 47  => $"CoM {comPct:0.0}% — semi front-loaded. Mild forward bias: turnover is assured and " +
+                     "slightly assertive without slapping down. Forgiving of an imperfect stroke.",
+            <= 53 => $"CoM {comPct:0.0}% — neutral. Mass is centred, loops are stable and symmetric. " +
+                     "Excellent control and roll-casting; turnover relies on the caster, not the line.",
+            <= 60 => $"CoM {comPct:0.0}% — semi rear-loaded. The momentum reserve is held toward the back, " +
+                     "so the loop accelerates late in flight: good carry and distance with a still-manageable stroke.",
+            _     => $"CoM {comPct:0.0}% — strongly rear-loaded. Energy stays in the moving leg until the very " +
+                     "end of the unroll: maximum distance and the softest landings, but it stalls into wind, " +
+                     "wants light flies and demands a clean, well-timed stroke.",
+        };
+
+        // ── Rg: how punchy vs smooth ───────────────────────────────────────
+        string rgTxt = rgPct switch
+        {
+            < 0    => "",
+            < 20   => $"Rg {rgPct:0.0}% — mass packed into a compact lump: the head behaves like a projectile. " +
+                      "Abrupt, kicky energy delivery; turnover hits hard and the feel is decidedly punchy.",
+            < 25.5 => $"Rg {rgPct:0.0}% — moderately distributed mass: a balance of punch and smoothness, " +
+                      "with a defined but not brutal kick at turnover.",
+            _      => $"Rg {rgPct:0.0}% — mass spread along most of the head (a uniform line is ~29%): energy " +
+                      "flows progressively through the loop. Smooth, stable carry and a gentle, even turnover.",
+        };
+
+        // ── Combined verdict ───────────────────────────────────────────────
+        string verdict = (comPct, rgPct) switch
+        {
+            (< 40, < 20)        => "Verdict: Skagit-style — a compact front lump that muscles big flies and tips anywhere. Not a presentation or distance tool.",
+            (< 40, _)           => "Verdict: power taper with a softened delivery — drives big flies but with a smoother feel than a pure Skagit.",
+            (< 47, < 20)        => "Verdict: compact versatile head — quick-loading and punchy, suited to tight casts and streamers at short-medium range.",
+            (< 47, _)           => "Verdict: classic all-rounder with reliable turnover — general-purpose WF character, forgiving and pleasant.",
+            (<= 53, < 20)       => "Verdict: centred but concentrated — quick-loading head for compact strokes; punchy yet controllable.",
+            (<= 53, _)          => "Verdict: true neutral — long-belly/DT character. Control, mends and roll casts above all.",
+            (<= 60, < 20)       => "Verdict: rear lump — shooting-head logic with a hard late kick; long casts with an abrupt finish.",
+            (<= 60, _)          => "Verdict: distance taper — Scandi-like progressive carry with late energy release and soft presentation.",
+            (_, < 20)           => "Verdict: extreme rear lump — maximum launch for experts; unforgiving timing, brutal late kick.",
+            _                   => "Verdict: long-range presentation head — the longest smooth carry, light flies and calm air only.",
+        };
+
+        return $"{comTxt}\n\n{rgTxt}\n\n{verdict}";
+    }
+
     public static void Export(
         string outputPath,
         string projectName,
@@ -44,7 +164,8 @@ public static class FlyLinePdfExporter
         string afftaBadge,
         string colorNote = "",
         List<LineColorSection>? colorSections = null,
-        string designColorHex = "DC3232")
+        string designColorHex = "DC3232",
+        string coreType = "")
     {
         QuestPDF.Settings.License = LicenseType.Community;
 
@@ -172,11 +293,19 @@ public static class FlyLinePdfExporter
                         }
                         SpecBlock("Type",          lineType,      ColText);
                         SpecBlock("Format",        lineFormat,    ColText);
+                        if (!string.IsNullOrWhiteSpace(coreType))
+                            SpecBlock("Core",      coreType,      ColText);
                         SpecBlock("Head density",  densityRange,  ColAccent);
                         SpecBlock("Total length",  $"{totalLenMm / 10.0:0.0} cm  ({totalLenMm / 304.8:0.0} ft)", ColText);
                         SpecBlock("Head length",   headLenMm > 0 ? $"{headLenMm / 10.0:0.0} cm  ({headLenMm / 304.8:0.0} ft)" : "—", ColText);
                         SpecBlock("Head weight",   headMassGr > 0 ? $"{headMassGr:0.0} gr" : "—", ColAccent2);
                         SpecBlock("Total weight",  totalMassGr > 0 ? $"{totalMassGr:0.0} gr" : "—", ColText);
+                        // Centre of mass of the head, % from the front tip + character
+                        var (comPct, rgPct, _) = ComputeMassCentroid(headSegs);
+                        SpecBlock("CoM (head)",
+                                  comPct >= 0 ? $"{comPct:0.0}%  ·  Rg {rgPct:0.0}%" : "—",
+                                  ColAccent);
+                        SpecBlock("Character", ClassifyCom(comPct), ColText);
                         // Column header already says "AFFTA" — drop the word from the value
                         string afftaValue = afftaBadge.StartsWith("AFFTA", StringComparison.OrdinalIgnoreCase)
                             ? afftaBadge.Substring(5).TrimStart()
@@ -190,19 +319,19 @@ public static class FlyLinePdfExporter
                     col.Item().Image(chartBytes).FitWidth();
 
                     // ── Colour legend — always present ────────────────────
-                    // Build list of entries: sections if defined, else single design-colour entry
+                    // Base line colour first (it covers everything the sections don't),
+                    // then one entry per colour section with its range.
                     var legendEntries = new List<(string Hex, string Label, string Range)>();
-                    if (colorSections != null && colorSections.Count > 0)
+                    bool hasSections = colorSections != null && colorSections.Count > 0;
+                    legendEntries.Add((designColorHex.TrimStart('#'),
+                                       hasSections ? "Base colour" : "Line colour", ""));
+                    if (hasSections)
                     {
-                        foreach (var cs in colorSections)
+                        foreach (var cs in colorSections!)
                         {
                             string range = $"{cs.StartCm:0.0}–{cs.EndCm:0.0} cm";
                             legendEntries.Add((cs.ColorHex.TrimStart('#'), cs.Label ?? "", range));
                         }
-                    }
-                    else
-                    {
-                        legendEntries.Add((designColorHex.TrimStart('#'), "Line colour", ""));
                     }
 
                     col.Item().Background(C("F7F8FA"))

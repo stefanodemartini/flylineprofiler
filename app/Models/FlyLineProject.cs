@@ -35,6 +35,8 @@ public class FlyLineProject
     public string DesignLineColorHex { get; set; } = "DC3232";
     /// <summary>Free-text colour description shown in the PDF (e.g. "Red / White / Green in equal parts").</summary>
     public string ColorNote { get; set; } = string.Empty;
+    /// <summary>Core material (e.g. "Braided multifilament nylon", "GSP (Spectra/Dyneema) braid").</summary>
+    public string CoreType { get; set; } = string.Empty;
     /// <summary>Coloured bands painted over the profile, independent of nodes.</summary>
     public List<LineColorSection> ColorSections { get; set; } = new();
 }
