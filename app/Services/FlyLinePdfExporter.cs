@@ -165,7 +165,8 @@ public static class FlyLinePdfExporter
         string colorNote = "",
         List<LineColorSection>? colorSections = null,
         string designColorHex = "DC3232",
-        string coreType = "")
+        string coreType = "",
+        string laserMark = "")
     {
         QuestPDF.Settings.License = LicenseType.Community;
 
@@ -372,16 +373,34 @@ public static class FlyLinePdfExporter
                         }
                     });
 
-                    // ── Colour note (if defined) ───────────────────────────
-                    if (!string.IsNullOrWhiteSpace(colorNote))
+                    // ── Colour note / laser mark (if defined) ──────────────
+                    if (!string.IsNullOrWhiteSpace(colorNote) || !string.IsNullOrWhiteSpace(laserMark))
                     {
-                        col.Item().Background(C("FFF8E8"))
-                            .Border(0.5f).BorderColor(C("E8C060"))
-                            .Padding(5).Text(t =>
+                        col.Item().Row(noteRow =>
+                        {
+                            if (!string.IsNullOrWhiteSpace(colorNote))
                             {
-                                t.Span("Color:  ").FontSize(7.5f).FontColor(ColMuted).Bold();
-                                t.Span(colorNote).FontSize(8.5f).Bold().FontColor(C("B87D20"));
-                            });
+                                noteRow.RelativeItem().Background(C("FFF8E8"))
+                                    .Border(0.5f).BorderColor(C("E8C060"))
+                                    .Padding(5).Text(t =>
+                                    {
+                                        t.Span("Color:  ").FontSize(7.5f).FontColor(ColMuted).Bold();
+                                        t.Span(colorNote).FontSize(8.5f).Bold().FontColor(C("B87D20"));
+                                    });
+                                if (!string.IsNullOrWhiteSpace(laserMark))
+                                    noteRow.ConstantItem(6);
+                            }
+                            if (!string.IsNullOrWhiteSpace(laserMark))
+                            {
+                                noteRow.RelativeItem().Background(C("EDF4FB"))
+                                    .Border(0.5f).BorderColor(C("9DBEDC"))
+                                    .Padding(5).Text(t =>
+                                    {
+                                        t.Span("Laser mark:  ").FontSize(7.5f).FontColor(ColMuted).Bold();
+                                        t.Span(laserMark).FontSize(8.5f).Bold().FontColor(C("2A5E8C"));
+                                    });
+                            }
+                        });
                     }
 
                     col.Item().LineHorizontal(0.5f).LineColor(ColBorder);

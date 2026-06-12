@@ -68,6 +68,27 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         set { _coreType = value; OnPropertyChanged(nameof(CoreType)); MarkDirty(); }
     }
 
+    private string _laserMark = string.Empty;
+    public string LaserMark
+    {
+        get => _laserMark;
+        set { _laserMark = value; OnPropertyChanged(nameof(LaserMark)); MarkDirty(); }
+    }
+
+    private string _laserMarkFromTip = string.Empty;
+    public string LaserMarkFromTip
+    {
+        get => _laserMarkFromTip;
+        set { _laserMarkFromTip = value; OnPropertyChanged(nameof(LaserMarkFromTip)); MarkDirty(); }
+    }
+
+    private string _laserMarkFromEnd = string.Empty;
+    public string LaserMarkFromEnd
+    {
+        get => _laserMarkFromEnd;
+        set { _laserMarkFromEnd = value; OnPropertyChanged(nameof(LaserMarkFromEnd)); MarkDirty(); }
+    }
+
     // Hover measurement annotation on the chart (re-created each mouse move)
     private ScottPlot.Plottables.Text?         _hoverLabel;
     private ScottPlot.Plottables.VerticalLine? _hoverLine;
@@ -735,6 +756,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         OnPropertyChanged(nameof(ColorNote));
         _coreType = string.Empty;
         OnPropertyChanged(nameof(CoreType));
+        _laserMark = string.Empty;
+        OnPropertyChanged(nameof(LaserMark));
+        _laserMarkFromTip = string.Empty;
+        OnPropertyChanged(nameof(LaserMarkFromTip));
+        _laserMarkFromEnd = string.Empty;
+        OnPropertyChanged(nameof(LaserMarkFromEnd));
         // Reset profile colour field to default red (no side-effects during clear)
         _designLineColor = new ScottColor(220, 50, 50);
         if (ProfileColorBtn != null)
@@ -813,6 +840,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             DesignLineColorHex = $"{_designLineColor.R:X2}{_designLineColor.G:X2}{_designLineColor.B:X2}",
             ColorNote     = _colorNote,
             CoreType      = _coreType,
+            LaserMark     = _laserMark,
+            LaserMarkFromTipMm = _laserMarkFromTip,
+            LaserMarkFromEndMm = _laserMarkFromEnd,
             ColorSections = ColorSections.Select(s => new LineColorSection
                             {
                                 StartCm  = s.StartCm,
@@ -887,6 +917,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         OnPropertyChanged(nameof(ColorNote));
         _coreType = project.CoreType ?? string.Empty;
         OnPropertyChanged(nameof(CoreType));
+        _laserMark = project.LaserMark ?? string.Empty;
+        OnPropertyChanged(nameof(LaserMark));
+        _laserMarkFromTip = project.LaserMarkFromTipMm ?? string.Empty;
+        OnPropertyChanged(nameof(LaserMarkFromTip));
+        _laserMarkFromEnd = project.LaserMarkFromEndMm ?? string.Empty;
+        OnPropertyChanged(nameof(LaserMarkFromEnd));
 
         // Restore segment metadata (names, spec weights, head flag)
         _segmentMetadata.Clear();
@@ -2854,7 +2890,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 double topAtCx = InterpolateProfileY(sorted, cx) / 2.0;
                 double gap     = InterpolateProfileY(sorted, cx) * 0.08;
                 var sl = plot.Add.Text($"S{si + 1}", cx, topAtCx + gap);
-                sl.LabelFontSize        = 15;
+                sl.LabelFontSize        = 11;
                 sl.LabelBold            = false;
                 sl.LabelFontColor       = segLabelColor;
                 sl.LabelAlignment       = Alignment.LowerCenter;
@@ -2903,9 +2939,20 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     { StartCm = s.StartCm, EndCm = s.EndCm, ColorHex = s.ColorHex, Label = s.Label })
                 .ToList();
             string designHex = $"{_designLineColor.Red:X2}{_designLineColor.Green:X2}{_designLineColor.Blue:X2}";
+            // Append mark positions (mm from tip / from rear end) to the laser-mark text
+            var markPos = new List<string>();
+            if (!string.IsNullOrWhiteSpace(_laserMarkFromTip))
+                markPos.Add($"{_laserMarkFromTip.Trim()} mm from tip");
+            if (!string.IsNullOrWhiteSpace(_laserMarkFromEnd))
+                markPos.Add($"{_laserMarkFromEnd.Trim()} mm from end");
+            string laserMarkText = _laserMark;
+            if (markPos.Count > 0)
+                laserMarkText = string.IsNullOrWhiteSpace(_laserMark)
+                    ? $"at {string.Join(" and ", markPos)}"
+                    : $"{_laserMark}   —   at {string.Join(" and ", markPos)}";
             FlyLinePdfExporter.Export(dlg.FileName, _projectName, RenderPdfChart(), ProjectSegments.ToList(),
                 _isSinking, _isFullLine, _waterIsSalt, _waterTempC, AfftaBadge, _colorNote, pdfSections, designHex,
-                _coreType);
+                _coreType, laserMarkText);
             UiStatus = $"PDF exported: {System.IO.Path.GetFileName(dlg.FileName)}";
         }
         catch (Exception ex)

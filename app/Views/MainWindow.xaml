@@ -1089,6 +1089,50 @@
                               Margin="0,0,0,8"
                               ToolTip="Core material — pick a common type or type your own"/>
                     <TextBlock DockPanel.Dock="Top"
+                               Text="Laser mark (printed in PDF)"
+                               FontSize="11" FontWeight="SemiBold"
+                               Foreground="{StaticResource TextMuted}"
+                               Margin="0,0,0,3"/>
+                    <TextBox DockPanel.Dock="Top"
+                             Text="{Binding ElementName=MainWin, Path=LaserMark, UpdateSourceTrigger=PropertyChanged}"
+                             Background="#1A1E2A"
+                             Foreground="{StaticResource TextPrimary}"
+                             BorderBrush="{StaticResource BorderBrush2}"
+                             BorderThickness="1"
+                             FontSize="11"
+                             Padding="6,4"
+                             Margin="0,0,0,4"
+                             ToolTip="Text laser-marked on the line (e.g. RB LW6 F 160gr)"/>
+                    <Grid DockPanel.Dock="Top" Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="55"/>
+                            <ColumnDefinition Width="12"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="55"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="mm from tip:" FontSize="10"
+                                   Foreground="{StaticResource TextMuted}"
+                                   VerticalAlignment="Center" Margin="0,0,4,0"/>
+                        <TextBox Grid.Column="1"
+                                 Text="{Binding ElementName=MainWin, Path=LaserMarkFromTip, UpdateSourceTrigger=PropertyChanged}"
+                                 Background="#1A1E2A"
+                                 Foreground="{StaticResource TextPrimary}"
+                                 BorderBrush="{StaticResource BorderBrush2}"
+                                 BorderThickness="1" FontSize="11" Padding="4,2"
+                                 ToolTip="Mark position in mm measured from the tip (0). Leave empty if no mark at the tip side"/>
+                        <TextBlock Grid.Column="3" Text="mm from end:" FontSize="10"
+                                   Foreground="{StaticResource TextMuted}"
+                                   VerticalAlignment="Center" Margin="0,0,4,0"/>
+                        <TextBox Grid.Column="4"
+                                 Text="{Binding ElementName=MainWin, Path=LaserMarkFromEnd, UpdateSourceTrigger=PropertyChanged}"
+                                 Background="#1A1E2A"
+                                 Foreground="{StaticResource TextPrimary}"
+                                 BorderBrush="{StaticResource BorderBrush2}"
+                                 BorderThickness="1" FontSize="11" Padding="4,2"
+                                 ToolTip="Mark position in mm measured from the rear end. Leave empty if no mark at the rear side"/>
+                    </Grid>
+                    <TextBlock DockPanel.Dock="Top"
                                Text="Color note (printed in PDF)"
                                FontSize="11" FontWeight="SemiBold"
                                Foreground="{StaticResource TextMuted}"

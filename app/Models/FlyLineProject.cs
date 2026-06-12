@@ -37,6 +37,12 @@ public class FlyLineProject
     public string ColorNote { get; set; } = string.Empty;
     /// <summary>Core material (e.g. "Braided multifilament nylon", "GSP (Spectra/Dyneema) braid").</summary>
     public string CoreType { get; set; } = string.Empty;
+    /// <summary>Text laser-marked on the line, shown in the PDF.</summary>
+    public string LaserMark { get; set; } = string.Empty;
+    /// <summary>Mark position: mm from the tip (X = 0). Empty = no mark at the tip side.</summary>
+    public string LaserMarkFromTipMm { get; set; } = string.Empty;
+    /// <summary>Mark position: mm from the rear end of the line. Empty = no mark at the rear side.</summary>
+    public string LaserMarkFromEndMm { get; set; } = string.Empty;
     /// <summary>Coloured bands painted over the profile, independent of nodes.</summary>
     public List<LineColorSection> ColorSections { get; set; } = new();
 }
