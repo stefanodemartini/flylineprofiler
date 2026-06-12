@@ -287,8 +287,8 @@ public static class FlyLinePdfExporter
                         {
                             row.RelativeItem().Column(c =>
                             {
-                                c.Item().Text(label).FontSize(6.5f).FontColor(ColMuted);
-                                c.Item().Text(value).FontSize(8.5f).Bold().FontColor(valColor);
+                                c.Item().Text(label).FontSize(6f).FontColor(ColMuted);
+                                c.Item().PaddingRight(3).Text(value).FontSize(7.5f).Bold().FontColor(valColor);
                             });
                         }
                         SpecBlock("Type",          lineType,      ColText);
@@ -296,14 +296,14 @@ public static class FlyLinePdfExporter
                         if (!string.IsNullOrWhiteSpace(coreType))
                             SpecBlock("Core",      coreType,      ColText);
                         SpecBlock("Head density",  densityRange,  ColAccent);
-                        SpecBlock("Total length",  $"{totalLenMm / 10.0:0.0} cm  ({totalLenMm / 304.8:0.0} ft)", ColText);
-                        SpecBlock("Head length",   headLenMm > 0 ? $"{headLenMm / 10.0:0.0} cm  ({headLenMm / 304.8:0.0} ft)" : "—", ColText);
+                        SpecBlock("Total length",  $"{totalLenMm / 10.0:0} cm ({totalLenMm / 304.8:0.0} ft)", ColText);
+                        SpecBlock("Head length",   headLenMm > 0 ? $"{headLenMm / 10.0:0} cm ({headLenMm / 304.8:0.0} ft)" : "—", ColText);
                         SpecBlock("Head weight",   headMassGr > 0 ? $"{headMassGr:0.0} gr" : "—", ColAccent2);
                         SpecBlock("Total weight",  totalMassGr > 0 ? $"{totalMassGr:0.0} gr" : "—", ColText);
                         // Centre of mass of the head, % from the front tip + character
                         var (comPct, rgPct, _) = ComputeMassCentroid(headSegs);
                         SpecBlock("CoM (head)",
-                                  comPct >= 0 ? $"{comPct:0.0}%  ·  Rg {rgPct:0.0}%" : "—",
+                                  comPct >= 0 ? $"{comPct:0.0}% · Rg {rgPct:0.0}%" : "—",
                                   ColAccent);
                         SpecBlock("Character", ClassifyCom(comPct), ColText);
                         // Column header already says "AFFTA" — drop the word from the value
