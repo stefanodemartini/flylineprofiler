@@ -1112,9 +1112,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         };
         if (dlg.ShowDialog() != true) return;
 
-        // Use the file name (without extension) as the project name if untitled
-        if (_projectName == "Untitled")
-            _projectName = Path.GetFileNameWithoutExtension(dlg.FileName);
+        // Save As creates a new project identity: adopt the chosen file name
+        _projectName = Path.GetFileNameWithoutExtension(dlg.FileName);
 
         try { SaveProjectToFile(dlg.FileName); }
         catch (Exception ex)
