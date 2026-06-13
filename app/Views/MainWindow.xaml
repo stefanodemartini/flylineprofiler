@@ -330,6 +330,10 @@
                                 Style="{StaticResource BtnSecondary}"
                                 Click="ScanOff_Click"
                                 IsEnabled="{Binding ScanReceiving}"/>
+                        <Button Content="Clear Scan"
+                                Style="{StaticResource BtnDanger}"
+                                Click="ClearScan_Click"
+                                ToolTip="Discard the acquired scan data so you can run a fresh scan (design is kept)"/>
                         <Separator Style="{StaticResource ToolSep}"/>
                         <Button Content="FAST &lt;"
                                 Style="{StaticResource BtnSecondary}"

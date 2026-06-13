@@ -3254,6 +3254,28 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         UiStatus = "SCAN sent";
     }
 
+    // Discard acquired scan data only (no device command) so a fresh scan can be run.
+    // Design nodes, segments and settings are kept intact.
+    private void ClearScan_Click(object sender, RoutedEventArgs e)
+    {
+        if (_vm.Points.Count == 0)
+        {
+            UiStatus = "No scan data to clear";
+            return;
+        }
+
+        var answer = MessageBox.Show(
+            $"Discard the current scan ({_vm.Points.Count} points) so you can run a new one?\n\n" +
+            "Your design (nodes, segments, colours) is kept.",
+            "Clear Scan", MessageBoxButton.YesNo, MessageBoxImage.Question);
+        if (answer != MessageBoxResult.Yes) return;
+
+        _vm.ClearAllData();
+        MarkDirty();
+        RefreshStatusBar();
+        UiStatus = "Scan cleared — ready for a new scan";
+    }
+
     private async void Stop_Click(object sender, RoutedEventArgs e)
     {
         await Send("motor stop");
