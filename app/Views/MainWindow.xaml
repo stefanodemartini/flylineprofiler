@@ -547,6 +547,10 @@
                             Style="{StaticResource BtnGhost}"
                             Click="ShowScanBtn_Click"
                             Margin="10,0,0,0"/>
+                    <Button Content="Clear Scan"
+                            Style="{StaticResource BtnDanger}"
+                            Click="ClearScan_Click"
+                            ToolTip="Discard the acquired scan data so you can run a fresh scan (design is kept)"/>
 
                     <Separator Style="{StaticResource ToolSep}"/>
 
