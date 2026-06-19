@@ -126,8 +126,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     };
 
     // Persists user-edited segment names and specific weights across RefreshSegmentTable() calls.
-    // Key: (StartCm, EndCm) — survives as long as the segment boundaries don't move.
-    private readonly Dictionary<(double, double), (string Name, double SpecWeight, bool IsHead)> _segmentMetadata = new();
+    // Key: 0-based segment order index — stable even when node X positions are edited.
+    private readonly Dictionary<int, (string Name, double SpecWeight, bool IsHead)> _segmentMetadata = new();
 
     private bool   _useSharedDensity = true;
     private double _sharedDensity    = 0.0;
@@ -949,10 +949,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _laserMarkFromEnd = project.LaserMarkFromEndMm ?? string.Empty;
         OnPropertyChanged(nameof(LaserMarkFromEnd));
 
-        // Restore segment metadata (names, spec weights, head flag)
+        // Restore segment metadata (names, spec weights, head flag) — keyed by order index
         _segmentMetadata.Clear();
-        foreach (var m in project.SegmentMetadata)
-            _segmentMetadata[(m.StartCm, m.EndCm)] = (m.Name, m.SpecWeight, m.IsHead);
+        var sortedMeta = project.SegmentMetadata.OrderBy(m => m.StartCm).ToList();
+        for (int mi = 0; mi < sortedMeta.Count; mi++)
+            _segmentMetadata[mi] = (sortedMeta[mi].Name, sortedMeta[mi].SpecWeight, sortedMeta[mi].IsHead);
 
         _useSharedDensity = project.UseSharedDensity;
         _sharedDensity    = project.SharedDensityGCm3;
@@ -1863,10 +1864,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private void RefreshSegmentTable()
     {
         // Save current user edits (name, spec weight, head flag) and unsubscribe events
-        foreach (var seg in ProjectSegments)
+        for (int si = 0; si < ProjectSegments.Count; si++)
         {
-            _segmentMetadata[(seg.StartCm, seg.EndCm)] = (seg.Name, seg.SpecWeightGCm3, seg.IsHead);
-            seg.PropertyChanged -= OnSegmentPropertyChanged;
+            _segmentMetadata[si] = (ProjectSegments[si].Name, ProjectSegments[si].SpecWeightGCm3, ProjectSegments[si].IsHead);
+            ProjectSegments[si].PropertyChanged -= OnSegmentPropertyChanged;
         }
 
         ProjectSegments.Clear();
@@ -1883,7 +1884,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 EndDiameterMm   = sorted[i + 1].Y,
             };
 
-            if (_segmentMetadata.TryGetValue((seg.StartCm, seg.EndCm), out var meta))
+            if (_segmentMetadata.TryGetValue(i, out var meta))
             {
                 seg.Name           = meta.Name;
                 seg.SpecWeightGCm3 = _useSharedDensity ? _sharedDensity : meta.SpecWeight;
@@ -2207,7 +2208,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             seg.SetCompensation(seg.StartCm, sliceXs, sliceDiams, sliceDens, targetMs);
         }
         RefreshPlot();
-        UiStatus = $"Compensation computed for {_compTargetSpeedIns:0.000} in/s";
+        int compCount = ProjectSegments.Count(s => s.HasCompensation);
+        UiStatus = compCount > 0
+            ? $"Compensation computed for {_compTargetSpeedIns:0.000} in/s ({compCount}/{ProjectSegments.Count} segments)"
+            : "Compensation skipped — set segment density first";
     }
 
     // ── Line type / format ────────────────────────────────────────────────────
@@ -2282,14 +2286,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _segmentNodes.Clear();
         foreach (var n in mirrored) _segmentNodes.Add(n);
 
-        // Remap metadata to new (mirrored) segment boundaries
+        // Remap metadata: after reversal segment i (ascending) holds the metadata of old segment (count-1-i)
         _segmentMetadata.Clear();
-        foreach (var seg in segData)
-        {
-            double newStart = Math.Round(totalLen - seg.EndCm,   1);
-            double newEnd   = Math.Round(totalLen - seg.StartCm, 1);
-            _segmentMetadata[(newStart, newEnd)] = (seg.Name, seg.SpecWeightGCm3, seg.IsHead);
-        }
+        for (int ri = 0; ri < segData.Count; ri++)
+            _segmentMetadata[ri] = (segData[segData.Count - 1 - ri].Name,
+                                    segData[segData.Count - 1 - ri].SpecWeightGCm3,
+                                    segData[segData.Count - 1 - ri].IsHead);
 
         RefreshSegmentTable();
         RefreshPlot();
