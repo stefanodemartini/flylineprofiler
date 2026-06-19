@@ -2391,7 +2391,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private void UpdateLineTypeUI()
     {
         if (!IsLoaded) return;
-        SinkingToolsPanel.Visibility = _isSinking ? Visibility.Visible : Visibility.Collapsed;
+        // Nasconde il pannello solo quando la densità è impostata E la fisica conferma che la linea
+        // galleggia. Senza densità il pannello resta visibile (default per nuovi progetti).
+        bool hasAnyDensity = ProjectSegments.Any(s => s.SpecWeightGCm3 > 0);
+        SinkingToolsPanel.Visibility = (hasAnyDensity && !_isSinking)
+            ? Visibility.Collapsed : Visibility.Visible;
         HeadColumn.Visibility = _isFullLine ? Visibility.Visible : Visibility.Collapsed;
     }
 
