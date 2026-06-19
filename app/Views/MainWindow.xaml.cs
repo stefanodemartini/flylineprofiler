@@ -1250,7 +1250,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     {
         string mode;
         if (_designMode)
-            mode = _showCompView    ? $"Comp. View {_compTargetSpeedIns:0.00} in/s"
+            mode = (_showCompView && _showSinkSpeedMap) ? $"Density Gradient  {_compTargetSpeedIns:0.00} in/s"
+                 : _showCompView    ? $"Comp. View {_compTargetSpeedIns:0.00} in/s"
                  : _showCompProfile ? "Compensated Profile"
                  : "Design";
         else
@@ -1757,7 +1758,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 botGhost.LineWidth  = 1;
                 botGhost.MarkerSize = 0;
 
-                // Comp. View: render compensated smooth profile in design style
+                // Comp. View: render compensated smooth profile
                 if (compViewActive)
                 {
                     var cn = GetCompNodes();
@@ -1767,11 +1768,61 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                         double[] cyts = cn.Select(n =>  n.Y / 2.0).ToArray();
                         double[] cybs = cn.Select(n => -n.Y / 2.0).ToArray();
 
-                        DrawLineFill(plot, cxs, cyts, cybs, designColor, solid: true);
-                        if (ColorSections.Count > 0) RenderColorSections(plot, cn);
+                        if (_showSinkSpeedMap)
+                        {
+                            // Density gradient: each 1 cm slice coloured by required density
+                            var compSegs = ProjectSegments.OrderBy(s => s.StartCm)
+                                .Where(s => s.HasCompensation).ToList();
+                            double minDens = compSegs.SelectMany(s => s.CompSliceDensities).DefaultIfEmpty(0).Min();
+                            double maxDens = compSegs.SelectMany(s => s.CompSliceDensities).DefaultIfEmpty(1).Max();
+                            double densRng = Math.Max(maxDens - minDens, 1e-9);
 
+                            foreach (var seg in compSegs)
+                            {
+                                int    ns   = seg.CompSliceXsCm.Length;
+                                if (ns == 0) continue;
+                                double half = ns > 1 ? (seg.CompSliceXsCm[1] - seg.CompSliceXsCm[0]) / 2.0
+                                                     : seg.LengthCm / 2.0;
+                                for (int i = 0; i < ns; i++)
+                                {
+                                    double xAbs = seg.StartCm + seg.CompSliceXsCm[i];
+                                    double x0   = xAbs - half, x1 = xAbs + half;
+                                    double d0   = i > 0    ? (seg.CompSliceDiamsMm[i-1] + seg.CompSliceDiamsMm[i])   / 2.0 : seg.CompSliceDiamsMm[i];
+                                    double d1   = i < ns-1 ? (seg.CompSliceDiamsMm[i]   + seg.CompSliceDiamsMm[i+1]) / 2.0 : seg.CompSliceDiamsMm[i];
+                                    double t    = Math.Clamp((seg.CompSliceDensities[i] - minDens) / densRng, 0, 1);
+                                    var poly = plot.Add.Polygon(new ScottPlot.Coordinates[]
+                                    {
+                                        new(x0,  d0/2.0), new(x1,  d1/2.0),
+                                        new(x1, -d1/2.0), new(x0, -d0/2.0),
+                                    });
+                                    poly.FillColor = DensityColor(t).WithAlpha(0.90f);
+                                    poly.LineWidth = 0;
+                                    poly.LineColor = Colors.Transparent;
+                                }
+                            }
+                            // 4-stop density legend
+                            for (int stop = 0; stop < 4; stop++)
+                            {
+                                double t    = stop / 3.0;
+                                double dens = minDens + t * densRng;
+                                var entry   = plot.Add.Scatter(Array.Empty<double>(), Array.Empty<double>());
+                                entry.Color      = DensityColor(t);
+                                entry.LineWidth  = 8;
+                                entry.LegendText = $"ρ {dens:0.000} g/cm³";
+                            }
+                        }
+                        else
+                        {
+                            // Clean design-style fill + colour sections
+                            DrawLineFill(plot, cxs, cyts, cybs, designColor, solid: true);
+                            if (ColorSections.Count > 0) RenderColorSections(plot, cn);
+                        }
+
+                        // Smooth outline always on top
                         var ctl = plot.Add.Scatter(cxs, cyts);
-                        ctl.LegendText = $"Comp. View  {_compTargetSpeedIns:0.00} in/s";
+                        ctl.LegendText = _showSinkSpeedMap
+                            ? $"Density — Comp. {_compTargetSpeedIns:0.00} in/s"
+                            : $"Comp. View  {_compTargetSpeedIns:0.00} in/s";
                         ctl.Color      = designColor;
                         ctl.LineWidth  = 2.5f;
                         ctl.MarkerSize = 0;
@@ -2545,8 +2596,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private void UpdateLineTypeUI()
     {
         if (!IsLoaded) return;
-        SinkingToolsPanel.Visibility = Visibility.Visible;
-        // Head column visibility (only meaningful for full line)
+        SinkingToolsPanel.Visibility = _isSinking ? Visibility.Visible : Visibility.Collapsed;
         HeadColumn.Visibility = _isFullLine ? Visibility.Visible : Visibility.Collapsed;
     }
 
@@ -3136,7 +3186,39 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             double[] botYs = sorted.Select(n => -n.Y / 2.0).ToArray();
             var dc = _designLineColor;
 
-            if (ColorSections.Count == 0)
+            if (pdfUseComp && _showSinkSpeedMap)
+            {
+                // Density gradient: each 1 cm slice coloured by required density (blue → red)
+                var compSegs = ProjectSegments.OrderBy(s => s.StartCm)
+                    .Where(s => s.HasCompensation).ToList();
+                double minDens = compSegs.SelectMany(s => s.CompSliceDensities).DefaultIfEmpty(0).Min();
+                double maxDens = compSegs.SelectMany(s => s.CompSliceDensities).DefaultIfEmpty(1).Max();
+                double densRng = Math.Max(maxDens - minDens, 1e-9);
+                foreach (var seg in compSegs)
+                {
+                    int    ns   = seg.CompSliceXsCm.Length;
+                    if (ns == 0) continue;
+                    double half = ns > 1 ? (seg.CompSliceXsCm[1] - seg.CompSliceXsCm[0]) / 2.0
+                                         : seg.LengthCm / 2.0;
+                    for (int i = 0; i < ns; i++)
+                    {
+                        double xAbs = seg.StartCm + seg.CompSliceXsCm[i];
+                        double x0   = xAbs - half, x1 = xAbs + half;
+                        double d0   = i > 0    ? (seg.CompSliceDiamsMm[i-1] + seg.CompSliceDiamsMm[i])   / 2.0 : seg.CompSliceDiamsMm[i];
+                        double d1   = i < ns-1 ? (seg.CompSliceDiamsMm[i]   + seg.CompSliceDiamsMm[i+1]) / 2.0 : seg.CompSliceDiamsMm[i];
+                        double t    = Math.Clamp((seg.CompSliceDensities[i] - minDens) / densRng, 0, 1);
+                        var poly = plot.Add.Polygon(new ScottPlot.Coordinates[]
+                        {
+                            new(x0,  d0/2.0), new(x1,  d1/2.0),
+                            new(x1, -d1/2.0), new(x0, -d0/2.0),
+                        });
+                        poly.FillColor = DensityColor(t).WithAlpha(0.90f);
+                        poly.LineWidth = 0;
+                        poly.LineColor = Colors.Transparent;
+                    }
+                }
+            }
+            else if (ColorSections.Count == 0)
             {
                 // No colour sections: use the normal 3D shaded fill
                 DrawLineFill(plot, xs, topYs, botYs, dc, solid: true);
