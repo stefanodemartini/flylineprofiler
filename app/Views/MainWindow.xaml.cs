@@ -1963,13 +1963,24 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     /// Builds ProjectSegments from the current sorted node list and refreshes the
     /// bound DataGrid + the total-volume label.
     /// </summary>
+    // Preserves compensation data across RefreshSegmentTable() rebuilds (keyed by 0-based index)
+    private readonly record struct CompSnapshot(
+        double StartCm, double[] SliceXsCm, double[] SliceDiamsMm,
+        double[] SliceDensities, double TargetSpeedMs);
+
     private void RefreshSegmentTable()
     {
-        // Save current user edits (name, spec weight, head flag) and unsubscribe events
+        // Save current user edits (name, spec weight, head flag) and compensation data
+        var compSnapshots = new Dictionary<int, CompSnapshot>();
         for (int si = 0; si < ProjectSegments.Count; si++)
         {
-            _segmentMetadata[si] = (ProjectSegments[si].Name, ProjectSegments[si].SpecWeightGCm3, ProjectSegments[si].IsHead);
-            ProjectSegments[si].PropertyChanged -= OnSegmentPropertyChanged;
+            var s = ProjectSegments[si];
+            _segmentMetadata[si] = (s.Name, s.SpecWeightGCm3, s.IsHead);
+            if (s.HasCompensation)
+                compSnapshots[si] = new CompSnapshot(
+                    s.CompStartCm, s.CompSliceXsCm, s.CompSliceDiamsMm,
+                    s.CompSliceDensities, s.CompensatedTargetSpeedMs);
+            s.PropertyChanged -= OnSegmentPropertyChanged;
         }
 
         ProjectSegments.Clear();
@@ -2001,8 +2012,20 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             // Shooting head: all segments are head by definition
             if (!_isFullLine) seg.IsHead = true;
 
+            // Restore compensation data when the segment count and order didn't change
+            if (compSnapshots.TryGetValue(i, out var cs))
+                seg.SetCompensation(cs.StartCm, cs.SliceXsCm, cs.SliceDiamsMm, cs.SliceDensities, cs.TargetSpeedMs);
+
             seg.PropertyChanged += OnSegmentPropertyChanged;
             ProjectSegments.Add(seg);
+        }
+
+        // If number of segments changed, comp data is no longer valid — reset
+        if (_inCompMode && !ProjectSegments.Any(s => s.HasCompensation))
+        {
+            _inCompMode = false;
+            _showOriginalProfile = false;
+            UpdateCompModeUI();
         }
 
         RefreshTotals();
@@ -2423,6 +2446,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         CompEndDiamColumn.Visibility   = c ? Visibility.Visible   : Visibility.Collapsed;
         CompStartDensColumn.Visibility = c ? Visibility.Visible   : Visibility.Collapsed;
         CompEndDensColumn.Visibility   = c ? Visibility.Visible   : Visibility.Collapsed;
+        SegmentsDataGrid.Items.Refresh();
     }
 
     private void ShowOriginalProfile_Click(object sender, RoutedEventArgs e)
