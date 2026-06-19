@@ -2224,6 +2224,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private void UpdateSinkingSpeeds()
     {
+        bool anyComputed = false;
+        bool anySinking  = false;
+
         foreach (var seg in ProjectSegments)
         {
             if (seg.SpecWeightGCm3 <= 0)
@@ -2236,6 +2239,20 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 seg.StartDiameterMm, seg.EndDiameterMm,
                 seg.LengthCm,
                 seg.SpecWeightGCm3);
+
+            anyComputed = true;
+            if (!double.IsNaN(seg.SinkSpeedMs) && seg.SinkSpeedMs > 0)
+                anySinking = true;
+        }
+
+        // Auto-sync the Floating/Sinking radio to the physics — only when at least
+        // one segment has a density set (don't override the flag when nothing is computed).
+        if (anyComputed && _isSinking != anySinking)
+        {
+            _isSinking = anySinking;
+            OnPropertyChanged(nameof(IsSinking));
+            UpdateLineTypeUI();
+            MarkDirty();
         }
     }
 
