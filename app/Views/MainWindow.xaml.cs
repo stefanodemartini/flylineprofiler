@@ -1847,8 +1847,15 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         {
             // Nodi compensati + divider + etichette segmento
             var cn = GetCompNodes();
-            double[] cnxs = cn.Select(n => n.X).ToArray();
-            double[] cnts = cn.Select(n =>  n.Y / 2.0).ToArray();
+            // Deduplicazione: GetCompNodes inserisce 2 punti per ogni confine di segmento
+            // (fine del precedente + inizio del successivo con epsilon). Per le label si
+            // usano solo i punti univoci (soglia 0.5 cm).
+            var labelNodes = cn
+                .Where((n, i) => i == 0 || Math.Abs(cn[i - 1].X - n.X) > 0.5)
+                .ToList();
+
+            double[] cnxs = labelNodes.Select(n => n.X).ToArray();
+            double[] cnts = labelNodes.Select(n =>  n.Y / 2.0).ToArray();
 
             var markers = plot.Add.Scatter(cnxs, cnts);
             markers.Color = designColor; markers.LineWidth = 0;
@@ -1857,9 +1864,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             markersInner.Color = designColor.WithAlpha(0.85f); markersInner.LineWidth = 0;
             markersInner.MarkerSize = 5; markersInner.MarkerShape = MarkerShape.FilledCircle;
 
-            for (int ni = 0; ni < cn.Count; ni++)
+            for (int ni = 0; ni < labelNodes.Count; ni++)
             {
-                var node = cn[ni];
+                var node = labelNodes[ni];
                 double chartYBottom = -node.Y / 2.0;
                 double gap = node.Y * 0.40;
                 double lx = node.X;
@@ -2356,7 +2363,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private void UpdateCompModeUI()
     {
         if (!IsLoaded) return;
-        bool c = _inCompMode;
+        // Le colonne comp sono visibili solo quando si guarda il profilo compensato,
+        // non quando "Non compensato" è attivo.
+        bool c = _inCompMode && !_showOriginalProfile;
         SinkMapToggle.Visibility      = c ? Visibility.Collapsed : Visibility.Visible;
         ShowOriginalToggle.Visibility = c ? Visibility.Visible   : Visibility.Collapsed;
         // Colonne tabella
@@ -2376,6 +2385,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private void ShowOriginalProfile_Click(object sender, RoutedEventArgs e)
     {
         _showOriginalProfile = ShowOriginalToggle.IsChecked ?? false;
+        UpdateCompModeUI();
         RefreshPlot();
         UiStatus = _showOriginalProfile
             ? "Profilo originale — mappa velocità affondamento"
