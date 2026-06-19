@@ -1769,14 +1769,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                             double d0   = i > 0    ? (seg.CompSliceDiamsMm[i-1] + seg.CompSliceDiamsMm[i])   / 2.0 : seg.CompSliceDiamsMm[i];
                             double d1   = i < ns-1 ? (seg.CompSliceDiamsMm[i]   + seg.CompSliceDiamsMm[i+1]) / 2.0 : seg.CompSliceDiamsMm[i];
                             double t    = Math.Clamp((seg.CompSliceDensities[i] - minDens) / densRng, 0, 1);
-                            var poly = plot.Add.Polygon(new ScottPlot.Coordinates[]
-                            {
-                                new(x0,  d0/2.0), new(x1,  d1/2.0),
-                                new(x1, -d1/2.0), new(x0, -d0/2.0),
-                            });
-                            poly.FillColor = DensityColor(t).WithAlpha(0.90f);
-                            poly.LineWidth = 0;
-                            poly.LineColor = Colors.Transparent;
+                            DrawLineFill(plot,
+                                new[] { x0, x1 },
+                                new[] { d0 / 2.0, d1 / 2.0 },
+                                new[] { -d0 / 2.0, -d1 / 2.0 },
+                                DensityColor(t), solid: true);
                         }
                     }
 
@@ -3006,14 +3003,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                         double d0   = i > 0    ? (seg.CompSliceDiamsMm[i-1] + seg.CompSliceDiamsMm[i])   / 2.0 : seg.CompSliceDiamsMm[i];
                         double d1   = i < ns-1 ? (seg.CompSliceDiamsMm[i]   + seg.CompSliceDiamsMm[i+1]) / 2.0 : seg.CompSliceDiamsMm[i];
                         double t    = Math.Clamp((seg.CompSliceDensities[i] - minDens) / densRng, 0, 1);
-                        var poly = plot.Add.Polygon(new ScottPlot.Coordinates[]
-                        {
-                            new(x0,  d0/2.0), new(x1,  d1/2.0),
-                            new(x1, -d1/2.0), new(x0, -d0/2.0),
-                        });
-                        poly.FillColor = DensityColor(t).WithAlpha(0.90f);
-                        poly.LineWidth = 0;
-                        poly.LineColor = Colors.Transparent;
+                        DrawLineFill(plot,
+                            new[] { x0, x1 },
+                            new[] { d0 / 2.0, d1 / 2.0 },
+                            new[] { -d0 / 2.0, -d1 / 2.0 },
+                            DensityColor(t), solid: true);
                     }
                 }
             }
