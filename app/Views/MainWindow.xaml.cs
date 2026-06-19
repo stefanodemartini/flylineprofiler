@@ -36,8 +36,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private bool _showScanLayer    = true;
     private bool _showDesignLayer  = true;
     private bool _showSinkSpeedMap = false;
-    private bool _showCompProfile  = false;
-    private bool _showCompView     = false;
+    private bool _inCompMode          = false;
+    private bool _showOriginalProfile = false;
 
     // Segment drawing — node.Y stores FULL DIAMETER in mm (not radius)
     private readonly List<(double X, double Y)> _segmentNodes = new();
@@ -1250,9 +1250,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     {
         string mode;
         if (_designMode)
-            mode = (_showCompView && _showSinkSpeedMap) ? $"Density Gradient  {_compTargetSpeedIns:0.00} in/s"
-                 : _showCompView    ? $"Comp. View {_compTargetSpeedIns:0.00} in/s"
-                 : _showCompProfile ? "Compensated Profile"
+            mode = (_inCompMode && _showOriginalProfile)
+                 ? "Non compensato — velocità affondamento"
+                 : _inCompMode
+                 ? $"Compensato  {_compTargetSpeedIns:0.00} in/s — gradiente densità"
                  : "Design";
         else
             mode = "Scan";
@@ -1703,166 +1704,121 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         double[] halfYs    = sorted.Select(n =>  n.Y / 2.0).ToArray();
         double[] negHalfYs = sorted.Select(n => -n.Y / 2.0).ToArray();
 
-        var designColor     = _designLineColor;
-        bool compActive     = _showCompProfile && ProjectSegments.Any(s => s.HasCompensation);
-        bool compViewActive = _showCompView    && ProjectSegments.Any(s => s.HasCompensation);
+        var designColor = _designLineColor;
+        bool hasComp    = ProjectSegments.Any(s => s.HasCompensation);
+        bool inComp     = _inCompMode && hasComp;
+        bool showOrig   = _showOriginalProfile;
 
         if (sorted.Count >= 2)
         {
-            if (!compActive && !compViewActive)
+            if (!inComp || showOrig)
             {
-                // 1. Base fill: always use the design colour Lambert shading
+                // ── Profilo originale / design ──────────────────────────────
                 DrawLineFill(plot, xs, halfYs, negHalfYs, designColor, solid: true);
-
-                // 1b. Colour-band overlays (flat polygons, painted over the base fill)
                 if (ColorSections.Count > 0)
                     RenderColorSections(plot, sorted);
 
-                // 2. Sink-speed heat-map (drawn over the fill)
-                if (_showSinkSpeedMap)
+                // Mappa velocità: sempre visibile in modalità "Non compensato", altrimenti toggle
+                if (inComp || _showSinkSpeedMap)
                     RenderSinkSpeedOverlay(plot, sorted);
 
-                // 3. Profile outline — crisp, slightly thicker than before
                 var topLine = plot.Add.Scatter(xs, halfYs);
-                topLine.LegendText = $"Design ({sorted.Count} nodes)";
-                topLine.Color      = designColor;
-                topLine.LineWidth  = 2.5f;
-                topLine.MarkerSize = 0;
+                topLine.LegendText = inComp && showOrig
+                    ? $"Non compensato ({sorted.Count} nodi)"
+                    : $"Design ({sorted.Count} nodes)";
+                topLine.Color = designColor; topLine.LineWidth = 2.5f; topLine.MarkerSize = 0;
 
                 var botLine = plot.Add.Scatter(xs, negHalfYs);
-                botLine.Color      = designColor;
-                botLine.LineWidth  = 2.5f;
-                botLine.MarkerSize = 0;
+                botLine.Color = designColor; botLine.LineWidth = 2.5f; botLine.MarkerSize = 0;
 
-                // 4. Subtle segment-boundary ticks (hairline, not dashed — less noise)
                 foreach (var node in sorted)
                 {
                     var tick = plot.Add.Scatter(
-                        new[] { node.X, node.X },
-                        new[] { node.Y / 2.0, -node.Y / 2.0 });
-                    tick.Color       = designColor.WithAlpha(0.25f);
-                    tick.LineWidth   = 0.8f;
-                    tick.MarkerSize  = 0;
+                        new[] { node.X, node.X }, new[] { node.Y / 2.0, -node.Y / 2.0 });
+                    tick.Color = designColor.WithAlpha(0.25f);
+                    tick.LineWidth = 0.8f; tick.MarkerSize = 0;
                 }
             }
             else
             {
-                // Ghost of original design
-                var ghostColor = designColor.WithAlpha(0.18f);
-                var topGhost = plot.Add.Scatter(xs, halfYs);
-                topGhost.Color      = ghostColor;
-                topGhost.LineWidth  = 1;
-                topGhost.MarkerSize = 0;
-                var botGhost = plot.Add.Scatter(xs, negHalfYs);
-                botGhost.Color      = ghostColor;
-                botGhost.LineWidth  = 1;
-                botGhost.MarkerSize = 0;
-
-                // Comp. View: render compensated smooth profile
-                if (compViewActive)
+                // ── Profilo compensato con gradiente densità ────────────────
+                var cn = GetCompNodes();
+                if (cn.Count >= 2)
                 {
-                    var cn = GetCompNodes();
-                    if (cn.Count >= 2)
+                    double[] cxs  = cn.Select(n => n.X).ToArray();
+                    double[] cyts = cn.Select(n =>  n.Y / 2.0).ToArray();
+                    double[] cybs = cn.Select(n => -n.Y / 2.0).ToArray();
+
+                    // Gradiente densità: ogni slice da 1 cm colorata per densità richiesta
+                    var compSegs = ProjectSegments.OrderBy(s => s.StartCm)
+                        .Where(s => s.HasCompensation).ToList();
+                    double minDens = compSegs.SelectMany(s => s.CompSliceDensities).DefaultIfEmpty(0).Min();
+                    double maxDens = compSegs.SelectMany(s => s.CompSliceDensities).DefaultIfEmpty(1).Max();
+                    double densRng = Math.Max(maxDens - minDens, 1e-9);
+
+                    foreach (var seg in compSegs)
                     {
-                        double[] cxs  = cn.Select(n => n.X).ToArray();
-                        double[] cyts = cn.Select(n =>  n.Y / 2.0).ToArray();
-                        double[] cybs = cn.Select(n => -n.Y / 2.0).ToArray();
-
-                        if (_showSinkSpeedMap)
+                        int ns = seg.CompSliceXsCm.Length;
+                        if (ns == 0) continue;
+                        double half = ns > 1 ? (seg.CompSliceXsCm[1] - seg.CompSliceXsCm[0]) / 2.0
+                                             : seg.LengthCm / 2.0;
+                        for (int i = 0; i < ns; i++)
                         {
-                            // Density gradient: each 1 cm slice coloured by required density
-                            var compSegs = ProjectSegments.OrderBy(s => s.StartCm)
-                                .Where(s => s.HasCompensation).ToList();
-                            double minDens = compSegs.SelectMany(s => s.CompSliceDensities).DefaultIfEmpty(0).Min();
-                            double maxDens = compSegs.SelectMany(s => s.CompSliceDensities).DefaultIfEmpty(1).Max();
-                            double densRng = Math.Max(maxDens - minDens, 1e-9);
-
-                            foreach (var seg in compSegs)
+                            double xAbs = seg.StartCm + seg.CompSliceXsCm[i];
+                            double x0   = xAbs - half, x1 = xAbs + half;
+                            double d0   = i > 0    ? (seg.CompSliceDiamsMm[i-1] + seg.CompSliceDiamsMm[i])   / 2.0 : seg.CompSliceDiamsMm[i];
+                            double d1   = i < ns-1 ? (seg.CompSliceDiamsMm[i]   + seg.CompSliceDiamsMm[i+1]) / 2.0 : seg.CompSliceDiamsMm[i];
+                            double t    = Math.Clamp((seg.CompSliceDensities[i] - minDens) / densRng, 0, 1);
+                            var poly = plot.Add.Polygon(new ScottPlot.Coordinates[]
                             {
-                                int    ns   = seg.CompSliceXsCm.Length;
-                                if (ns == 0) continue;
-                                double half = ns > 1 ? (seg.CompSliceXsCm[1] - seg.CompSliceXsCm[0]) / 2.0
-                                                     : seg.LengthCm / 2.0;
-                                for (int i = 0; i < ns; i++)
-                                {
-                                    double xAbs = seg.StartCm + seg.CompSliceXsCm[i];
-                                    double x0   = xAbs - half, x1 = xAbs + half;
-                                    double d0   = i > 0    ? (seg.CompSliceDiamsMm[i-1] + seg.CompSliceDiamsMm[i])   / 2.0 : seg.CompSliceDiamsMm[i];
-                                    double d1   = i < ns-1 ? (seg.CompSliceDiamsMm[i]   + seg.CompSliceDiamsMm[i+1]) / 2.0 : seg.CompSliceDiamsMm[i];
-                                    double t    = Math.Clamp((seg.CompSliceDensities[i] - minDens) / densRng, 0, 1);
-                                    var poly = plot.Add.Polygon(new ScottPlot.Coordinates[]
-                                    {
-                                        new(x0,  d0/2.0), new(x1,  d1/2.0),
-                                        new(x1, -d1/2.0), new(x0, -d0/2.0),
-                                    });
-                                    poly.FillColor = DensityColor(t).WithAlpha(0.90f);
-                                    poly.LineWidth = 0;
-                                    poly.LineColor = Colors.Transparent;
-                                }
-                            }
-                            // 4-stop density legend
-                            for (int stop = 0; stop < 4; stop++)
-                            {
-                                double t    = stop / 3.0;
-                                double dens = minDens + t * densRng;
-                                var entry   = plot.Add.Scatter(Array.Empty<double>(), Array.Empty<double>());
-                                entry.Color      = DensityColor(t);
-                                entry.LineWidth  = 8;
-                                entry.LegendText = $"ρ {dens:0.000} g/cm³";
-                            }
+                                new(x0,  d0/2.0), new(x1,  d1/2.0),
+                                new(x1, -d1/2.0), new(x0, -d0/2.0),
+                            });
+                            poly.FillColor = DensityColor(t).WithAlpha(0.90f);
+                            poly.LineWidth = 0;
+                            poly.LineColor = Colors.Transparent;
                         }
-                        else
-                        {
-                            // Clean design-style fill + colour sections
-                            DrawLineFill(plot, cxs, cyts, cybs, designColor, solid: true);
-                            if (ColorSections.Count > 0) RenderColorSections(plot, cn);
-                        }
+                    }
 
-                        // Smooth outline always on top
-                        var ctl = plot.Add.Scatter(cxs, cyts);
-                        ctl.LegendText = _showSinkSpeedMap
-                            ? $"Density — Comp. {_compTargetSpeedIns:0.00} in/s"
-                            : $"Comp. View  {_compTargetSpeedIns:0.00} in/s";
-                        ctl.Color      = designColor;
-                        ctl.LineWidth  = 2.5f;
-                        ctl.MarkerSize = 0;
+                    // Legenda densità — 4 stop
+                    for (int stop = 0; stop < 4; stop++)
+                    {
+                        double t    = stop / 3.0;
+                        double dens = minDens + t * densRng;
+                        var entry   = plot.Add.Scatter(Array.Empty<double>(), Array.Empty<double>());
+                        entry.Color = DensityColor(t); entry.LineWidth = 8;
+                        entry.LegendText = $"ρ {dens:0.000} g/cm³";
+                    }
 
-                        var cbl = plot.Add.Scatter(cxs, cybs);
-                        cbl.Color      = designColor;
-                        cbl.LineWidth  = 2.5f;
-                        cbl.MarkerSize = 0;
+                    // Outline del profilo compensato sopra il gradiente
+                    var ctl = plot.Add.Scatter(cxs, cyts);
+                    ctl.LegendText = $"Comp. {_compTargetSpeedIns:0.00} in/s";
+                    ctl.Color = designColor; ctl.LineWidth = 2.5f; ctl.MarkerSize = 0;
+                    var cbl = plot.Add.Scatter(cxs, cybs);
+                    cbl.Color = designColor; cbl.LineWidth = 2.5f; cbl.MarkerSize = 0;
 
-                        foreach (var n in cn)
-                        {
-                            var tick = plot.Add.Scatter(
-                                new[] { n.X, n.X }, new[] { n.Y / 2.0, -n.Y / 2.0 });
-                            tick.Color     = designColor.WithAlpha(0.25f);
-                            tick.LineWidth = 0.8f; tick.MarkerSize = 0;
-                        }
+                    foreach (var n in cn)
+                    {
+                        var tick = plot.Add.Scatter(
+                            new[] { n.X, n.X }, new[] { n.Y / 2.0, -n.Y / 2.0 });
+                        tick.Color = designColor.WithAlpha(0.25f);
+                        tick.LineWidth = 0.8f; tick.MarkerSize = 0;
                     }
                 }
             }
-
-            // Staircase overlay (only when Comp. Profile toggle is ON)
-            RenderCompensatedOverlay(plot, sorted);
         }
 
-        if (!compActive && !compViewActive)
+        // ── Label nodi ──────────────────────────────────────────────────────
+        if (!inComp || showOrig)
         {
-            // Node markers — filled circle with white ring for a clean look
+            // Nodi originali
             var markers = plot.Add.Scatter(xs, halfYs);
-            markers.Color        = designColor;
-            markers.LineWidth    = 0;
-            markers.MarkerSize   = 9;
-            markers.MarkerShape  = MarkerShape.OpenCircle;
-
+            markers.Color = designColor; markers.LineWidth = 0;
+            markers.MarkerSize = 9; markers.MarkerShape = MarkerShape.OpenCircle;
             var markersInner = plot.Add.Scatter(xs, halfYs);
-            markersInner.Color       = designColor.WithAlpha(0.85f);
-            markersInner.LineWidth   = 0;
-            markersInner.MarkerSize  = 5;
-            markersInner.MarkerShape = MarkerShape.FilledCircle;
+            markersInner.Color = designColor.WithAlpha(0.85f); markersInner.LineWidth = 0;
+            markersInner.MarkerSize = 5; markersInner.MarkerShape = MarkerShape.FilledCircle;
 
-            // Node labels — positions stored in data coordinates so leader lines work
             for (int ni = 0; ni < sorted.Count; ni++)
             {
                 var node = sorted[ni];
@@ -1878,26 +1834,21 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 var leader = plot.Add.Scatter(
                     new double[] { node.X, lx },
                     new double[] { chartYBottom * 0.85, ly });
-                leader.Color      = leaderColor;
-                leader.LineWidth  = 1.2f;
-                leader.MarkerSize = 0;
+                leader.Color = leaderColor; leader.LineWidth = 1.2f; leader.MarkerSize = 0;
 
                 var lbl = plot.Add.Text($"Ø {node.Y:0.000}  {node.X:0.0} cm", lx, ly);
-                lbl.LabelFontSize        = 11;
-                lbl.LabelBold            = true;
+                lbl.LabelFontSize = 11; lbl.LabelBold = true;
                 lbl.LabelFontColor       = new ScottColor(50, 50, 50);
                 lbl.LabelAlignment       = Alignment.UpperCenter;
                 lbl.LabelBackgroundColor = ScottPlot.Colors.White.WithAlpha(0.95f);
                 lbl.LabelBorderColor     = leaderColor;
                 lbl.LabelBorderWidth     = 1f;
-                lbl.LabelPadding         = 3;
-                lbl.OffsetX              = 0;
-                lbl.OffsetY              = 0;
+                lbl.LabelPadding = 3; lbl.OffsetX = 0; lbl.OffsetY = 0;
             }
         }
-        else if (compViewActive)
+        else
         {
-            // Node markers and labels at compensated node positions
+            // Nodi compensati + divider + etichette segmento
             var cn = GetCompNodes();
             double[] cnxs = cn.Select(n => n.X).ToArray();
             double[] cnts = cn.Select(n =>  n.Y / 2.0).ToArray();
@@ -1914,8 +1865,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 var node = cn[ni];
                 double chartYBottom = -node.Y / 2.0;
                 double gap = node.Y * 0.40;
-                double lx  = node.X;
-                double ly  = chartYBottom - gap * (ni % 2 == 0 ? 1.0 : 2.2);
+                double lx = node.X;
+                double ly = chartYBottom - gap * (ni % 2 == 0 ? 1.0 : 2.2);
 
                 var leaderColor = new ScottColor(100, 100, 100);
                 var leader = plot.Add.Scatter(
@@ -1933,21 +1884,17 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 lbl.LabelPadding = 3; lbl.OffsetX = 0; lbl.OffsetY = 0;
             }
 
-            // Vertical divider lines at each node (top edge → bottom edge)
+            // Linee divisorie tra i segmenti originali
             var dividerColor = new ScottColor(80, 80, 80);
             foreach (var node in sorted)
             {
-                double topY =  node.Y / 2.0;
-                double botY = -node.Y / 2.0;
                 var div = plot.Add.Scatter(
                     new double[] { node.X, node.X },
-                    new double[] { topY, botY });
-                div.Color      = dividerColor;
-                div.LineWidth  = 1.2f;
-                div.MarkerSize = 0;
+                    new double[] { node.Y / 2.0, -node.Y / 2.0 });
+                div.Color = dividerColor; div.LineWidth = 1.2f; div.MarkerSize = 0;
             }
 
-            // Segment labels S1, S2… — centred between consecutive nodes, above the profile
+            // Etichette S1, S2… centrate tra i nodi
             var segLabelColor = new ScottColor(40, 40, 40);
             for (int si = 0; si < sorted.Count - 1; si++)
             {
@@ -1955,200 +1902,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 double topAtCx = InterpolateProfileY(sorted, cx) / 2.0;
                 double gap     = InterpolateProfileY(sorted, cx) * 0.08;
                 var sl = plot.Add.Text($"S{si + 1}", cx, topAtCx + gap);
-                sl.LabelFontSize        = 15;
-                sl.LabelBold            = false;
+                sl.LabelFontSize = 15; sl.LabelBold = false;
                 sl.LabelFontColor       = segLabelColor;
                 sl.LabelAlignment       = Alignment.LowerCenter;
                 sl.LabelBackgroundColor = ScottPlot.Colors.Transparent;
-                sl.LabelBorderWidth     = 0;
-                sl.LabelPadding         = 2;
-                sl.OffsetX              = 0;
-                sl.OffsetY              = 0;
-            }
-        }
-    }
-
-    /// <summary>
-    /// Renders the compensated step profile staircase.
-    ///
-    /// Slices are always coloured by their actual sink speed using the SAME colour scale
-    /// as the uncompensated Sink Map (original profile min/max range). A well-compensated
-    /// line shows a single uniform colour everywhere — visual confirmation of correctness.
-    ///
-    /// When Sink Map is also ON, a semi-transparent density overlay is added on top so the
-    /// user can see how density varies across the compensated shape.
-    ///
-    /// The orange staircase outline is always drawn last.
-    /// </summary>
-    private void RenderCompensatedOverlay(Plot plot, List<(double X, double Y)> sorted)
-    {
-        if (!_showCompProfile) return;
-        if (ProjectSegments.Count == 0) return;
-        bool anyComp = ProjectSegments.Any(s => s.HasCompensation);
-        if (!anyComp) return;
-
-        // Collect all compensated slices with speed and density
-        var allSlices = new List<(double x0, double x1, double r, double density, double speed)>();
-        foreach (var seg in ProjectSegments.OrderBy(s => s.StartCm))
-        {
-            if (!seg.HasCompensation) continue;
-            double[] xs   = seg.CompSliceXsCm;
-            double[] diam = seg.CompSliceDiamsMm;
-            double[] dens = seg.CompSliceDensities;
-            int    n    = xs.Length;
-            double half = n > 1 ? (xs[1] - xs[0]) / 2.0 : seg.LengthCm / 2.0;
-            for (int i = 0; i < n; i++)
-            {
-                double xAbs = seg.StartCm + xs[i];
-                double v    = SinkingSpeedCalc.CylinderSinkSpeed(_waterIsSalt, _waterTempC, diam[i], dens[i]);
-                allSlices.Add((xAbs - half, xAbs + half, diam[i] / 2.0, dens[i], double.IsNaN(v) ? 0 : v));
-            }
-        }
-        if (allSlices.Count == 0) return;
-
-        // Speed range from original profile — same scale as the uncompensated Sink Map
-        (double minV, double maxV) = ComputeOriginalSpeedRange(sorted);
-        double speedRange = maxV - minV;
-
-        // Density range for optional overlay
-        double minDens   = allSlices.Min(s => s.density);
-        double maxDens   = allSlices.Max(s => s.density);
-        double densRange = Math.Max(maxDens - minDens, 1e-9);
-
-        // Layer 1: speed colour (uniform → confirmation of correctness)
-        foreach (var (x0, x1, r, _, v) in allSlices)
-        {
-            double t = Math.Clamp((v - minV) / speedRange, 0.0, 1.0);
-            var poly = plot.Add.Polygon(new ScottPlot.Coordinates[]
-            {
-                new(x0,  r), new(x1,  r),
-                new(x1, -r), new(x0, -r),
-            });
-            poly.FillColor = SpeedColor(t).WithAlpha(0.65f);
-            poly.LineWidth = 0;
-            poly.LineColor = Colors.Transparent;
-        }
-
-        // Layer 2 (optional): density overlay when Sink Map is ON
-        if (_showSinkSpeedMap)
-        {
-            foreach (var (x0, x1, r, dens, _) in allSlices)
-            {
-                double t = Math.Clamp((dens - minDens) / densRange, 0.0, 1.0);
-                var poly = plot.Add.Polygon(new ScottPlot.Coordinates[]
-                {
-                    new(x0,  r), new(x1,  r),
-                    new(x1, -r), new(x0, -r),
-                });
-                poly.FillColor = DensityColor(t).WithAlpha(0.42f);
-                poly.LineWidth = 0;
-                poly.LineColor = Colors.Transparent;
-            }
-        }
-
-        // Layer 3: orange staircase outline
-        var topXs = new List<double>();
-        var topYs = new List<double>();
-        var botXs = new List<double>();
-        var botYs = new List<double>();
-
-        foreach (var (x0, x1, r, _, _) in allSlices)
-        {
-            if (topXs.Count == 0)
-            {
-                topXs.Add(x0); topYs.Add(0);
-                topXs.Add(x0); topYs.Add(r);
-                botXs.Add(x0); botYs.Add(0);
-                botXs.Add(x0); botYs.Add(-r);
-            }
-            else
-            {
-                double prevR = topYs.Last();
-                topXs.Add(x0); topYs.Add(prevR);
-                topXs.Add(x0); topYs.Add(r);
-                botXs.Add(x0); botYs.Add(-prevR);
-                botXs.Add(x0); botYs.Add(-r);
-            }
-            topXs.Add(x1); topYs.Add(r);
-            botXs.Add(x1); botYs.Add(-r);
-        }
-        topXs.Add(topXs.Last()); topYs.Add(0);
-        botXs.Add(botXs.Last()); botYs.Add(0);
-
-        var outlineColor = new ScottColor(255, 140, 0);
-        var topLine = plot.Add.Scatter(topXs.ToArray(), topYs.ToArray());
-        topLine.Color      = outlineColor;
-        topLine.LineWidth  = 2;
-        topLine.MarkerSize = 0;
-        topLine.LegendText = $"Comp. {_compTargetSpeedIns:0.00} in/s";
-
-        var botLine = plot.Add.Scatter(botXs.ToArray(), botYs.ToArray());
-        botLine.Color      = outlineColor;
-        botLine.LineWidth  = 2;
-        botLine.MarkerSize = 0;
-
-        // Legend: 4-stop speed scale (same as uncompensated Sink Map)
-        double minIns = minV * 39.3701, maxIns = maxV * 39.3701;
-        for (int stop = 0; stop < 4; stop++)
-        {
-            double t    = stop / 3.0;
-            double vIns = minIns + t * (maxIns - minIns);
-            var entry   = plot.Add.Scatter(Array.Empty<double>(), Array.Empty<double>());
-            entry.Color      = SpeedColor(t);
-            entry.LineWidth  = 8;
-            entry.LegendText = $"{vIns:+0.000;-0.000} in/s";
-        }
-        // Target speed marked on the same scale
-        double tTarget  = Math.Clamp((_compTargetSpeedIns / 39.3701 - minV) / speedRange, 0.0, 1.0);
-        var tgtEntry    = plot.Add.Scatter(Array.Empty<double>(), Array.Empty<double>());
-        tgtEntry.Color      = SpeedColor(tTarget);
-        tgtEntry.LineWidth  = 8;
-        tgtEntry.LegendText = $"★ Target {_compTargetSpeedIns:0.00} in/s";
-
-        // Density legend only when overlay is visible
-        if (_showSinkSpeedMap)
-        {
-            for (int stop = 0; stop < 4; stop++)
-            {
-                double t    = stop / 3.0;
-                double dens = minDens + t * (maxDens - minDens);
-                var entry   = plot.Add.Scatter(Array.Empty<double>(), Array.Empty<double>());
-                entry.Color      = DensityColor(t);
-                entry.LineWidth  = 8;
-                entry.LegendText = $"ρ {dens:0.000} g/cm³";
-            }
-        }
-
-        // Segment-boundary labels
-        var segsOrdered = ProjectSegments.OrderBy(s => s.StartCm).Where(s => s.HasCompensation).ToList();
-        var labeledXs   = new HashSet<double>();
-        foreach (var seg in segsOrdered)
-        {
-            if (!labeledXs.Contains(seg.StartCm))
-            {
-                labeledXs.Add(seg.StartCm);
-                double d = seg.CompSliceDiamsMm[0];
-                var lbl = plot.Add.Text($"Ø {d:0.000} mm\n{seg.StartCm:0.0} cm", seg.StartCm, d / 2.0);
-                lbl.LabelFontSize = 10; lbl.LabelBold = true;
-                lbl.LabelFontColor       = ScottPlot.Colors.Orange;
-                lbl.LabelAlignment       = Alignment.LowerLeft;
-                lbl.LabelBackgroundColor = Colors.Black.WithAlpha(0.75f);
-                lbl.LabelBorderColor     = ScottPlot.Colors.Orange;
-                lbl.LabelBorderWidth     = 1.5f;
-                lbl.LabelPadding = 3; lbl.OffsetX = 6; lbl.OffsetY = -6;
-            }
-            if (!labeledXs.Contains(seg.EndCm))
-            {
-                labeledXs.Add(seg.EndCm);
-                double d = seg.CompSliceDiamsMm[^1];
-                var lbl = plot.Add.Text($"Ø {d:0.000} mm\n{seg.EndCm:0.0} cm", seg.EndCm, d / 2.0);
-                lbl.LabelFontSize = 10; lbl.LabelBold = true;
-                lbl.LabelFontColor       = ScottPlot.Colors.Orange;
-                lbl.LabelAlignment       = Alignment.LowerLeft;
-                lbl.LabelBackgroundColor = Colors.Black.WithAlpha(0.75f);
-                lbl.LabelBorderColor     = ScottPlot.Colors.Orange;
-                lbl.LabelBorderWidth     = 1.5f;
-                lbl.LabelPadding = 3; lbl.OffsetX = 6; lbl.OffsetY = -6;
+                sl.LabelBorderWidth     = 0; sl.LabelPadding = 2;
+                sl.OffsetX = 0; sl.OffsetY = 0;
             }
         }
     }
@@ -2583,11 +2342,47 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
             seg.SetCompensation(seg.StartCm, sliceXs, sliceDiams, sliceDens, targetMs);
         }
-        RefreshPlot();
         int compCount = ProjectSegments.Count(s => s.HasCompensation);
+        if (compCount > 0)
+        {
+            _inCompMode = true;
+            _showOriginalProfile = false;
+            if (IsLoaded) ShowOriginalToggle.IsChecked = false;
+            UpdateCompModeUI();
+        }
+        RefreshPlot();
         UiStatus = compCount > 0
-            ? $"Compensation computed for {_compTargetSpeedIns:0.000} in/s ({compCount}/{ProjectSegments.Count} segments)"
-            : "Compensation skipped — set segment density first";
+            ? $"Compensazione calcolata per {_compTargetSpeedIns:0.000} in/s ({compCount}/{ProjectSegments.Count} segmenti)"
+            : "Compensazione saltata — imposta prima la densità dei segmenti";
+    }
+
+    private void UpdateCompModeUI()
+    {
+        if (!IsLoaded) return;
+        bool c = _inCompMode;
+        SinkMapToggle.Visibility      = c ? Visibility.Collapsed : Visibility.Visible;
+        ShowOriginalToggle.Visibility = c ? Visibility.Visible   : Visibility.Collapsed;
+        // Colonne tabella
+        OrigStartDiamColumn.Visibility = c ? Visibility.Collapsed : Visibility.Visible;
+        OrigEndDiamColumn.Visibility   = c ? Visibility.Collapsed : Visibility.Visible;
+        ShapeColumn.Visibility         = c ? Visibility.Collapsed : Visibility.Visible;
+        TaperColumn.Visibility         = c ? Visibility.Collapsed : Visibility.Visible;
+        SpWeightColumn.Visibility      = c ? Visibility.Collapsed : Visibility.Visible;
+        OrigSinkColumn.Visibility      = c ? Visibility.Collapsed : Visibility.Visible;
+        CompSinkColumn.Visibility      = c ? Visibility.Visible   : Visibility.Collapsed;
+        CompStartDiamColumn.Visibility = c ? Visibility.Visible   : Visibility.Collapsed;
+        CompEndDiamColumn.Visibility   = c ? Visibility.Visible   : Visibility.Collapsed;
+        CompStartDensColumn.Visibility = c ? Visibility.Visible   : Visibility.Collapsed;
+        CompEndDensColumn.Visibility   = c ? Visibility.Visible   : Visibility.Collapsed;
+    }
+
+    private void ShowOriginalProfile_Click(object sender, RoutedEventArgs e)
+    {
+        _showOriginalProfile = ShowOriginalToggle.IsChecked ?? false;
+        RefreshPlot();
+        UiStatus = _showOriginalProfile
+            ? "Profilo originale — mappa velocità affondamento"
+            : "Profilo compensato — gradiente densità";
     }
 
     // ── Line type / format ────────────────────────────────────────────────────
@@ -3174,8 +2969,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
 
         // Design overlay — thinner lines for print
-        // When Comp. View is active the chart shows the compensated smooth profile.
-        bool pdfUseComp = _showCompView && ProjectSegments.Any(s => s.HasCompensation);
+        // In modalità compensato il PDF mostra il profilo compensato con gradiente densità.
+        bool pdfUseComp = _inCompMode && !_showOriginalProfile && ProjectSegments.Any(s => s.HasCompensation);
         var baseNodes   = pdfUseComp ? GetCompNodes() : _segmentNodes.OrderBy(n => n.X).ToList();
 
         if (baseNodes.Count >= 2)
@@ -3186,7 +2981,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             double[] botYs = sorted.Select(n => -n.Y / 2.0).ToArray();
             var dc = _designLineColor;
 
-            if (pdfUseComp && _showSinkSpeedMap)
+            if (pdfUseComp)
             {
                 // Density gradient: each 1 cm slice coloured by required density (blue → red)
                 var compSegs = ProjectSegments.OrderBy(s => s.StartCm)
@@ -3408,7 +3203,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 laserMarkText = string.IsNullOrWhiteSpace(_laserMark)
                     ? $"at {string.Join(" and ", markPos)}"
                     : $"{_laserMark}   —   at {string.Join(" and ", markPos)}";
-            bool showComp = _showCompView && ProjectSegments.Any(s => s.HasCompensation);
+            bool showComp = _inCompMode && !_showOriginalProfile && ProjectSegments.Any(s => s.HasCompensation);
             string compNote = showComp
                 ? $"Compensated profile — target sink {_compTargetSpeedIns:0.00} in/s. " +
                   "Diameters reflect mass-preserving compensation. Do not alter diameters; adjust density only."
@@ -4035,21 +3830,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         UiStatus = _showSinkSpeedMap ? "Sink speed map ON" : "Sink speed map OFF";
     }
 
-    private void ShowCompProfile_Click(object sender, RoutedEventArgs e)
-    {
-        _showCompProfile = CompProfileToggle.IsChecked ?? false;
-        RefreshPlot();
-        UiStatus = _showCompProfile ? "Compensated profile ON" : "Compensated profile OFF";
-    }
-
-    private void ShowCompView_Click(object sender, RoutedEventArgs e)
-    {
-        _showCompView = CompViewToggle.IsChecked ?? false;
-        RefreshPlot();
-        UiStatus = _showCompView
-            ? "Comp. View ON — compensated profile in design style. Export PDF to produce the compensation worksheet."
-            : "Comp. View OFF";
-    }
 
     private void CompTargetBox_LostFocus(object sender, RoutedEventArgs e) => ApplyCompTarget();
     private void CompTargetBox_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)

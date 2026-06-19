@@ -146,6 +146,8 @@ public class ProjectSegment : INotifyPropertyChanged
         Notify(nameof(CompSpeedText));
         Notify(nameof(CompStartDiamText));
         Notify(nameof(CompEndDiamText));
+        Notify(nameof(CompStartDensityText));
+        Notify(nameof(CompEndDensityText));
     }
 
     public void ClearCompensation()
@@ -158,6 +160,8 @@ public class ProjectSegment : INotifyPropertyChanged
         Notify(nameof(CompSpeedText));
         Notify(nameof(CompStartDiamText));
         Notify(nameof(CompEndDiamText));
+        Notify(nameof(CompStartDensityText));
+        Notify(nameof(CompEndDensityText));
     }
 
     public string CompSpeedText
@@ -178,6 +182,14 @@ public class ProjectSegment : INotifyPropertyChanged
     /// <summary>Compensated diameter at the end of this segment (last slice).</summary>
     public string CompEndDiamText => _compSliceDiamsMm.Length > 0
         ? $"{_compSliceDiamsMm[_compSliceDiamsMm.Length - 1]:0.000}" : "—";
+
+    /// <summary>Required density at start of compensated segment (first slice).</summary>
+    public string CompStartDensityText => _compSliceDensities.Length > 0
+        ? $"{_compSliceDensities[0]:0.000}" : "—";
+
+    /// <summary>Required density at end of compensated segment (last slice).</summary>
+    public string CompEndDensityText => _compSliceDensities.Length > 0
+        ? $"{_compSliceDensities[_compSliceDensities.Length - 1]:0.000}" : "—";
 
     // Legacy alias (used by CSV export)
     public double VolumeMm3 => VolumeCm3 * 1000.0;

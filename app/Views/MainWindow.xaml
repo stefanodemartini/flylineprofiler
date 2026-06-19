@@ -553,18 +553,13 @@
                                           IsChecked="False"
                                           Click="ShowSinkMap_Click"
                                           ToolTip="Show sinking speed heat-map overlay (blue=slow, red=fast)"/>
-                            <ToggleButton x:Name="CompProfileToggle"
-                                          Content="Comp. Profile"
+                            <ToggleButton x:Name="ShowOriginalToggle"
+                                          Content="Non compensato"
                                           Style="{StaticResource ToggleBase}"
                                           IsChecked="False"
-                                          Click="ShowCompProfile_Click"
-                                          ToolTip="Show compensated step profile — equivalent cylinders per segment (same mass, uniform sink speed)"/>
-                            <ToggleButton x:Name="CompViewToggle"
-                                          Content="Comp. View"
-                                          Style="{StaticResource ToggleBase}"
-                                          IsChecked="False"
-                                          Click="ShowCompView_Click"
-                                          ToolTip="Show compensated profile as a clean design view (same style as normal profile). Use this for PDF export."/>
+                                          Visibility="Collapsed"
+                                          Click="ShowOriginalProfile_Click"
+                                          ToolTip="Mostra il profilo originale non compensato con la mappa della velocità di affondamento"/>
                         </StackPanel>
 
                         <ToggleButton x:Name="ShowDesignToggle"
@@ -1018,20 +1013,24 @@
                             <DataGridTextColumn Header="Name"
                                                Binding="{Binding Name, UpdateSourceTrigger=PropertyChanged}"
                                                Width="90"/>
-                            <DataGridTextColumn Header="Start Ø (mm)"
+                            <DataGridTextColumn x:Name="OrigStartDiamColumn"
+                                               Header="Start Ø (mm)"
                                                Binding="{Binding StartDiameterMm, StringFormat='0.000'}"
                                                Width="105"/>
-                            <DataGridTextColumn Header="End Ø (mm)"
+                            <DataGridTextColumn x:Name="OrigEndDiamColumn"
+                                               Header="End Ø (mm)"
                                                Binding="{Binding EndDiameterMm, StringFormat='0.000'}"
                                                Width="95"/>
                             <DataGridTextColumn Header="Length (cm)"
                                                Binding="{Binding LengthCm, StringFormat='0.0'}"
                                                Width="90"/>
-                            <DataGridTextColumn Header="Shape"
+                            <DataGridTextColumn x:Name="ShapeColumn"
+                                               Header="Shape"
                                                Binding="{Binding Shape}"
                                                Width="70"
                                                IsReadOnly="True"/>
-                            <DataGridTextColumn Header="Taper (mm/m)"
+                            <DataGridTextColumn x:Name="TaperColumn"
+                                               Header="Taper (mm/m)"
                                                Binding="{Binding TaperText}"
                                                Width="100"
                                                IsReadOnly="True"/>
@@ -1047,21 +1046,41 @@
                                                Binding="{Binding MassText}"
                                                Width="80"
                                                IsReadOnly="True"/>
-                            <DataGridTextColumn Header="Sink (in/s)"
+                            <DataGridTextColumn x:Name="OrigSinkColumn"
+                                               Header="Sink (in/s)"
                                                Binding="{Binding SinkSpeedText}"
                                                Width="90"
                                                IsReadOnly="True"/>
-                            <DataGridTextColumn Header="Comp. Sink (in/s)"
+                            <!-- Colonne modo compensato — visibili solo quando _inCompMode -->
+                            <DataGridTextColumn x:Name="CompSinkColumn"
+                                               Header="Comp. Sink (in/s)"
                                                Binding="{Binding CompSpeedText}"
                                                Width="115"
+                                               Visibility="Collapsed"
                                                IsReadOnly="True"/>
-                            <DataGridTextColumn Header="Comp. Start Ø (mm)"
+                            <DataGridTextColumn x:Name="CompStartDiamColumn"
+                                               Header="Comp. Start Ø (mm)"
                                                Binding="{Binding CompStartDiamText}"
                                                Width="120"
+                                               Visibility="Collapsed"
                                                IsReadOnly="True"/>
-                            <DataGridTextColumn Header="Comp. End Ø (mm)"
+                            <DataGridTextColumn x:Name="CompEndDiamColumn"
+                                               Header="Comp. End Ø (mm)"
                                                Binding="{Binding CompEndDiamText}"
                                                Width="115"
+                                               Visibility="Collapsed"
+                                               IsReadOnly="True"/>
+                            <DataGridTextColumn x:Name="CompStartDensColumn"
+                                               Header="ρ Inizio (g/cm³)"
+                                               Binding="{Binding CompStartDensityText}"
+                                               Width="110"
+                                               Visibility="Collapsed"
+                                               IsReadOnly="True"/>
+                            <DataGridTextColumn x:Name="CompEndDensColumn"
+                                               Header="ρ Fine (g/cm³)"
+                                               Binding="{Binding CompEndDensityText}"
+                                               Width="105"
+                                               Visibility="Collapsed"
                                                IsReadOnly="True"/>
                         </DataGrid.Columns>
                     </DataGrid>
