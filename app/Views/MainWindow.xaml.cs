@@ -892,6 +892,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         ProjectService.Save(project, path);
         _currentProjectPath = path;
         _isDirty            = false;
+        RecentFilesService.Add(path);
         UpdateProjectTitle();
         UiStatus = $"Project saved: {Path.GetFileName(path)}";
     }
@@ -975,6 +976,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _currentProjectPath = path;
         _isDirty            = false;
         _lastImportedFile   = _importedSeries.Count > 0 ? _importedSeries[^1].Name : "-";
+        RecentFilesService.Add(path);
 
         _vm.Points.CollectionChanged += Points_CollectionChanged;
 
@@ -1070,6 +1072,95 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             MessageBox.Show($"Could not open project:\n{ex.Message}", "Error",
                             MessageBoxButton.OK, MessageBoxImage.Error);
         }
+    }
+
+    private void RecentBtn_Click(object sender, RoutedEventArgs e)
+    {
+        RecentPopup.IsOpen = true;
+    }
+
+    private void RecentPopup_Opened(object sender, EventArgs e)
+    {
+        RecentItemsPanel.Children.Clear();
+        var recent = RecentFilesService.GetAll();
+
+        if (recent.Count == 0)
+        {
+            RecentItemsPanel.Children.Add(new System.Windows.Controls.TextBlock
+            {
+                Text       = "No recent files",
+                Foreground = new System.Windows.Media.SolidColorBrush(
+                                 System.Windows.Media.Color.FromRgb(0x7A, 0x84, 0x99)),
+                FontSize   = 12,
+                Margin     = new Thickness(12, 10, 12, 10)
+            });
+            return;
+        }
+
+        foreach (var path in recent)
+        {
+            var nameBlock = new System.Windows.Controls.TextBlock
+            {
+                Text       = System.IO.Path.GetFileNameWithoutExtension(path),
+                FontSize   = 12,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = new System.Windows.Media.SolidColorBrush(
+                                 System.Windows.Media.Color.FromRgb(0xE2, 0xE8, 0xF4))
+            };
+            var pathBlock = new System.Windows.Controls.TextBlock
+            {
+                Text          = path,
+                FontSize      = 10,
+                TextTrimming  = TextTrimming.CharacterEllipsis,
+                Foreground    = new System.Windows.Media.SolidColorBrush(
+                                    System.Windows.Media.Color.FromRgb(0x7A, 0x84, 0x99))
+            };
+            var inner = new StackPanel();
+            inner.Children.Add(nameBlock);
+            inner.Children.Add(pathBlock);
+
+            var btn = new Button
+            {
+                Tag                      = path,
+                Content                  = inner,
+                HorizontalContentAlignment = System.Windows.HorizontalAlignment.Left,
+                Background               = System.Windows.Media.Brushes.Transparent,
+                BorderThickness          = new Thickness(0),
+                Cursor                   = System.Windows.Input.Cursors.Hand,
+                Padding                  = new Thickness(12, 6, 12, 6)
+            };
+            btn.Click += RecentFile_Click;
+            RecentItemsPanel.Children.Add(btn);
+        }
+    }
+
+    private void RecentFile_Click(object sender, RoutedEventArgs e)
+    {
+        RecentPopup.IsOpen = false;
+        if (!ConfirmDiscardIfDirty()) return;
+
+        string path = (string)((Button)sender).Tag!;
+        if (!System.IO.File.Exists(path))
+        {
+            MessageBox.Show($"File not found:\n{path}", "Recent Files",
+                            MessageBoxButton.OK, MessageBoxImage.Warning);
+            RecentFilesService.Remove(path);
+            return;
+        }
+
+        try { LoadProjectFromFile(path); }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Could not open project:\n{ex.Message}", "Error",
+                            MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void ClearRecentFiles_Click(object sender, RoutedEventArgs e)
+    {
+        RecentPopup.IsOpen = false;
+        RecentFilesService.Clear();
+        UiStatus = "Recent file history cleared";
     }
 
     private void SaveProject_Click(object sender, RoutedEventArgs e)

@@ -242,6 +242,38 @@
                             Style="{StaticResource BtnGhost}"
                             Click="OpenProject_Click"
                             ToolTip="Open project (.flp)"/>
+                    <!-- Recent files drop-down -->
+                    <Grid>
+                        <Button x:Name="RecentBtn"
+                                Content="Recent ▾"
+                                Style="{StaticResource BtnGhost}"
+                                Click="RecentBtn_Click"
+                                ToolTip="Open a recently used project"/>
+                        <Popup x:Name="RecentPopup"
+                               StaysOpen="False"
+                               Placement="Bottom"
+                               PlacementTarget="{Binding ElementName=RecentBtn}"
+                               Opened="RecentPopup_Opened">
+                            <Border Background="#1C2030"
+                                    BorderBrush="#2E3548" BorderThickness="1"
+                                    MinWidth="300" MaxWidth="500">
+                                <StackPanel>
+                                    <ScrollViewer MaxHeight="340"
+                                                  VerticalScrollBarVisibility="Auto">
+                                        <StackPanel x:Name="RecentItemsPanel" Margin="4,4,4,0"/>
+                                    </ScrollViewer>
+                                    <Border BorderBrush="#2E3548" BorderThickness="0,1,0,0"
+                                            Padding="8,5">
+                                        <Button Content="Clear history"
+                                                Style="{StaticResource BtnGhost}"
+                                                FontSize="10"
+                                                Click="ClearRecentFiles_Click"
+                                                HorizontalAlignment="Left"/>
+                                    </Border>
+                                </StackPanel>
+                            </Border>
+                        </Popup>
+                    </Grid>
                     <Button Content="Save"
                             Style="{StaticResource BtnSecondary}"
                             Click="SaveProject_Click"
