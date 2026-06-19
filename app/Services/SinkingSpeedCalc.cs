@@ -33,7 +33,7 @@ public static class SinkingSpeedCalc
             bool isSalt, double tempC,
             double startDiamMm, double endDiamMm, double lengthCm,
             double densityGcm3, double targetSpeedMs,
-            double sliceLenCm = 2.0)
+            double sliceLenCm = 1.0)   // 1 cm slices for fine resolution
     {
         if (densityGcm3 <= 0 || lengthCm <= 0 || startDiamMm <= 0 || endDiamMm <= 0)
             return (Array.Empty<double>(), Array.Empty<double>(), Array.Empty<double>());
@@ -54,7 +54,9 @@ public static class SinkingSpeedCalc
             double dOrig = (startDiamMm + t * (endDiamMm - startDiamMm)) / 1000.0; // m
             xs[i]        = (i + 0.5) * dl; // cm from segment start
 
-            // Solve: (π/4)·g·(ρ_orig·dOrig² − ρ_W·d_new²) = 0.5·Cd(d_new)·|V*|·V*·d_new·ρ_W
+            // Force balance per unit length with mass conservation (ρ_orig·dOrig² = ρ_new·d_new²):
+            //   Net gravity: (π/4)·g·(ρ_orig·dOrig² − ρ_W·d_new²)
+            //   Drag:        0.5·Cd(d_new)·|V|·V·d_new·ρ_W
             double Residual(double d)
             {
                 if (d <= 0) return double.PositiveInfinity;
@@ -65,10 +67,15 @@ public static class SinkingSpeedCalc
                        - 0.5 * cd * Math.Abs(targetSpeedMs) * targetSpeedMs * d * rhoW;
             }
 
-            double lo = 1e-6, hi = 0.025;
-            double flo = Residual(lo), fhi = Residual(hi);
+            // Upper bracket: must be large enough that Residual(hi) < 0 for any sinking target.
+            // For a sinking line Residual is positive near d=0 and goes negative as d grows;
+            // 6× the original diameter gives ample headroom while staying physically plausible.
+            double lo  = 1e-6;
+            double hi  = Math.Max(0.030, dOrig * 6.0);
+            double flo = Residual(lo);
+            double fhi = Residual(hi);
 
-            double dNew = dOrig; // fallback: unchanged
+            double dNew = dOrig; // fallback: kept unchanged if no root found in bracket
             if (flo * fhi <= 0.0)
             {
                 for (int k = 0; k < MaxIter; k++)
@@ -83,7 +90,7 @@ public static class SinkingSpeedCalc
             }
             diams[i] = dNew * 1000.0; // m → mm
             // Density from mass conservation: ρ_new = ρ_orig × (dOrig/dNew)²
-            dens[i] = (rhoOrig * (dOrig * dOrig) / (dNew * dNew)) / 1000.0; // kg/m³ → g/cm³
+            dens[i] = (rhoOrig * (dOrig * dOrig) / (dNew * dNew)) / 1000.0; // g/cm³
         }
 
         return (xs, diams, dens);

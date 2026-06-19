@@ -1486,7 +1486,86 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     // the gradient fill and the profile outline so it's always visible.
     // Colour = individual cylinder terminal speed for that slice's diameter:
     //   blue (slow/floating) → cyan → green → yellow → red (fast sinking)
+    /// <summary>
+    /// Dispatches to the original or compensated sink-speed map depending on whether
+    /// the compensated profile is currently active.
+    /// </summary>
     private void RenderSinkSpeedOverlay(Plot plot, List<(double X, double Y)> sorted)
+    {
+        if (_showCompProfile && ProjectSegments.Any(s => s.HasCompensation))
+            RenderCompensatedSpeedMap(plot);
+        else
+            RenderOriginalSpeedMap(plot, sorted);
+    }
+
+    /// <summary>
+    /// Colours each compensated slice by how close its actual sink speed is to the target.
+    /// Green = exactly on target, blue = slower, red = faster.
+    /// Uses an absolute scale anchored at the target speed so a well-compensated line
+    /// shows uniform green across its full length.
+    /// </summary>
+    private void RenderCompensatedSpeedMap(Plot plot)
+    {
+        double targetMs = _compTargetSpeedIns / 39.3701;
+        // Half-span: ±25% of target or at least ±0.5 in/s
+        double spanMs   = Math.Max(0.5 / 39.3701, Math.Abs(targetMs) * 0.25);
+
+        var slices = new List<(double x0, double x1, double r, double speed)>();
+
+        foreach (var seg in ProjectSegments.OrderBy(s => s.StartCm))
+        {
+            if (!seg.HasCompensation) continue;
+            double[] xs   = seg.CompSliceXsCm;
+            double[] diam = seg.CompSliceDiamsMm;
+            double[] dens = seg.CompSliceDensities;
+            int    n    = xs.Length;
+            double half = n > 1 ? (xs[1] - xs[0]) / 2.0 : seg.LengthCm / 2.0;
+
+            for (int i = 0; i < n; i++)
+            {
+                double xAbs = seg.StartCm + xs[i];
+                double v = SinkingSpeedCalc.CylinderSinkSpeed(
+                    _waterIsSalt, _waterTempC, diam[i], dens[i]);
+                if (double.IsNaN(v)) continue;
+                slices.Add((xAbs - half, xAbs + half, diam[i] / 2.0, v));
+            }
+        }
+
+        if (slices.Count == 0) return;
+
+        foreach (var (x0, x1, r, v) in slices)
+        {
+            // t = 0.5 → on target (green); t < 0.5 → too slow (blue); t > 0.5 → too fast (red)
+            double t = Math.Clamp(0.5 + 0.5 * (v - targetMs) / spanMs, 0.0, 1.0);
+            var poly = plot.Add.Polygon(new ScottPlot.Coordinates[]
+            {
+                new(x0,  r), new(x1,  r),
+                new(x1, -r), new(x0, -r),
+            });
+            poly.FillColor = SpeedColor(t).WithAlpha(0.75f);
+            poly.LineWidth = 0;
+            poly.LineColor = Colors.Transparent;
+        }
+
+        // 5-stop legend anchored at target ± span
+        double[] fracs   = { -1.0, -0.5, 0.0, 0.5, 1.0 };
+        string[] markers = {  "",   "",  " ★",  "",  "" };
+        for (int i = 0; i < fracs.Length; i++)
+        {
+            double vIns = (_compTargetSpeedIns + fracs[i] * spanMs * 39.3701);
+            double t    = Math.Clamp(0.5 + 0.5 * fracs[i], 0.0, 1.0);
+            var entry   = plot.Add.Scatter(Array.Empty<double>(), Array.Empty<double>());
+            entry.Color      = SpeedColor(t);
+            entry.LineWidth  = 8;
+            entry.LegendText = $"{vIns:0.00} in/s{markers[i]}";
+        }
+    }
+
+    /// <summary>
+    /// Colours the original (uncompensated) profile by local sink speed using a
+    /// relative scale (blue = slowest section, red = fastest section in this profile).
+    /// </summary>
+    private void RenderOriginalSpeedMap(Plot plot, List<(double X, double Y)> sorted)
     {
         // ── Pass 1: collect all slice speeds for colour normalisation ──────
         var slices = new List<(double xStart, double xEnd, double dStart, double dEnd, double speed)>();
@@ -1526,10 +1605,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         // ── Pass 2: draw trapezoids ────────────────────────────────────────
         foreach (var (xs, xe, ds, de, v) in slices)
         {
-            double t   = (v - minV) / range;
+            double t    = (v - minV) / range;
             var    fill = SpeedColor(t).WithAlpha(0.70f);
-
-            var poly = plot.Add.Polygon(new ScottPlot.Coordinates[]
+            var    poly = plot.Add.Polygon(new ScottPlot.Coordinates[]
             {
                 new(xs,  ds / 2.0),
                 new(xe,  de / 2.0),
@@ -1541,7 +1619,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             poly.LineColor = Colors.Transparent;
         }
 
-        // ── 4-stop gradient legend (matches density map style) ────────────
+        // ── 4-stop gradient legend ─────────────────────────────────────────
         double minIns = minV * 39.3701, maxIns = maxV * 39.3701;
         for (int stop = 0; stop < 4; stop++)
         {
