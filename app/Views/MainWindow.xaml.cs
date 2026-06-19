@@ -2534,8 +2534,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
         HoverCoordsStatus = $"{string.Join("   |   ", parts)}  @  {plotX:0.0} cm";
 
-        // On-chart annotation: same info, stacked on multiple lines
-        string chartText = $"{string.Join("\n", parts)}\n@ {plotX:0.0} cm";
+        // On-chart annotation suppressed while drawing nodes — it sits on top of the scan
+        // profile at the exact spot the user needs to see and click.  The status bar still shows all values.
+        string? chartText = _segmentDrawMode ? null : $"{string.Join("\n", parts)}\n@ {plotX:0.0} cm";
         UpdateHoverAnnotation(chartText, plotX, plotY);
     }
 
