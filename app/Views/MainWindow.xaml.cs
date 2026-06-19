@@ -3101,11 +3101,16 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             double dataPerPxX = (xSpan * 1.15) / 3000.0;
             double yEstSpan   = maxDiam + 2 * rowGap * (1.6 + 3 * 1.2);
             double dataPerPxY = yEstSpan / 480.0;
+            // In comp mode GetCompNodes() has epsilon-duplicate pairs at boundaries — deduplicate
+            var labelNodes = (pdfUseComp && sorted.Count > 1)
+                ? sorted.Where((n, i) => i == 0 || Math.Abs(sorted[i - 1].X - n.X) > 0.5).ToList()
+                : sorted;
+
             var placedBoxes = new List<(double X1, double Y1, double X2, double Y2)>();
             _pdfLabelYMin   = 0; _pdfLabelYMax = 0;
-            for (int ni = 0; ni < sorted.Count; ni++)
+            for (int ni = 0; ni < labelNodes.Count; ni++)
             {
-                var node         = sorted[ni];
+                var node         = labelNodes[ni];
                 double chartYTop =  node.Y / 2.0;
                 double chartYBot = -node.Y / 2.0;
                 string text      = $"Ø {node.Y:0.000}  {node.X:0.0} cm";
@@ -3170,7 +3175,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
             // Vertical divider lines at each node for PDF
             var dividerColor = new ScottColor(80, 80, 80);
-            foreach (var node in sorted)
+            foreach (var node in labelNodes)
             {
                 double topY =  node.Y / 2.0;
                 double botY = -node.Y / 2.0;
@@ -3184,21 +3189,46 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
             // Segment labels S1, S2… for PDF
             var segLabelColor = new ScottColor(40, 40, 40);
-            for (int si = 0; si < sorted.Count - 1; si++)
+            if (pdfUseComp)
             {
-                double cx      = (sorted[si].X + sorted[si + 1].X) / 2.0;
-                double topAtCx = InterpolateProfileY(sorted, cx) / 2.0;
-                double gap     = InterpolateProfileY(sorted, cx) * 0.08;
-                var sl = plot.Add.Text($"S{si + 1}", cx, topAtCx + gap);
-                sl.LabelFontSize        = pdfLblSize;
-                sl.LabelBold            = false;
-                sl.LabelFontColor       = segLabelColor;
-                sl.LabelAlignment       = Alignment.LowerCenter;
-                sl.LabelBackgroundColor = ScottPlot.Colors.Transparent;
-                sl.LabelBorderWidth     = 0;
-                sl.LabelPadding         = 2;
-                sl.OffsetX              = 0;
-                sl.OffsetY              = 0;
+                // Comp mode: one label per original ProjectSegment (not per comp-node gap)
+                var segsOrdered = ProjectSegments.OrderBy(s => s.StartCm).ToList();
+                foreach (var seg in segsOrdered)
+                {
+                    double cx      = (seg.StartCm + seg.EndCm) / 2.0;
+                    double topAtCx = InterpolateProfileY(sorted, cx) / 2.0;
+                    double gap     = InterpolateProfileY(sorted, cx) * 0.08;
+                    string lname   = string.IsNullOrWhiteSpace(seg.Name) ? $"S{seg.Index}" : seg.Name;
+                    var sl = plot.Add.Text(lname, cx, topAtCx + gap);
+                    sl.LabelFontSize        = pdfLblSize;
+                    sl.LabelBold            = false;
+                    sl.LabelFontColor       = segLabelColor;
+                    sl.LabelAlignment       = Alignment.LowerCenter;
+                    sl.LabelBackgroundColor = ScottPlot.Colors.Transparent;
+                    sl.LabelBorderWidth     = 0;
+                    sl.LabelPadding         = 2;
+                    sl.OffsetX              = 0;
+                    sl.OffsetY              = 0;
+                }
+            }
+            else
+            {
+                for (int si = 0; si < sorted.Count - 1; si++)
+                {
+                    double cx      = (sorted[si].X + sorted[si + 1].X) / 2.0;
+                    double topAtCx = InterpolateProfileY(sorted, cx) / 2.0;
+                    double gap     = InterpolateProfileY(sorted, cx) * 0.08;
+                    var sl = plot.Add.Text($"S{si + 1}", cx, topAtCx + gap);
+                    sl.LabelFontSize        = pdfLblSize;
+                    sl.LabelBold            = false;
+                    sl.LabelFontColor       = segLabelColor;
+                    sl.LabelAlignment       = Alignment.LowerCenter;
+                    sl.LabelBackgroundColor = ScottPlot.Colors.Transparent;
+                    sl.LabelBorderWidth     = 0;
+                    sl.LabelPadding         = 2;
+                    sl.OffsetX              = 0;
+                    sl.OffsetY              = 0;
+                }
             }
         }
 
