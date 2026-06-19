@@ -528,20 +528,6 @@
                                 ToolTip="Export design sheet as PDF"/>
                         <!-- Sinking-only tools — hidden for floating lines -->
                         <StackPanel x:Name="SinkingToolsPanel" Orientation="Horizontal" VerticalAlignment="Center">
-                            <TextBlock Text="Desired sink:" Foreground="{StaticResource TextMuted}" VerticalAlignment="Center" Margin="4,0,2,0"/>
-                            <TextBox x:Name="CompTargetBox"
-                                     Text="1.000"
-                                     Width="58"
-                                     VerticalAlignment="Center"
-                                     LostFocus="CompTargetBox_LostFocus"
-                                     KeyDown="CompTargetBox_KeyDown"
-                                     ToolTip="Target uniform sinking speed for the compensated profile.&#x0a;Typical sink tip classes (AFTM):&#x0a;  Class I : 1.25–2.00 in/s  (slow intermediate)&#x0a;  Class II : 2.00–3.00 in/s&#x0a;  Class III: 2.50–3.50 in/s&#x0a;  Class IV : 3.50–4.50 in/s&#x0a;  Class V  : 4.50–6.00 in/s&#x0a;  Class VI : 6.00–8.00 in/s&#x0a;  Class VII: &gt; 8.00 in/s (very fast)"/>
-                            <TextBlock Text="in/s" Foreground="{StaticResource TextMuted}" VerticalAlignment="Center" Margin="2,0,2,0"/>
-                            <TextBlock x:Name="CompTargetCmsLabel"
-                                       Foreground="{StaticResource TextMuted}"
-                                       VerticalAlignment="Center"
-                                       FontStyle="Italic"
-                                       Margin="0,0,4,0"/>
                             <Button Content="⚖ Compensate"
                                     Style="{StaticResource BtnSecondary}"
                                     Click="Compensate_Click"

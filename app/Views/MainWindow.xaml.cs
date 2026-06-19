@@ -226,8 +226,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             RefreshPlot();
             RefreshStatusBar();
             UpdateProjectTitle();
-            ApplyCompTarget(); // populate cm/s label with initial value
-
             // Open .flp passed on the command line (double-click via file association)
             var args = Environment.GetCommandLineArgs();
             if (args.Length > 1 && System.IO.File.Exists(args[1])
@@ -2360,7 +2358,19 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private void ComputeCompensation()
     {
-        double targetMs = _compTargetSpeedIns / 39.3701;
+        // Velocità target = massimo SinkSpeedMs tra i segmenti con densità impostata
+        UpdateSinkingSpeeds();
+        double targetMs = ProjectSegments
+            .Where(s => s.SpecWeightGCm3 > 0 && !double.IsNaN(s.SinkSpeedMs) && s.SinkSpeedMs > 0)
+            .Select(s => s.SinkSpeedMs)
+            .DefaultIfEmpty(0)
+            .Max();
+        if (targetMs <= 0)
+        {
+            UiStatus = "Nessun segmento con velocità di affondamento valida — imposta la densità prima";
+            return;
+        }
+        _compTargetSpeedIns = targetMs * 39.3701; // salva per display
 
         foreach (var seg in ProjectSegments)
         {
@@ -3908,42 +3918,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     }
 
 
-    private void CompTargetBox_LostFocus(object sender, RoutedEventArgs e) => ApplyCompTarget();
-    private void CompTargetBox_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
-    {
-        if (e.Key == System.Windows.Input.Key.Enter) ApplyCompTarget();
-    }
-    private void ApplyCompTarget()
-    {
-        if (double.TryParse(CompTargetBox.Text,
-            System.Globalization.NumberStyles.Any,
-            System.Globalization.CultureInfo.InvariantCulture,
-            out double v) && v > 0)
-        {
-            _compTargetSpeedIns = v;
-            CompTargetBox.BorderBrush = null; // restore default
-            double cms = v * 2.54;
-            string cls = v switch
-            {
-                < 1.25 => "very slow",
-                < 2.00 => "Class I",
-                < 3.00 => "Class II",
-                < 3.50 => "Class III",
-                < 4.50 => "Class IV",
-                < 6.00 => "Class V",
-                < 8.00 => "Class VI",
-                _      => "Class VII"
-            };
-            CompTargetCmsLabel.Text = $"≈ {cms:0.0} cm/s  ({cls})";
-        }
-        else
-        {
-            CompTargetBox.BorderBrush = new System.Windows.Media.SolidColorBrush(
-                (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#E85454"));
-            CompTargetBox.Text = _compTargetSpeedIns.ToString("0.000", System.Globalization.CultureInfo.InvariantCulture);
-        }
-    }
-
     private void Compensate_Click(object sender, RoutedEventArgs e)
     {
         if (ProjectSegments.Count == 0)
@@ -3956,7 +3930,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             UiStatus = "Set density (g/cm³) before computing compensation";
             return;
         }
-        ApplyCompTarget();
         ComputeCompensation();
         MarkDirty();
     }
