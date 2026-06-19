@@ -19,6 +19,32 @@ public static class FlyLinePdfExporter
 {
     private static PdfColor C(string hex) => PdfColor.FromHex(hex);
 
+    private static double[] Quantize1D(IEnumerable<double> values, int k = 4)
+    {
+        var arr = values.Where(v => v > 0).OrderBy(v => v).ToArray();
+        if (arr.Length == 0) return Array.Empty<double>();
+        k = Math.Min(k, arr.Length);
+        if (k == 1) return new[] { arr.Average() };
+        double[] c = new double[k];
+        for (int i = 0; i < k; i++)
+            c[i] = arr[(int)((double)i / (k - 1) * (arr.Length - 1))];
+        for (int iter = 0; iter < 50; iter++)
+        {
+            double[] sums = new double[k]; int[] counts = new int[k];
+            foreach (var v in arr)
+            {
+                int best = 0; double bestD = Math.Abs(v - c[0]);
+                for (int j = 1; j < k; j++) { double d = Math.Abs(v - c[j]); if (d < bestD) { bestD = d; best = j; } }
+                sums[best] += v; counts[best]++;
+            }
+            bool changed = false;
+            for (int j = 0; j < k; j++)
+                if (counts[j] > 0) { double nc = sums[j] / counts[j]; if (Math.Abs(nc - c[j]) > 1e-9) changed = true; c[j] = nc; }
+            if (!changed) break;
+        }
+        return c.OrderBy(v => v).ToArray();
+    }
+
     private static (byte r, byte g, byte b) DensityColorRgb(double t)
     {
         t = Math.Clamp(t, 0, 1);
@@ -405,51 +431,81 @@ public static class FlyLinePdfExporter
                         var compSegs = segments.Where(s => s.HasCompensation).ToList();
                         if (compSegs.Count > 0)
                         {
-                            // Density range for colour normalisation
-                            var allDens = compSegs
-                                .Where(s => s.CompSliceDensities.Length > 0)
-                                .Select(s => s.CompSliceDensities.Average())
-                                .ToList();
-                            double minD = allDens.Count > 0 ? allDens.Min() : 0;
-                            double maxD = allDens.Count > 0 ? allDens.Max() : 1;
+                            // Quantizza tutte le densità slice a max 4 materiali
+                            double[] qDens = Quantize1D(compSegs.SelectMany(s => s.CompSliceDensities), 4);
+                            double minD = qDens.Length > 0 ? qDens[0] : 0;
+                            double maxD = qDens.Length > 0 ? qDens[^1] : 1;
                             double rng  = Math.Max(maxD - minD, 1e-9);
 
+                            double NearestQ(double d) => qDens.Length == 0 ? d
+                                : qDens.MinBy(c => Math.Abs(c - d));
+                            int MatIdx(double d) => Array.IndexOf(qDens, NearestQ(d)) + 1;
+
+                            // ── Chiave materiali (max 4 campioni) ────────────
+                            col.Item().Background(C("F7F8FA"))
+                                .Border(0.5f).BorderColor(ColBorder)
+                                .PaddingVertical(3).PaddingHorizontal(5).Row(mr =>
+                            {
+                                mr.AutoItem().AlignMiddle()
+                                    .Text("Materiali  ").FontSize(6.5f).Bold().FontColor(ColMuted);
+                                for (int mi = 0; mi < qDens.Length; mi++)
+                                {
+                                    double dens = qDens[mi];
+                                    double t = Math.Clamp((dens - minD) / rng, 0, 1);
+                                    var (sr, sg, sb) = DensityColorRgb(t);
+                                    var sw = PdfColor.FromRGB(sr, sg, sb);
+                                    mr.AutoItem().Column(mc =>
+                                    {
+                                        mc.Item().Width(58).Height(10).Background(sw)
+                                            .Border(0.5f).BorderColor(ColBorder);
+                                        mc.Item().Width(58)
+                                            .Text($"Mat {mi + 1}")
+                                            .FontSize(6.5f).Bold().FontColor(ColText).AlignCenter();
+                                        mc.Item().Width(58)
+                                            .Text($"{dens:0.000} g/cm³")
+                                            .FontSize(7f).Bold().FontColor(C("0F6B50")).AlignCenter();
+                                    });
+                                    mr.ConstantItem(6);
+                                }
+                            });
+
+                            // ── Assegnazione segmenti ────────────────────────
                             col.Item().Background(C("F7F8FA"))
                                 .Border(0.5f).BorderColor(ColBorder)
                                 .PaddingVertical(3).PaddingHorizontal(5).Row(dr =>
                             {
                                 dr.AutoItem().AlignMiddle()
-                                    .Text("Density  ").FontSize(6.5f).Bold().FontColor(ColMuted);
-
+                                    .Text("Segmenti  ").FontSize(6.5f).Bold().FontColor(ColMuted);
                                 foreach (var seg in compSegs)
                                 {
                                     if (seg.CompSliceDensities.Length == 0) continue;
-                                    double avgDens = seg.CompSliceDensities.Average();
-                                    double t = Math.Clamp((avgDens - minD) / rng, 0, 1);
+                                    double avg = seg.CompSliceDensities.Average();
+                                    double qd  = NearestQ(avg);
+                                    int    mat = MatIdx(avg);
+                                    double t   = Math.Clamp((qd - minD) / rng, 0, 1);
                                     var (sr, sg, sb) = DensityColorRgb(t);
-                                    var swatchColor = PdfColor.FromRGB(sr, sg, sb);
+                                    var sw = PdfColor.FromRGB(sr, sg, sb);
                                     string startD = seg.CompSliceDiamsMm.Length > 0
                                         ? $"{seg.CompSliceDiamsMm[0]:0.000}" : "—";
                                     string endD = seg.CompSliceDiamsMm.Length > 0
                                         ? $"{seg.CompSliceDiamsMm[^1]:0.000}" : "—";
-                                    string range = $"{seg.StartCm * 10:0}–{seg.EndCm * 10:0} mm";
+                                    string pos = $"{seg.StartCm * 10:0}–{seg.EndCm * 10:0} mm";
 
                                     dr.AutoItem().Column(sc =>
                                     {
-                                        sc.Item().Width(52).Height(10)
-                                            .Background(swatchColor)
+                                        sc.Item().Width(52).Height(10).Background(sw)
                                             .Border(0.5f).BorderColor(ColBorder);
                                         sc.Item().Width(52)
                                             .Text(string.IsNullOrWhiteSpace(seg.Name) ? $"S{seg.Index}" : seg.Name)
                                             .FontSize(6.5f).Bold().FontColor(ColText).AlignCenter();
                                         sc.Item().Width(52)
-                                            .Text($"{avgDens:0.000} g/cm³")
+                                            .Text($"Mat {mat}")
                                             .FontSize(6.5f).Bold().FontColor(C("0F6B50")).AlignCenter();
                                         sc.Item().Width(52)
                                             .Text($"Ø {startD}→{endD} mm")
                                             .FontSize(6f).FontColor(ColMuted).AlignCenter();
                                         sc.Item().Width(52)
-                                            .Text(range)
+                                            .Text(pos)
                                             .FontSize(6f).FontColor(ColMuted).AlignCenter();
                                     });
                                     dr.ConstantItem(6);

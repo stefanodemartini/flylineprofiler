@@ -1916,6 +1916,39 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
     }
 
+    /// <summary>
+    /// K-means quantization of a 1-D set of values into at most <paramref name="k"/> clusters.
+    /// Returns the centroids sorted ascending. Used to reduce density values to max 4 materials.
+    /// </summary>
+    private static double[] Quantize1D(IEnumerable<double> values, int k = 4)
+    {
+        var arr = values.Where(v => v > 0).OrderBy(v => v).ToArray();
+        if (arr.Length == 0) return Array.Empty<double>();
+        k = Math.Min(k, arr.Length);
+        if (k == 1) return new[] { arr.Average() };
+        // Initial centroids: evenly spaced across sorted array
+        double[] c = new double[k];
+        for (int i = 0; i < k; i++)
+            c[i] = arr[(int)((double)i / (k - 1) * (arr.Length - 1))];
+        // K-means iterations
+        for (int iter = 0; iter < 50; iter++)
+        {
+            double[] sums  = new double[k];
+            int[]   counts = new int[k];
+            foreach (var v in arr)
+            {
+                int best = 0; double bestD = Math.Abs(v - c[0]);
+                for (int j = 1; j < k; j++) { double d = Math.Abs(v - c[j]); if (d < bestD) { bestD = d; best = j; } }
+                sums[best] += v; counts[best]++;
+            }
+            bool changed = false;
+            for (int j = 0; j < k; j++)
+                if (counts[j] > 0) { double nc = sums[j] / counts[j]; if (Math.Abs(nc - c[j]) > 1e-9) changed = true; c[j] = nc; }
+            if (!changed) break;
+        }
+        return c.OrderBy(v => v).ToArray();
+    }
+
     /// <summary>Density color ramp: blue (low) → cyan → green → yellow → red (high).</summary>
     private static ScottColor DensityColor(double t)
     {
@@ -2994,12 +3027,15 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
             if (pdfUseComp)
             {
-                // Density gradient: each 1 cm slice coloured by required density (blue → red)
+                // Densità quantizzate a max 4 materiali per uso produttivo
                 var compSegs = ProjectSegments.OrderBy(s => s.StartCm)
                     .Where(s => s.HasCompensation).ToList();
-                double minDens = compSegs.SelectMany(s => s.CompSliceDensities).DefaultIfEmpty(0).Min();
-                double maxDens = compSegs.SelectMany(s => s.CompSliceDensities).DefaultIfEmpty(1).Max();
-                double densRng = Math.Max(maxDens - minDens, 1e-9);
+                double[] qDens  = Quantize1D(compSegs.SelectMany(s => s.CompSliceDensities), 4);
+                double   minDens = qDens.Length > 0 ? qDens[0] : 0;
+                double   maxDens = qDens.Length > 0 ? qDens[^1] : 1;
+                double   densRng = Math.Max(maxDens - minDens, 1e-9);
+                double NearestQ(double d) => qDens.Length == 0 ? d : qDens.MinBy(c => Math.Abs(c - d));
+
                 foreach (var seg in compSegs)
                 {
                     int    ns   = seg.CompSliceXsCm.Length;
@@ -3012,7 +3048,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                         double x0   = xAbs - half, x1 = xAbs + half;
                         double d0   = i > 0    ? (seg.CompSliceDiamsMm[i-1] + seg.CompSliceDiamsMm[i])   / 2.0 : seg.CompSliceDiamsMm[i];
                         double d1   = i < ns-1 ? (seg.CompSliceDiamsMm[i]   + seg.CompSliceDiamsMm[i+1]) / 2.0 : seg.CompSliceDiamsMm[i];
-                        double t    = Math.Clamp((seg.CompSliceDensities[i] - minDens) / densRng, 0, 1);
+                        // Assegna alla densità quantizzata più vicina → 4 colori discreti
+                        double qd = NearestQ(seg.CompSliceDensities[i]);
+                        double t  = Math.Clamp((qd - minDens) / densRng, 0, 1);
                         DrawLineFill(plot,
                             new[] { x0, x1 },
                             new[] { d0 / 2.0, d1 / 2.0 },
@@ -3059,6 +3097,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             double maxDiam  = sorted.Max(n => n.Y);
             double rowGap   = maxDiam * 0.40;   // uniform row height regardless of local diameter
             // Approximate label box size in data units (chart rendered ~3200×600 px)
+            const int pdfLblSize = 14;
             double dataPerPxX = (xSpan * 1.15) / 3000.0;
             double yEstSpan   = maxDiam + 2 * rowGap * (1.6 + 3 * 1.2);
             double dataPerPxY = yEstSpan / 480.0;
@@ -3070,8 +3109,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 double chartYTop =  node.Y / 2.0;
                 double chartYBot = -node.Y / 2.0;
                 string text      = $"Ø {node.Y:0.000}  {node.X:0.0} cm";
-                double boxW      = text.Length * 24 * 0.62 * dataPerPxX;
-                double boxH      = (24 * 1.5 + 8) * dataPerPxY;
+                double boxW      = text.Length * pdfLblSize * 0.62 * dataPerPxX;
+                double boxH      = (pdfLblSize * 1.5 + 8) * dataPerPxY;
                 double defaultLX = node.X;
                 double defaultLY = chartYBot - rowGap;
                 // Try slots: below row0, above row0, below row1, above row1, …
@@ -3117,7 +3156,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 leader.MarkerSize = 0;
 
                 var lbl = plot.Add.Text($"Ø {node.Y:0.000}  {node.X:0.0} cm", lx, ly);
-                lbl.LabelFontSize        = 24;
+                lbl.LabelFontSize        = pdfLblSize;
                 lbl.LabelBold            = true;
                 lbl.LabelFontColor       = new ScottColor(50, 50, 50);
                 lbl.LabelAlignment       = ly > 0 ? Alignment.LowerCenter : Alignment.UpperCenter;
@@ -3151,7 +3190,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 double topAtCx = InterpolateProfileY(sorted, cx) / 2.0;
                 double gap     = InterpolateProfileY(sorted, cx) * 0.08;
                 var sl = plot.Add.Text($"S{si + 1}", cx, topAtCx + gap);
-                sl.LabelFontSize        = 22;
+                sl.LabelFontSize        = pdfLblSize;
                 sl.LabelBold            = false;
                 sl.LabelFontColor       = segLabelColor;
                 sl.LabelAlignment       = Alignment.LowerCenter;
