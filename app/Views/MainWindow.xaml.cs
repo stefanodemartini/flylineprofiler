@@ -40,8 +40,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     // Segment drawing — node.Y stores FULL DIAMETER in mm (not radius)
     private readonly List<(double X, double Y)> _segmentNodes = new();
-    // Multi-step undo: snapshots of the full node list, taken before every change
-    private readonly Stack<List<(double X, double Y)>> _undoHistory = new();
+    // Multi-step undo: snapshots of the full node list (index 0 = oldest, ^1 = newest)
+    private readonly List<List<(double X, double Y)>> _undoHistory = new();
     private const int MaxUndoSteps = 100;
     private bool _segmentDrawMode = false;
 
@@ -94,7 +94,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private ScottPlot.Plottables.VerticalLine? _hoverLine;
 
     // Node drag state
-    private double? _draggingNodeX = null;
+    private double? _draggingNodeX    = null;
+    private double? _dragStartNodeX   = null; // original X at drag start, for label remap
     private const double DragHitRadiusPx = 12.0;
 
     // Label drag state — allows repositioning labels like Excel chart labels
@@ -834,6 +835,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         var project = new FlyLineProject
         {
+            Version            = 1,
             Name               = _projectName,
             CreatedAt          = _projectCreatedAt,
             UseSharedDensity   = _useSharedDensity,
@@ -2162,7 +2164,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         get => _waterTempC;
         set
         {
-            _waterTempC = Math.Clamp(value, 0.0, 40.0);
+            double clamped = Math.Clamp(value, 0.0, 40.0);
+            if (clamped != value)
+                UiStatus = $"Temperature clamped to {clamped:0.#}°C (valid range 0–40°C)";
+            _waterTempC = clamped;
             OnPropertyChanged(nameof(WaterTempC));
             UpdateSinkingSpeeds();
             MarkDirty();
@@ -2362,7 +2367,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             if (hit.HasValue)
             {
                 PushUndo();
-                _draggingNodeX = hit.Value.X;
+                _dragStartNodeX = hit.Value.X;
+                _draggingNodeX  = hit.Value.X;
                 PlotControl.CaptureMouse();
                 UiStatus = $"Drag node at {hit.Value.X:0} cm";
                 e.Handled = true;
@@ -2591,6 +2597,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         if (_draggingNodeX == null) return;
         PlotControl.ReleaseMouseCapture();
+        RemapLabelOffset(_dragStartNodeX!.Value, _draggingNodeX.Value);
+        _dragStartNodeX = null;
         RefreshSegmentTable();
         MarkDirty();
         UiStatus = $"Node placed at {_draggingNodeX.Value:0} cm  ({_segmentNodes.Count} nodes total)";
@@ -2628,11 +2636,23 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         RefreshStatusBar();
     }
 
+    /// <summary>Shift a saved label offset when its node's X position changes.</summary>
+    private void RemapLabelOffset(double oldX, double newX)
+    {
+        if (oldX == newX) return;
+        if (_nodeLabelOffsets.TryGetValue(oldX, out var offset))
+        {
+            _nodeLabelOffsets.Remove(oldX);
+            _nodeLabelOffsets[newX] = (offset.LX + (newX - oldX), offset.LY);
+        }
+    }
+
     /// <summary>Snapshot the node list before a change so it can be rolled back.</summary>
     private void PushUndo()
     {
-        if (_undoHistory.Count >= MaxUndoSteps) return; // soft cap; oldest steps just stop accumulating
-        _undoHistory.Push(_segmentNodes.ToList());
+        if (_undoHistory.Count >= MaxUndoSteps)
+            _undoHistory.RemoveAt(0); // drop oldest to keep room for new snapshot
+        _undoHistory.Add(_segmentNodes.ToList());
     }
 
     /// <summary>Roll back the last node change (add, move, delete, edit, reverse, clear…).</summary>
@@ -2643,7 +2663,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             UiStatus = "Nothing to undo";
             return;
         }
-        var snapshot = _undoHistory.Pop();
+        var snapshot = _undoHistory[^1];
+        _undoHistory.RemoveAt(_undoHistory.Count - 1);
         _segmentNodes.Clear();
         _segmentNodes.AddRange(snapshot);
         RefreshPlot();
@@ -2989,6 +3010,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
         catch (Exception ex)
         {
+            try { if (System.IO.File.Exists(dlg.FileName)) System.IO.File.Delete(dlg.FileName); } catch { }
             MessageBox.Show($"PDF export failed:\n{ex.Message}", "Export PDF", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
@@ -3154,6 +3176,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _segmentNodes.RemoveAll(n => n.X == hit.Value.X);
         _segmentNodes.RemoveAll(n => n.X == result.Value.cm);
         _segmentNodes.Add((result.Value.cm, result.Value.mm));
+        RemapLabelOffset(hit.Value.X, result.Value.cm);
 
         RefreshPlot();
         RefreshSegmentTable();

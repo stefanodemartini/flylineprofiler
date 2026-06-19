@@ -7,6 +7,9 @@ namespace DiametroLineaDesktop.Models;
 /// </summary>
 public class FlyLineProject
 {
+    /// <summary>Schema version — increment when adding breaking fields so loaders can migrate.</summary>
+    public int Version { get; set; } = 1;
+
     public string   Name       { get; set; } = "Untitled";
     public DateTime CreatedAt  { get; set; } = DateTime.UtcNow;
     public DateTime ModifiedAt { get; set; } = DateTime.UtcNow;
