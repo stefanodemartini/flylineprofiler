@@ -19,6 +19,17 @@ public static class FlyLinePdfExporter
 {
     private static PdfColor C(string hex) => PdfColor.FromHex(hex);
 
+    private static (byte r, byte g, byte b) DensityColorRgb(double t)
+    {
+        t = Math.Clamp(t, 0, 1);
+        double r, g, b;
+        if      (t < 0.25) { double s = t / 0.25;        r = 0; g = s;   b = 1;   }
+        else if (t < 0.50) { double s = (t - 0.25)/0.25; r = 0; g = 1;   b = 1-s; }
+        else if (t < 0.75) { double s = (t - 0.50)/0.25; r = s; g = 1;   b = 0;   }
+        else               { double s = (t - 0.75)/0.25; r = 1; g = 1-s; b = 0;   }
+        return ((byte)(r*255), (byte)(g*255), (byte)(b*255));
+    }
+
     // Palette — clean professional white-background document
     private static readonly PdfColor BgPage      = C("FFFFFF");
     private static readonly PdfColor BgTblHead   = C("EEEFF2");
@@ -166,7 +177,9 @@ public static class FlyLinePdfExporter
         List<LineColorSection>? colorSections = null,
         string designColorHex = "DC3232",
         string coreType = "",
-        string laserMark = "")
+        string laserMark = "",
+        bool showCompensation = false,
+        string compensationNote = "")
     {
         QuestPDF.Settings.License = LicenseType.Community;
 
@@ -325,7 +338,7 @@ public static class FlyLinePdfExporter
                     var legendEntries = new List<(string Hex, string Label, string Range)>();
                     bool hasSections = colorSections != null && colorSections.Count > 0;
                     legendEntries.Add((designColorHex.TrimStart('#'),
-                                       hasSections ? "Base colour" : "Line colour", ""));
+                                       hasSections ? "Base colour" : "", ""));
                     if (hasSections)
                     {
                         foreach (var cs in colorSections!)
@@ -374,6 +387,76 @@ public static class FlyLinePdfExporter
                             catch { /* ignore bad hex */ }
                         }
                     });
+
+                    // ── Compensation note + density legend ────────────────
+                    if (showCompensation && !string.IsNullOrWhiteSpace(compensationNote))
+                    {
+                        col.Item().Background(C("EDF7F2"))
+                            .Border(0.5f).BorderColor(C("5BAD8A"))
+                            .Padding(4).Text(t =>
+                            {
+                                t.Span("Compensated profile:  ").FontSize(7.5f).Bold().FontColor(C("0F6B50"));
+                                t.Span(compensationNote).FontSize(7.5f).FontColor(ColText);
+                            });
+                    }
+
+                    if (showCompensation)
+                    {
+                        var compSegs = segments.Where(s => s.HasCompensation).ToList();
+                        if (compSegs.Count > 0)
+                        {
+                            // Density range for colour normalisation
+                            var allDens = compSegs
+                                .Where(s => s.CompSliceDensities.Length > 0)
+                                .Select(s => s.CompSliceDensities.Average())
+                                .ToList();
+                            double minD = allDens.Count > 0 ? allDens.Min() : 0;
+                            double maxD = allDens.Count > 0 ? allDens.Max() : 1;
+                            double rng  = Math.Max(maxD - minD, 1e-9);
+
+                            col.Item().Background(C("F7F8FA"))
+                                .Border(0.5f).BorderColor(ColBorder)
+                                .PaddingVertical(3).PaddingHorizontal(5).Row(dr =>
+                            {
+                                dr.AutoItem().AlignMiddle()
+                                    .Text("Density  ").FontSize(6.5f).Bold().FontColor(ColMuted);
+
+                                foreach (var seg in compSegs)
+                                {
+                                    if (seg.CompSliceDensities.Length == 0) continue;
+                                    double avgDens = seg.CompSliceDensities.Average();
+                                    double t = Math.Clamp((avgDens - minD) / rng, 0, 1);
+                                    var (sr, sg, sb) = DensityColorRgb(t);
+                                    var swatchColor = PdfColor.FromRGB(sr, sg, sb);
+                                    string startD = seg.CompSliceDiamsMm.Length > 0
+                                        ? $"{seg.CompSliceDiamsMm[0]:0.000}" : "—";
+                                    string endD = seg.CompSliceDiamsMm.Length > 0
+                                        ? $"{seg.CompSliceDiamsMm[^1]:0.000}" : "—";
+                                    string range = $"{seg.StartCm * 10:0}–{seg.EndCm * 10:0} mm";
+
+                                    dr.AutoItem().Column(sc =>
+                                    {
+                                        sc.Item().Width(52).Height(10)
+                                            .Background(swatchColor)
+                                            .Border(0.5f).BorderColor(ColBorder);
+                                        sc.Item().Width(52)
+                                            .Text(string.IsNullOrWhiteSpace(seg.Name) ? $"S{seg.Index}" : seg.Name)
+                                            .FontSize(6.5f).Bold().FontColor(ColText).AlignCenter();
+                                        sc.Item().Width(52)
+                                            .Text($"{avgDens:0.000} g/cm³")
+                                            .FontSize(6.5f).Bold().FontColor(C("0F6B50")).AlignCenter();
+                                        sc.Item().Width(52)
+                                            .Text($"Ø {startD}→{endD} mm")
+                                            .FontSize(6f).FontColor(ColMuted).AlignCenter();
+                                        sc.Item().Width(52)
+                                            .Text(range)
+                                            .FontSize(6f).FontColor(ColMuted).AlignCenter();
+                                    });
+                                    dr.ConstantItem(6);
+                                }
+                            });
+                        }
+                    }
 
                     // ── Colour note / laser mark (if defined) ──────────────
                     if (!string.IsNullOrWhiteSpace(colorNote) || !string.IsNullOrWhiteSpace(laserMark))

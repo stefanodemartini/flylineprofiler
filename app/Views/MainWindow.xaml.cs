@@ -37,6 +37,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private bool _showDesignLayer  = true;
     private bool _showSinkSpeedMap = false;
     private bool _showCompProfile  = false;
+    private bool _showCompView     = false;
 
     // Segment drawing — node.Y stores FULL DIAMETER in mm (not radius)
     private readonly List<(double X, double Y)> _segmentNodes = new();
@@ -1249,7 +1250,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     {
         string mode;
         if (_designMode)
-            mode = _showCompProfile ? "Compensated Profile" : "Design";
+            mode = _showCompView    ? $"Comp. View {_compTargetSpeedIns:0.00} in/s"
+                 : _showCompProfile ? "Compensated Profile"
+                 : "Design";
         else
             mode = "Scan";
         return $"{_projectName}  —  {mode}";
@@ -1668,6 +1671,26 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         catch { return false; }
     }
 
+    /// <summary>
+    /// Builds a node list from compensated segment start/end diameters so the
+    /// compensated profile can be rendered in the same style as the design profile.
+    /// A tiny epsilon is added when two consecutive nodes share the same X to avoid
+    /// division-by-zero in piecewise interpolation.
+    /// </summary>
+    private List<(double X, double Y)> GetCompNodes()
+    {
+        var nodes = new List<(double X, double Y)>();
+        foreach (var seg in ProjectSegments.OrderBy(s => s.StartCm).Where(s => s.HasCompensation))
+        {
+            double xs = seg.StartCm;
+            if (nodes.Count > 0 && Math.Abs(nodes[^1].X - xs) < 1e-6)
+                xs += 1e-4;
+            nodes.Add((xs, seg.CompSliceDiamsMm[0]));
+            nodes.Add((seg.EndCm, seg.CompSliceDiamsMm[^1]));
+        }
+        return nodes;
+    }
+
     // Segment overlay rendering
     // node.Y stores full diameter in mm; chart Y axis is radius (diameter/2)
     private void RenderSegmentOverlay(Plot plot)
@@ -1679,12 +1702,13 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         double[] halfYs    = sorted.Select(n =>  n.Y / 2.0).ToArray();
         double[] negHalfYs = sorted.Select(n => -n.Y / 2.0).ToArray();
 
-        var designColor = _designLineColor;
-        bool compActive = _showCompProfile && ProjectSegments.Any(s => s.HasCompensation);
+        var designColor     = _designLineColor;
+        bool compActive     = _showCompProfile && ProjectSegments.Any(s => s.HasCompensation);
+        bool compViewActive = _showCompView    && ProjectSegments.Any(s => s.HasCompensation);
 
         if (sorted.Count >= 2)
         {
-            if (!compActive)
+            if (!compActive && !compViewActive)
             {
                 // 1. Base fill: always use the design colour Lambert shading
                 DrawLineFill(plot, xs, halfYs, negHalfYs, designColor, solid: true);
@@ -1722,7 +1746,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             }
             else
             {
-                // When comp profile is shown: draw original as faint ghost only
+                // Ghost of original design
                 var ghostColor = designColor.WithAlpha(0.18f);
                 var topGhost = plot.Add.Scatter(xs, halfYs);
                 topGhost.Color      = ghostColor;
@@ -1732,13 +1756,47 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 botGhost.Color      = ghostColor;
                 botGhost.LineWidth  = 1;
                 botGhost.MarkerSize = 0;
+
+                // Comp. View: render compensated smooth profile in design style
+                if (compViewActive)
+                {
+                    var cn = GetCompNodes();
+                    if (cn.Count >= 2)
+                    {
+                        double[] cxs  = cn.Select(n => n.X).ToArray();
+                        double[] cyts = cn.Select(n =>  n.Y / 2.0).ToArray();
+                        double[] cybs = cn.Select(n => -n.Y / 2.0).ToArray();
+
+                        DrawLineFill(plot, cxs, cyts, cybs, designColor, solid: true);
+                        if (ColorSections.Count > 0) RenderColorSections(plot, cn);
+
+                        var ctl = plot.Add.Scatter(cxs, cyts);
+                        ctl.LegendText = $"Comp. View  {_compTargetSpeedIns:0.00} in/s";
+                        ctl.Color      = designColor;
+                        ctl.LineWidth  = 2.5f;
+                        ctl.MarkerSize = 0;
+
+                        var cbl = plot.Add.Scatter(cxs, cybs);
+                        cbl.Color      = designColor;
+                        cbl.LineWidth  = 2.5f;
+                        cbl.MarkerSize = 0;
+
+                        foreach (var n in cn)
+                        {
+                            var tick = plot.Add.Scatter(
+                                new[] { n.X, n.X }, new[] { n.Y / 2.0, -n.Y / 2.0 });
+                            tick.Color     = designColor.WithAlpha(0.25f);
+                            tick.LineWidth = 0.8f; tick.MarkerSize = 0;
+                        }
+                    }
+                }
             }
 
-            // Compensated profile (drawn last so it's on top)
+            // Staircase overlay (only when Comp. Profile toggle is ON)
             RenderCompensatedOverlay(plot, sorted);
         }
 
-        if (!compActive)
+        if (!compActive && !compViewActive)
         {
             // Node markers — filled circle with white ring for a clean look
             var markers = plot.Add.Scatter(xs, halfYs);
@@ -1758,7 +1816,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             {
                 var node = sorted[ni];
                 double chartYBottom = -node.Y / 2.0;
-                // Default: stagger below the profile by a fraction of the diameter
                 double gap = node.Y * 0.40;
                 double defaultLX = node.X;
                 double defaultLY = chartYBottom - gap * (ni % 2 == 0 ? 1.0 : 2.2);
@@ -1766,17 +1823,14 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 var (lx, ly) = _nodeLabelOffsets.TryGetValue(node.X, out var saved)
                                ? saved : (defaultLX, defaultLY);
 
-                // Leader line — fixed dark colour so it stays visible regardless of profile colour
-                double leaderStartY = chartYBottom * 0.85;
-                var leaderColor = new ScottColor(100, 100, 100);   // neutral dark grey
+                var leaderColor = new ScottColor(100, 100, 100);
                 var leader = plot.Add.Scatter(
                     new double[] { node.X, lx },
-                    new double[] { leaderStartY, ly });
+                    new double[] { chartYBottom * 0.85, ly });
                 leader.Color      = leaderColor;
                 leader.LineWidth  = 1.2f;
                 leader.MarkerSize = 0;
 
-                // Label at computed data position
                 var lbl = plot.Add.Text($"Ø {node.Y:0.000}  {node.X:0.0} cm", lx, ly);
                 lbl.LabelFontSize        = 11;
                 lbl.LabelBold            = true;
@@ -1788,6 +1842,44 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 lbl.LabelPadding         = 3;
                 lbl.OffsetX              = 0;
                 lbl.OffsetY              = 0;
+            }
+        }
+        else if (compViewActive)
+        {
+            // Node markers and labels at compensated node positions
+            var cn = GetCompNodes();
+            double[] cnxs = cn.Select(n => n.X).ToArray();
+            double[] cnts = cn.Select(n =>  n.Y / 2.0).ToArray();
+
+            var markers = plot.Add.Scatter(cnxs, cnts);
+            markers.Color = designColor; markers.LineWidth = 0;
+            markers.MarkerSize = 9; markers.MarkerShape = MarkerShape.OpenCircle;
+            var markersInner = plot.Add.Scatter(cnxs, cnts);
+            markersInner.Color = designColor.WithAlpha(0.85f); markersInner.LineWidth = 0;
+            markersInner.MarkerSize = 5; markersInner.MarkerShape = MarkerShape.FilledCircle;
+
+            for (int ni = 0; ni < cn.Count; ni++)
+            {
+                var node = cn[ni];
+                double chartYBottom = -node.Y / 2.0;
+                double gap = node.Y * 0.40;
+                double lx  = node.X;
+                double ly  = chartYBottom - gap * (ni % 2 == 0 ? 1.0 : 2.2);
+
+                var leaderColor = new ScottColor(100, 100, 100);
+                var leader = plot.Add.Scatter(
+                    new double[] { node.X, lx },
+                    new double[] { chartYBottom * 0.85, ly });
+                leader.Color = leaderColor; leader.LineWidth = 1.2f; leader.MarkerSize = 0;
+
+                var lbl = plot.Add.Text($"Ø {node.Y:0.000}  {node.X:0.0} cm", lx, ly);
+                lbl.LabelFontSize = 11; lbl.LabelBold = true;
+                lbl.LabelFontColor       = new ScottColor(50, 50, 50);
+                lbl.LabelAlignment       = Alignment.UpperCenter;
+                lbl.LabelBackgroundColor = ScottPlot.Colors.White.WithAlpha(0.95f);
+                lbl.LabelBorderColor     = leaderColor;
+                lbl.LabelBorderWidth     = 1f;
+                lbl.LabelPadding = 3; lbl.OffsetX = 0; lbl.OffsetY = 0;
             }
 
             // Vertical divider lines at each node (top edge → bottom edge)
@@ -3032,9 +3124,13 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
 
         // Design overlay — thinner lines for print
-        if (_segmentNodes.Count >= 2)
+        // When Comp. View is active the chart shows the compensated smooth profile.
+        bool pdfUseComp = _showCompView && ProjectSegments.Any(s => s.HasCompensation);
+        var baseNodes   = pdfUseComp ? GetCompNodes() : _segmentNodes.OrderBy(n => n.X).ToList();
+
+        if (baseNodes.Count >= 2)
         {
-            var sorted     = _segmentNodes.OrderBy(n => n.X).ToList();
+            var sorted     = baseNodes;
             double[] xs    = sorted.Select(n => n.X).ToArray();
             double[] topYs = sorted.Select(n =>  n.Y / 2.0).ToArray();
             double[] botYs = sorted.Select(n => -n.Y / 2.0).ToArray();
@@ -3230,9 +3326,14 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 laserMarkText = string.IsNullOrWhiteSpace(_laserMark)
                     ? $"at {string.Join(" and ", markPos)}"
                     : $"{_laserMark}   —   at {string.Join(" and ", markPos)}";
+            bool showComp = _showCompView && ProjectSegments.Any(s => s.HasCompensation);
+            string compNote = showComp
+                ? $"Compensated profile — target sink {_compTargetSpeedIns:0.00} in/s. " +
+                  "Diameters reflect mass-preserving compensation. Do not alter diameters; adjust density only."
+                : "";
             FlyLinePdfExporter.Export(dlg.FileName, _projectName, RenderPdfChart(), ProjectSegments.ToList(),
                 _isSinking, _isFullLine, _waterIsSalt, _waterTempC, AfftaBadge, _colorNote, pdfSections, designHex,
-                _coreType, laserMarkText);
+                _coreType, laserMarkText, showComp, compNote);
             UiStatus = $"PDF exported: {System.IO.Path.GetFileName(dlg.FileName)}";
         }
         catch (Exception ex)
@@ -3857,6 +3958,15 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _showCompProfile = CompProfileToggle.IsChecked ?? false;
         RefreshPlot();
         UiStatus = _showCompProfile ? "Compensated profile ON" : "Compensated profile OFF";
+    }
+
+    private void ShowCompView_Click(object sender, RoutedEventArgs e)
+    {
+        _showCompView = CompViewToggle.IsChecked ?? false;
+        RefreshPlot();
+        UiStatus = _showCompView
+            ? "Comp. View ON — compensated profile in design style. Export PDF to produce the compensation worksheet."
+            : "Comp. View OFF";
     }
 
     private void CompTargetBox_LostFocus(object sender, RoutedEventArgs e) => ApplyCompTarget();

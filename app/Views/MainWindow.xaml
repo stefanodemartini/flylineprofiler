@@ -559,6 +559,12 @@
                                           IsChecked="False"
                                           Click="ShowCompProfile_Click"
                                           ToolTip="Show compensated step profile — equivalent cylinders per segment (same mass, uniform sink speed)"/>
+                            <ToggleButton x:Name="CompViewToggle"
+                                          Content="Comp. View"
+                                          Style="{StaticResource ToggleBase}"
+                                          IsChecked="False"
+                                          Click="ShowCompView_Click"
+                                          ToolTip="Show compensated profile as a clean design view (same style as normal profile). Use this for PDF export."/>
                         </StackPanel>
 
                         <ToggleButton x:Name="ShowDesignToggle"
