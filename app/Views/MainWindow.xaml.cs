@@ -2241,8 +2241,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             if (covered >= target30FtCm || seg.StartCm >= target30FtCm) break;
             double segLen  = seg.LengthCm;
             double usedLen = Math.Min(segLen, target30FtCm - covered);
+            if (segLen <= 0 || seg.SpecWeightGCm3 <= 0) { covered += usedLen; continue; }
             double frac    = usedLen / segLen;
-            if (seg.SpecWeightGCm3 <= 0) { covered += usedLen; continue; }
             double r1Mm     = seg.StartDiameterMm / 2.0;
             double r2Mm     = seg.EndDiameterMm   / 2.0;
             double r2pMm    = r1Mm + (r2Mm - r1Mm) * frac;
@@ -2388,7 +2388,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
         else
         {
-            diameter = Math.Round(Math.Abs(coords.Y) * 2.0, 3);
+            diameter = Math.Max(0.001, Math.Round(Math.Abs(coords.Y) * 2.0, 3));
         }
 
         PushUndo();
@@ -3231,7 +3231,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         btnCancel.Click += (_, _) => win.Close();
 
         win.Loaded += (_, _) => { txtCm.Focus(); txtCm.SelectAll(); };
-        win.ShowDialog();
+        try { win.ShowDialog(); }
+        finally { win.Close(); }
 
         if (!confirmed) return null;
 
