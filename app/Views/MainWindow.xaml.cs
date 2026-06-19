@@ -2145,6 +2145,54 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         UpdateSinkingSpeeds();
     }
 
+    private void FromWeight_Click(object sender, RoutedEventArgs e)
+    {
+        if (ProjectSegments.Count == 0)
+        {
+            UiStatus = "No segments yet — add design nodes first";
+            return;
+        }
+
+        var ordered = ProjectSegments.OrderBy(s => s.StartCm).ToList();
+        var dlg = new WeightToDensityDialog(ordered) { Owner = this };
+        try
+        {
+            if (dlg.ShowDialog() != true) return;
+        }
+        finally { dlg.Close(); }
+
+        double density = dlg.ResultDensity;
+
+        if (dlg.IsWholeLineScope)
+        {
+            // Whole line: apply as shared density
+            _sharedDensity    = density;
+            _useSharedDensity = true;
+            OnPropertyChanged(nameof(SharedDensity));
+            OnPropertyChanged(nameof(UseSharedDensity));
+            SpWeightColumn.IsReadOnly = true;
+            ApplySharedDensity();
+            MarkDirty();
+            UiStatus = $"Shared density set to {density:0.000} g/cm³ from measured weight";
+        }
+        else
+        {
+            // Partial selection: set per-segment density and switch to per-segment mode
+            foreach (int idx in dlg.AffectedIndices)
+            {
+                var seg = ProjectSegments.FirstOrDefault(s => s.Index == idx);
+                if (seg is not null) seg.SpecWeightGCm3 = density;
+            }
+            _useSharedDensity = false;
+            OnPropertyChanged(nameof(UseSharedDensity));
+            SpWeightColumn.IsReadOnly = false;
+            RefreshTotals();
+            UpdateSinkingSpeeds();
+            MarkDirty();
+            UiStatus = $"Density {density:0.000} g/cm³ applied to {dlg.AffectedIndices.Count} segment(s)";
+        }
+    }
+
     // ── Water / sinking speed ────────────────────────────────────────────────
 
     public bool WaterIsSalt

@@ -865,6 +865,14 @@
                                FontSize="11"
                                Foreground="{StaticResource TextMuted}"
                                VerticalAlignment="Center"/>
+                    <Button Content="⚖ From weight…"
+                            Click="FromWeight_Click"
+                            FontSize="11"
+                            Padding="6,2"
+                            Margin="8,0,0,0"
+                            VerticalAlignment="Center"
+                            Cursor="Hand"
+                            ToolTip="Back-calculate density from a measured weight (ρ = m / V)"/>
                     <!-- Water settings for sinking speed -->
                     <Separator Style="{StaticResource ToolSep}" Margin="12,0"/>
                     <TextBlock Text="Water:"
