@@ -546,6 +546,31 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
     }
 
+    // Redraw after a node add/drag without disturbing the user's pan/zoom.
+    // The view is captured before the edit and restored afterwards, so placing
+    // each node no longer re-fits or zooms the chart.  Only a degenerate view
+    // (the fresh-project default, ~[0,1]) is widened so the first nodes are
+    // placeable; once a real view exists it is always preserved.
+    private void RefreshPlotPreservingView(double anchorX)
+    {
+        const double DegenerateWidth = 50.0; // cm — below this the view isn't a real one
+
+        var before = PlotControl.Plot.Axes.GetLimits();
+        bool viewUsable = before.Rect.Width >= DegenerateWidth;
+
+        RefreshPlot();
+
+        if (viewUsable)
+        {
+            PlotControl.Plot.Axes.SetLimits(before.Left, before.Right, before.Bottom, before.Top);
+            PlotControl.Refresh();
+        }
+        else
+        {
+            EnsureWideDrawingView(anchorX);
+        }
+    }
+
     // ── Analysis chart: mass/unit-length + cumulative grain weight ────────────
     private void RefreshAnalysisPlot()
     {
@@ -2370,13 +2395,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _segmentNodes.RemoveAll(n => n.X == snappedX);
         _segmentNodes.Add((snappedX, diameter));
 
-        RefreshPlot();   // redraws + AutoScale (if _autoFitEnabled) — may collapse X range
-
-        // After AutoScale the X range can collapse to the pixel-width of the node span
-        // (e.g. [0, 1] for two consecutive nodes), making Math.Round(coords.X) always
-        // return an existing node X and preventing new nodes from ever being placed.
-        // Fix: always ensure at least 1500 cm is visible so the user can click freely.
-        EnsureWideDrawingView(snappedX);
+        // Redraw but keep the current pan/zoom so placing a node doesn't re-fit
+        // the chart (widens only the degenerate fresh-project view).
+        RefreshPlotPreservingView(snappedX);
 
         RefreshSegmentTable();
         MarkDirty();
@@ -2426,8 +2447,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _segmentNodes.Add((newX, newDiameter));
         _draggingNodeX = newX;
 
-        RefreshPlot();
-        EnsureWideDrawingView(newX);
+        RefreshPlotPreservingView(newX);
         RefreshSegmentTable();
         UiStatus = $"Node: {newX:0} cm  Ø {newDiameter:0.000} mm";
         e.Handled = true;
@@ -2436,6 +2456,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private void UpdateHoverCoords(double plotX, double plotY = double.NaN)
     {
         var parts = new List<string>();
+        double? designDiam = null;
+        double? scanDiam    = null;
 
         // ── Design layer: interpolated diameter between the two surrounding nodes ──
         if (_designMode && _segmentNodes.Count >= 2)
@@ -2449,7 +2471,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 {
                     if (plotX >= sorted[i].X && plotX <= sorted[i + 1].X) { segIdx = i; break; }
                 }
-                double designDiam = InterpolateProfileY(sorted, plotX);
+                designDiam = InterpolateProfileY(sorted, plotX);
                 string segName = segIdx >= 0 ? $"S{segIdx + 1}  " : "";
                 parts.Add($"{segName}Design Ø {designDiam:0.000} mm");
             }
@@ -2466,7 +2488,15 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 .OrderBy(item => Math.Abs(item.point.X - plotX))
                 .First()
                 .index;
-            parts.Add($"Scan Ø {displayedYs[nearestIndex]:0.000} mm");
+            scanDiam = displayedYs[nearestIndex];
+            parts.Add($"Scan Ø {scanDiam:0.000} mm");
+        }
+
+        // ── Scan-vs-design difference (caliper sinks into the supple coating) ──
+        if (designDiam is double dd && scanDiam is double sd && dd > 0)
+        {
+            double deltaPct = (sd - dd) / dd * 100.0;
+            parts.Add($"Δ {deltaPct:+0.0;-0.0;0.0}%");
         }
 
         // ── Imported/overlay series: interpolated diameter at cursor X ──────
@@ -2797,10 +2827,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             double xSpan    = sorted[^1].X - sorted[0].X;
             double maxDiam  = sorted.Max(n => n.Y);
             double rowGap   = maxDiam * 0.40;   // uniform row height regardless of local diameter
-            // Approximate label box size in data units (chart rendered ~1600×300 px)
-            double dataPerPxX = (xSpan * 1.15) / 1500.0;
+            // Approximate label box size in data units (chart rendered ~3200×600 px)
+            double dataPerPxX = (xSpan * 1.15) / 3000.0;
             double yEstSpan   = maxDiam + 2 * rowGap * (1.6 + 3 * 1.2);
-            double dataPerPxY = yEstSpan / 240.0;
+            double dataPerPxY = yEstSpan / 480.0;
             var placedBoxes = new List<(double X1, double Y1, double X2, double Y2)>();
             _pdfLabelYMin   = 0; _pdfLabelYMax = 0;
             for (int ni = 0; ni < sorted.Count; ni++)
@@ -2809,8 +2839,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 double chartYTop =  node.Y / 2.0;
                 double chartYBot = -node.Y / 2.0;
                 string text      = $"Ø {node.Y:0.000}  {node.X:0.0} cm";
-                double boxW      = text.Length * 11 * 0.62 * dataPerPxX;
-                double boxH      = (11 * 1.5 + 8) * dataPerPxY;
+                double boxW      = text.Length * 24 * 0.62 * dataPerPxX;
+                double boxH      = (24 * 1.5 + 8) * dataPerPxY;
                 double defaultLX = node.X;
                 double defaultLY = chartYBot - rowGap;
                 // Try slots: below row0, above row0, below row1, above row1, …
@@ -2856,14 +2886,14 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 leader.MarkerSize = 0;
 
                 var lbl = plot.Add.Text($"Ø {node.Y:0.000}  {node.X:0.0} cm", lx, ly);
-                lbl.LabelFontSize        = 11;
+                lbl.LabelFontSize        = 24;
                 lbl.LabelBold            = true;
                 lbl.LabelFontColor       = new ScottColor(50, 50, 50);
                 lbl.LabelAlignment       = ly > 0 ? Alignment.LowerCenter : Alignment.UpperCenter;
                 lbl.LabelBackgroundColor = ScottPlot.Colors.White.WithAlpha(0.95f);
                 lbl.LabelBorderColor     = leaderColor;
                 lbl.LabelBorderWidth     = 1f;
-                lbl.LabelPadding         = 3;
+                lbl.LabelPadding         = 5;
                 lbl.OffsetX              = 0;
                 lbl.OffsetY              = 0;
             }
@@ -2890,7 +2920,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 double topAtCx = InterpolateProfileY(sorted, cx) / 2.0;
                 double gap     = InterpolateProfileY(sorted, cx) * 0.08;
                 var sl = plot.Add.Text($"S{si + 1}", cx, topAtCx + gap);
-                sl.LabelFontSize        = 11;
+                sl.LabelFontSize        = 22;
                 sl.LabelBold            = false;
                 sl.LabelFontColor       = segLabelColor;
                 sl.LabelAlignment       = Alignment.LowerCenter;
@@ -2913,7 +2943,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         double yTop = Math.Max(lim.Top,    _pdfLabelYMax + yRange * 0.10);
         plot.Axes.SetLimitsY(yBot - yRange * 0.05, yTop + yRange * 0.05);
 
-        return plot.GetImage(1600, 300).GetImageBytes(ScottPlot.ImageFormat.Png);
+        return plot.GetImage(3200, 600).GetImageBytes(ScottPlot.ImageFormat.Png);
     }
 
     private void ExportPdf_Click(object sender, RoutedEventArgs e)

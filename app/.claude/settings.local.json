@@ -50,7 +50,9 @@
       "Bash(powershell -Command \"Start-Process 'C:\\\\Users\\\\Stefano\\\\Desktop\\\\FlyLineProfiler.exe'; Start-Sleep 5; Get-Process FlyLineProfiler -ErrorAction SilentlyContinue | Select-Object Id, StartTime\")",
       "Bash(powershell -Command \"Stop-Process -Name FlyLineProfiler -Force -ErrorAction SilentlyContinue; Start-Sleep 1; Copy-Item 'bin\\\\Release\\\\net8.0-windows\\\\win-x64\\\\publish\\\\FlyLineProfiler.exe' 'C:\\\\Users\\\\Stefano\\\\Desktop\\\\FlyLineProfiler.exe' -Force; Start-Process 'C:\\\\Users\\\\Stefano\\\\Desktop\\\\FlyLineProfiler.exe'\")",
       "Bash(find \"C:\\\\Users\\\\Stefano\\\\.claude\" -name \"MEMORY.md\" 2>/dev/null)",
-      "PowerShell(Copy-Item publish\\\\FlyLineProfiler.exe \"$env:USERPROFILE\\\\Desktop\\\\FlyLineProfiler.exe\" -Force)"
+      "PowerShell(Copy-Item publish\\\\FlyLineProfiler.exe \"$env:USERPROFILE\\\\Desktop\\\\FlyLineProfiler.exe\" -Force)",
+      "PowerShell(dotnet build \"c:\\\\Users\\\\Stefano\\\\Documents\\\\Arduino\\\\flylineprofiler\\\\app\\\\DiametroLineaDesktop.csproj\" -c Release 2>&1)",
+      "PowerShell(Start-Process \"c:\\\\Users\\\\Stefano\\\\Documents\\\\Arduino\\\\flylineprofiler\\\\app\\\\bin\\\\Release\\\\net8.0-windows\\\\FlyLineProfiler.exe\")"
     ]
   }
 }

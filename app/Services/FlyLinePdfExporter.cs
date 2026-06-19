@@ -358,6 +358,8 @@ public static class FlyLinePdfExporter
                                         .Border(0.5f).BorderColor(ColBorder);
                                     sCol.Item().Width(44).Text($"#{hex.ToUpperInvariant()}")
                                         .FontSize(6.5f).Bold().FontColor(ColText).AlignCenter();
+                                    sCol.Item().Width(44).Text($"rgb({r}, {g}, {b})")
+                                        .FontSize(6f).FontColor(ColMuted).AlignCenter();
                                     if (!string.IsNullOrWhiteSpace(label) || !string.IsNullOrWhiteSpace(range))
                                     {
                                         string sub = string.IsNullOrWhiteSpace(label) ? range
