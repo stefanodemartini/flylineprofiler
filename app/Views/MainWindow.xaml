@@ -935,7 +935,8 @@
 
                 <!-- Editable nodes DataGrid -->
                 <DockPanel Grid.Column="0" Margin="0,0,4,0">
-                    <Button DockPanel.Dock="Top"
+                    <Button x:Name="AddNodeButton"
+                            DockPanel.Dock="Top"
                             Content="＋ Add Node"
                             Click="AddNode_Click"
                             Margin="0,0,0,2"

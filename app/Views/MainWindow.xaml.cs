@@ -2045,6 +2045,31 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             MarkDirty();
         }
     }
+    private void SyncCompNodesToDesignList()
+    {
+        if (_syncingNodes) return;
+        _syncingNodes = true;
+        try
+        {
+            DesignNodes.Clear();
+            var segs = ProjectSegments.OrderBy(s => s.StartCm)
+                                      .Where(s => s.HasCompensation).ToList();
+            for (int i = 0; i < segs.Count; i++)
+                DesignNodes.Add(new DesignNode
+                {
+                    PositionCm = segs[i].StartCm,
+                    DiameterMm = segs[i].CompSliceDiamsMm[0]
+                });
+            if (segs.Count > 0)
+                DesignNodes.Add(new DesignNode
+                {
+                    PositionCm = segs[^1].EndCm,
+                    DiameterMm = segs[^1].CompSliceDiamsMm[^1]
+                });
+        }
+        finally { _syncingNodes = false; }
+    }
+
     private void SyncDesignNodesToList()
     {
         if (_syncingNodes) return;
@@ -2429,24 +2454,37 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private void UpdateCompModeUI()
     {
         if (!IsLoaded) return;
-        // Le colonne comp sono visibili solo quando si guarda il profilo compensato,
-        // non quando "Non compensato" è attivo.
         bool c = _inCompMode && !_showOriginalProfile;
         SinkMapToggle.Visibility      = c ? Visibility.Collapsed : Visibility.Visible;
         ShowOriginalToggle.Visibility = c ? Visibility.Visible   : Visibility.Collapsed;
-        // Colonne tabella
-        OrigStartDiamColumn.Visibility = c ? Visibility.Collapsed : Visibility.Visible;
-        OrigEndDiamColumn.Visibility   = c ? Visibility.Collapsed : Visibility.Visible;
-        ShapeColumn.Visibility         = c ? Visibility.Collapsed : Visibility.Visible;
-        TaperColumn.Visibility         = c ? Visibility.Collapsed : Visibility.Visible;
-        SpWeightColumn.Visibility      = c ? Visibility.Collapsed : Visibility.Visible;
-        OrigSinkColumn.Visibility      = c ? Visibility.Collapsed : Visibility.Visible;
-        CompSinkColumn.Visibility      = c ? Visibility.Visible   : Visibility.Collapsed;
-        CompStartDiamColumn.Visibility = c ? Visibility.Visible   : Visibility.Collapsed;
-        CompEndDiamColumn.Visibility   = c ? Visibility.Visible   : Visibility.Collapsed;
-        CompStartDensColumn.Visibility = c ? Visibility.Visible   : Visibility.Collapsed;
-        CompEndDensColumn.Visibility   = c ? Visibility.Visible   : Visibility.Collapsed;
-        SegmentsDataGrid.Items.Refresh();
+
+        // DataGridColumn non è un Visual: il cambio di Visibility non attiva
+        // automaticamente un layout pass. Deferire al prossimo ciclo di rendering
+        // garantisce che WPF misuri/ridisegni il DataGrid con le colonne aggiornate.
+        // NodesDataGrid: in comp mode mostra i diametri compensati, read-only
+        AddNodeButton.Visibility   = c ? Visibility.Collapsed : Visibility.Visible;
+        NodesDataGrid.IsReadOnly   = c;
+        if (c) SyncCompNodesToDesignList();
+        else   SyncDesignNodesToList();
+
+        // SegmentsDataGrid: le colonne vengono aggiornate nel prossimo ciclo di rendering
+        // (DataGridColumn non è un Visual — il cambio di Visibility richiede un layout pass esplicito)
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Render, () =>
+        {
+            OrigStartDiamColumn.Visibility = c ? Visibility.Collapsed : Visibility.Visible;
+            OrigEndDiamColumn.Visibility   = c ? Visibility.Collapsed : Visibility.Visible;
+            ShapeColumn.Visibility         = c ? Visibility.Collapsed : Visibility.Visible;
+            TaperColumn.Visibility         = c ? Visibility.Collapsed : Visibility.Visible;
+            SpWeightColumn.Visibility      = c ? Visibility.Collapsed : Visibility.Visible;
+            OrigSinkColumn.Visibility      = c ? Visibility.Collapsed : Visibility.Visible;
+            CompSinkColumn.Visibility      = c ? Visibility.Visible   : Visibility.Collapsed;
+            CompStartDiamColumn.Visibility = c ? Visibility.Visible   : Visibility.Collapsed;
+            CompEndDiamColumn.Visibility   = c ? Visibility.Visible   : Visibility.Collapsed;
+            CompStartDensColumn.Visibility = c ? Visibility.Visible   : Visibility.Collapsed;
+            CompEndDensColumn.Visibility   = c ? Visibility.Visible   : Visibility.Collapsed;
+            SegmentsDataGrid.InvalidateMeasure();
+            SegmentsDataGrid.UpdateLayout();
+        });
     }
 
     private void ShowOriginalProfile_Click(object sender, RoutedEventArgs e)
