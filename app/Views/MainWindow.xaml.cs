@@ -1810,7 +1810,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                         double dens = minDens + t * densRng;
                         var entry   = plot.Add.Scatter(Array.Empty<double>(), Array.Empty<double>());
                         entry.Color = DensityColor(t); entry.LineWidth = 8;
-                        entry.LegendText = $"ρ {dens:0.000} g/cm³";
+                        entry.LegendText = $"ρ {dens:0.00} g/cm³";
                     }
 
                     // Outline del profilo compensato sopra il gradiente

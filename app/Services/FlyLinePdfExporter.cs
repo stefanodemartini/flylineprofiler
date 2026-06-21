@@ -19,6 +19,32 @@ public static class FlyLinePdfExporter
 {
     private static PdfColor C(string hex) => PdfColor.FromHex(hex);
 
+    /// <summary>
+    /// Renders a horizontal swatch with Lambert cylindrical shading (bright centre, dark edges)
+    /// using N thin vertical strips — gives a 3D round-section feel in PDF.
+    /// </summary>
+    private static void DrawLambertSwatch(IContainer container, PdfColor baseColor,
+                                          float totalWidth, float height, int strips = 16)
+    {
+        container.Width(totalWidth).Height(height).Row(row =>
+        {
+            float sw = totalWidth / strips;
+            for (int i = 0; i < strips; i++)
+            {
+                // v = distance from centre (0 = centre, 1 = edge)
+                double v     = Math.Abs((i + 0.5) / strips * 2.0 - 1.0);
+                double b     = Math.Sqrt(1.0 - v * v);         // Lambert: 0 at edge, 1 at centre
+                float  shade = (float)(0.28 + 0.72 * b);
+                // Specular glint in inner 15%
+                if (b > 0.85) shade = Math.Min(1.0f, shade + (float)((b - 0.85) / 0.15 * 0.45));
+                byte r = (byte)Math.Min(255, (int)(baseColor.Red   * shade));
+                byte g = (byte)Math.Min(255, (int)(baseColor.Green * shade));
+                byte bl= (byte)Math.Min(255, (int)(baseColor.Blue  * shade));
+                row.ConstantItem(sw).Height(height).Background(PdfColor.FromRGB(r, g, bl));
+            }
+        });
+    }
+
     private static double[] Quantize1D(IEnumerable<double> values, int k = 4)
     {
         var arr = values.Where(v => v > 0).OrderBy(v => v).ToArray();
@@ -429,9 +455,8 @@ public static class FlyLinePdfExporter
                                 // Each entry: swatch + hex + optional label, all stacked vertically
                                 legRow.AutoItem().Column(sCol =>
                                 {
-                                    sCol.Item().Width(44).Height(10)
-                                        .Background(swatchColor)
-                                        .Border(0.5f).BorderColor(ColBorder);
+                                    sCol.Item().Border(0.5f).BorderColor(ColBorder)
+                                        .Element(e => DrawLambertSwatch(e, swatchColor, 44, 10));
                                     sCol.Item().Width(44).Text($"#{hex.ToUpperInvariant()}")
                                         .FontSize(6.5f).Bold().FontColor(ColText).AlignCenter();
                                     sCol.Item().Width(44).Text($"rgb({r}, {g}, {b})")
@@ -493,8 +518,8 @@ public static class FlyLinePdfExporter
                                     var sw = PdfColor.FromRGB(sr, sg, sb);
                                     mr.AutoItem().Column(mc =>
                                     {
-                                        mc.Item().Width(60).Height(10).Background(sw)
-                                            .Border(0.5f).BorderColor(ColBorder);
+                                        mc.Item().Border(0.5f).BorderColor(ColBorder)
+                                            .Element(e => DrawLambertSwatch(e, sw, 60, 10));
                                         mc.Item().Width(60)
                                             .Text($"Mat {mi + 1}")
                                             .FontSize(6.5f).Bold().FontColor(ColText).AlignCenter();
@@ -553,8 +578,8 @@ public static class FlyLinePdfExporter
                                     var sw2 = PdfColor.FromRGB(sr2, sg2, sb2);
                                     dr.AutoItem().Column(sc =>
                                     {
-                                        sc.Item().Width(56).Height(10).Background(sw2)
-                                            .Border(0.5f).BorderColor(ColBorder);
+                                        sc.Item().Border(0.5f).BorderColor(ColBorder)
+                                            .Element(e => DrawLambertSwatch(e, sw2, 56, 10));
                                         sc.Item().Width(56)
                                             .Text($"Mat {mat}")
                                             .FontSize(6.5f).Bold().FontColor(C("0F6B50")).AlignCenter();
