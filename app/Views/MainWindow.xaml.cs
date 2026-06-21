@@ -1788,10 +1788,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                         if (ns == 0) continue;
                         double half = ns > 1 ? (seg.CompSliceXsCm[1] - seg.CompSliceXsCm[0]) / 2.0
                                              : seg.LengthCm / 2.0;
+                        double eps = half * 0.18; // overlap neighbours to hide anti-alias seams
                         for (int i = 0; i < ns; i++)
                         {
                             double xAbs = seg.StartCm + seg.CompSliceXsCm[i];
-                            double x0   = xAbs - half, x1 = xAbs + half;
+                            double x0   = xAbs - half - eps, x1 = xAbs + half + eps;
                             double d0   = i > 0    ? (seg.CompSliceDiamsMm[i-1] + seg.CompSliceDiamsMm[i])   / 2.0 : seg.CompSliceDiamsMm[i];
                             double d1   = i < ns-1 ? (seg.CompSliceDiamsMm[i]   + seg.CompSliceDiamsMm[i+1]) / 2.0 : seg.CompSliceDiamsMm[i];
                             double t    = Math.Clamp((seg.CompSliceDensities[i] - minDens) / densRng, 0, 1);
