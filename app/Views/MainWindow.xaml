@@ -528,10 +528,17 @@
                                 ToolTip="Export design sheet as PDF"/>
                         <!-- Sinking-only tools — hidden for floating lines -->
                         <StackPanel x:Name="SinkingToolsPanel" Orientation="Horizontal" VerticalAlignment="Center">
-                            <Button Content="⚖ Compensate"
+                            <Button x:Name="CompensateBtn"
+                                    Content="⚖ Compensate"
                                     Style="{StaticResource BtnSecondary}"
                                     Click="Compensate_Click"
-                                    ToolTip="Compute compensated profile: mass-preserving per-slice bisection to achieve uniform sink speed"/>
+                                    ToolTip="Compute compensated (C) profile — mass-preserving per-slice bisection for uniform sink speed"/>
+                            <ToggleButton x:Name="ShowCompToggle"
+                                          Content="Show C"
+                                          Style="{StaticResource ToggleBase}"
+                                          Visibility="Collapsed"
+                                          Click="ShowCompToggle_Click"
+                                          ToolTip="Toggle between compensated (C) and original NC profile view"/>
                             <!-- Target speed slider — visible after first compensation -->
                             <StackPanel x:Name="CompSpeedPanel" Orientation="Horizontal"
                                         VerticalAlignment="Center" Visibility="Collapsed">
@@ -985,7 +992,7 @@
                                                    Binding="{Binding PositionCm, StringFormat='0.0'}"
                                                    Width="*"/>
                                 <DataGridTextColumn Header="Diameter (mm)"
-                                                   Binding="{Binding DiameterMm, StringFormat='0.000'}"
+                                                   Binding="{Binding DiameterMm, StringFormat='0.00'}"
                                                    Width="*"/>
                             </DataGrid.Columns>
                         </DataGrid>
@@ -1029,11 +1036,11 @@
                                                Width="90"/>
                             <DataGridTextColumn x:Name="OrigStartDiamColumn"
                                                Header="Start Ø (mm)"
-                                               Binding="{Binding StartDiameterMm, StringFormat='0.000'}"
+                                               Binding="{Binding StartDiameterMm, StringFormat='0.00'}"
                                                Width="105"/>
                             <DataGridTextColumn x:Name="OrigEndDiamColumn"
                                                Header="End Ø (mm)"
-                                               Binding="{Binding EndDiameterMm, StringFormat='0.000'}"
+                                               Binding="{Binding EndDiameterMm, StringFormat='0.00'}"
                                                Width="95"/>
                             <DataGridTextColumn Header="Length (cm)"
                                                Binding="{Binding LengthCm, StringFormat='0.0'}"

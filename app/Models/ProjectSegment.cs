@@ -184,11 +184,11 @@ public class ProjectSegment : INotifyPropertyChanged
 
     /// <summary>Compensated diameter at the start of this segment (first slice).</summary>
     public string CompStartDiamText => _compSliceDiamsMm.Length > 0
-        ? $"{_compSliceDiamsMm[0]:0.000}" : "—";
+        ? $"{_compSliceDiamsMm[0]:0.00}" : "—";
 
     /// <summary>Compensated diameter at the end of this segment (last slice).</summary>
     public string CompEndDiamText => _compSliceDiamsMm.Length > 0
-        ? $"{_compSliceDiamsMm[_compSliceDiamsMm.Length - 1]:0.000}" : "—";
+        ? $"{_compSliceDiamsMm[_compSliceDiamsMm.Length - 1]:0.00}" : "—";
 
     /// <summary>Required density at start of compensated segment (first slice).</summary>
     public string CompStartDensityText => _compSliceDensities.Length > 0

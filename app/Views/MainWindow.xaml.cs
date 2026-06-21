@@ -1847,7 +1847,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     new double[] { chartYBottom * 0.85, ly });
                 leader.Color = leaderColor; leader.LineWidth = 1.2f; leader.MarkerSize = 0;
 
-                var lbl = plot.Add.Text($"Ø {node.Y:0.000}  {node.X:0.0} cm", lx, ly);
+                var lbl = plot.Add.Text($"Ø {node.Y:0.00}  {node.X:0.0} cm", lx, ly);
                 lbl.LabelFontSize = 11; lbl.LabelBold = true;
                 lbl.LabelFontColor       = new ScottColor(50, 50, 50);
                 lbl.LabelAlignment       = Alignment.UpperCenter;
@@ -1892,7 +1892,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     new double[] { chartYBottom * 0.85, ly });
                 leader.Color = leaderColor; leader.LineWidth = 1.2f; leader.MarkerSize = 0;
 
-                var lbl = plot.Add.Text($"Ø {node.Y:0.000}  {node.X:0.0} cm", lx, ly);
+                var lbl = plot.Add.Text($"Ø {node.Y:0.00}  {node.X:0.0} cm", lx, ly);
                 lbl.LabelFontSize = 11; lbl.LabelBold = true;
                 lbl.LabelFontColor       = new ScottColor(50, 50, 50);
                 lbl.LabelAlignment       = Alignment.UpperCenter;
@@ -2036,11 +2036,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             ProjectSegments.Add(seg);
         }
 
-        // If number of segments changed, comp data is no longer valid — reset
-        if (_inCompMode && !ProjectSegments.Any(s => s.HasCompensation))
+        // If comp data was lost (node count changed), exit comp view
+        if (!ProjectSegments.Any(s => s.HasCompensation) && _inCompMode)
         {
             _inCompMode = false;
-            _showOriginalProfile = false;
             UpdateCompModeUI();
         }
 
@@ -2423,12 +2422,14 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _compTargetSpeedIns = e.NewValue;
         if (CompSpeedValueLabel != null)
             CompSpeedValueLabel.Text = $"{e.NewValue:0.000}";
-        if (_inCompMode) ComputeCompensation();
+        if (_isSinking && ProjectSegments.Any(s => s.HasCompensation))
+            ComputeCompensation();
     }
 
     private void TriggerCompRecompute()
     {
-        if (_inCompMode && _isSinking) ComputeCompensation();
+        if (_isSinking && ProjectSegments.Any(s => s.HasCompensation))
+            ComputeCompensation();
     }
 
     private void ComputeCompensation()
@@ -2484,11 +2485,23 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private void UpdateCompModeUI()
     {
         if (!IsLoaded) return;
-        bool c = _inCompMode; // in comp mode: show comp columns, hide NC-only controls
+        bool hasComp = ProjectSegments.Any(s => s.HasCompensation);
+        bool c       = _inCompMode && hasComp;
+
+        // "Compensate" button label reflects whether C profile exists
+        CompensateBtn.Content = hasComp ? "⚖ Recompute C" : "⚖ Compensate";
+
+        // "Show C" toggle: visible only when comp data exists
+        ShowCompToggle.Visibility = hasComp ? Visibility.Visible   : Visibility.Collapsed;
+        ShowCompToggle.IsChecked  = c;
+
+        // NC-only controls: hide when viewing C
         SinkMapToggle.Visibility      = c ? Visibility.Collapsed : Visibility.Visible;
+        // NC ghost toggle: only when in comp mode
         ShowOriginalToggle.Visibility = c ? Visibility.Visible   : Visibility.Collapsed;
-        CompSpeedPanel.Visibility     = c ? Visibility.Visible   : Visibility.Collapsed;
-        if (c) UpdateCompSpeedSlider();
+        // Speed slider: visible as long as comp data exists
+        CompSpeedPanel.Visibility     = hasComp ? Visibility.Visible   : Visibility.Collapsed;
+        if (hasComp) UpdateCompSpeedSlider();
 
         // NodesDataGrid: in comp mode show compensated boundary diameters, read-only
         AddNodeButton.Visibility   = c ? Visibility.Collapsed : Visibility.Visible;
@@ -2523,6 +2536,16 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         UiStatus = _showOriginalProfile
             ? "Overlay: compensated profile + NC ghost"
             : "Compensated profile — density gradient only";
+    }
+
+    private void ShowCompToggle_Click(object sender, RoutedEventArgs e)
+    {
+        _inCompMode = ShowCompToggle.IsChecked ?? false;
+        RefreshPlot();
+        UpdateCompModeUI();
+        UiStatus = _inCompMode
+            ? $"Showing compensated profile — {_compTargetSpeedIns:0.000} in/s"
+            : "Showing NC profile";
     }
 
     // ── Line type / format ────────────────────────────────────────────────────
@@ -2727,7 +2750,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         MarkDirty();
         var hint = (Keyboard.IsKeyDown(Key.LeftShift) || Keyboard.IsKeyDown(Key.RightShift))
                    ? "  [SHIFT — level]" : string.Empty;
-        UiStatus = $"Node added: {snappedX:0} cm  Ø {diameter:0.000} mm  ({_segmentNodes.Count} nodes){hint}";
+        UiStatus = $"Node added: {snappedX:0} cm  Ø {diameter:0.00} mm  ({_segmentNodes.Count} nodes){hint}";
         e.Handled = true;
     }
 
@@ -2773,7 +2796,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         RefreshPlotPreservingView(newX);
         RefreshSegmentTable();
-        UiStatus = $"Node: {newX:0} cm  Ø {newDiameter:0.000} mm";
+        UiStatus = $"Node: {newX:0} cm  Ø {newDiameter:0.00} mm";
         e.Handled = true;
     }
 
@@ -2797,7 +2820,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 }
                 designDiam = InterpolateProfileY(sorted, plotX);
                 string segName = segIdx >= 0 ? $"S{segIdx + 1}  " : "";
-                parts.Add($"{segName}Design Ø {designDiam:0.000} mm");
+                parts.Add($"{segName}Design Ø {designDiam:0.00} mm");
             }
         }
 
@@ -2813,7 +2836,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 .First()
                 .index;
             scanDiam = displayedYs[nearestIndex];
-            parts.Add($"Scan Ø {scanDiam:0.000} mm");
+            parts.Add($"Scan Ø {scanDiam:0.00} mm");
         }
 
         // ── Scan-vs-design difference (caliper sinks into the supple coating) ──
@@ -2836,7 +2859,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     double span = s.Xs[i + 1] - s.Xs[i];
                     double t    = span > 0 ? (plotX - s.Xs[i]) / span : 0;
                     double d    = s.Ys[i] + t * (s.Ys[i + 1] - s.Ys[i]);
-                    parts.Add($"{s.Name} Ø {d:0.000} mm");
+                    parts.Add($"{s.Name} Ø {d:0.00} mm");
                     break;
                 }
             }
@@ -3225,7 +3248,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 var node         = labelNodes[ni];
                 double chartYTop =  node.Y / 2.0;
                 double chartYBot = -node.Y / 2.0;
-                string text      = $"Ø {node.Y:0.000}  {node.X:0.0} cm";
+                string text      = $"Ø {node.Y:0.00}  {node.X:0.0} cm";
                 double boxW      = text.Length * pdfLblSize * 0.62 * dataPerPxX;
                 double boxH      = (pdfLblSize * 1.5 + 8) * dataPerPxY;
                 double defaultLX = node.X;
@@ -3272,7 +3295,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 leader.LineWidth  = 1.0f;
                 leader.MarkerSize = 0;
 
-                var lbl = plot.Add.Text($"Ø {node.Y:0.000}  {node.X:0.0} cm", lx, ly);
+                var lbl = plot.Add.Text($"Ø {node.Y:0.00}  {node.X:0.0} cm", lx, ly);
                 lbl.LabelFontSize        = pdfLblSize;
                 lbl.LabelBold            = true;
                 lbl.LabelFontColor       = new ScottColor(50, 50, 50);
@@ -3574,7 +3597,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         RefreshPlot();
         RefreshSegmentTable();
-        UiStatus = $"Node edited: {result.Value.cm:0.0} cm  Ø {result.Value.mm:0.000} mm  ({_segmentNodes.Count} nodes)";
+        UiStatus = $"Node edited: {result.Value.cm:0.0} cm  Ø {result.Value.mm:0.00} mm  ({_segmentNodes.Count} nodes)";
         e.Handled = true;
     }
 

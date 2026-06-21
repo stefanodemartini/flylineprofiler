@@ -523,9 +523,9 @@ public static class FlyLinePdfExporter
                                     var (sr, sg, sb) = DensityColorRgb(t);
                                     var sw = PdfColor.FromRGB(sr, sg, sb);
                                     string startD = seg.CompSliceDiamsMm.Length > 0
-                                        ? $"{seg.CompSliceDiamsMm[0]:0.000}" : "—";
+                                        ? $"{seg.CompSliceDiamsMm[0]:0.00}" : "—";
                                     string endD = seg.CompSliceDiamsMm.Length > 0
-                                        ? $"{seg.CompSliceDiamsMm[^1]:0.000}" : "—";
+                                        ? $"{seg.CompSliceDiamsMm[^1]:0.00}" : "—";
                                     string pos = $"{seg.StartCm * 10:0}–{seg.EndCm * 10:0} mm";
 
                                     dr.AutoItem().Column(sc =>
@@ -675,8 +675,8 @@ public static class FlyLinePdfExporter
                                 Cell($"{seg.StartCm  * 10:0}");
                                 Cell($"{seg.EndCm    * 10:0}");
                                 Cell($"{seg.LengthCm * 10:0}");
-                                Cell($"{d1:0.000}");
-                                Cell($"{d2:0.000}");
+                                Cell($"{d1:0.00}");
+                                Cell($"{d2:0.00}");
                                 Cell(Math.Abs(compTaper) < 0.001 ? "—" : $"{compTaper:+0.00;-0.00}");
                                 Cell(avgRho > 0 ? $"{avgRho:0.000}" : "—", clamped ? (PdfColor?)ColRed : null);
                                 Cell(compMassG > 0 ? $"{compMassG:0.000}" : "—");
@@ -696,8 +696,8 @@ public static class FlyLinePdfExporter
                                 Cell($"{seg.StartCm  * 10:0}");
                                 Cell($"{seg.EndCm    * 10:0}");
                                 Cell($"{seg.LengthCm * 10:0}");
-                                Cell($"{seg.StartDiameterMm:0.000}");
-                                Cell($"{seg.EndDiameterMm:0.000}");
+                                Cell($"{seg.StartDiameterMm:0.00}");
+                                Cell($"{seg.EndDiameterMm:0.00}");
                                 Cell(seg.IsCylinder ? "—" : $"{seg.TaperMmPerMeter:+0.00;-0.00}");
                                 Cell(seg.SpecWeightGCm3 > 0 ? $"{seg.SpecWeightGCm3:0.000}" : "—");
                                 Cell(seg.MassG > 0 ? $"{seg.MassG:0.000}" : "—");
