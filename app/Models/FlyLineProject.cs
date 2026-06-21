@@ -48,6 +48,11 @@ public class FlyLineProject
     public string LaserMarkFromEndMm { get; set; } = string.Empty;
     /// <summary>Coloured bands painted over the profile, independent of nodes.</summary>
     public List<LineColorSection> ColorSections { get; set; } = new();
+
+    /// <summary>Target sink speed (m/s) for the compensated profile. 0 = no C profile saved.</summary>
+    public double CompTargetSpeedMs  { get; set; } = 0.0;
+    /// <summary>Whether the compensated view was active when the project was last saved.</summary>
+    public bool   ShowCompProfile    { get; set; } = false;
 }
 
 public class ProjectImportedSeries

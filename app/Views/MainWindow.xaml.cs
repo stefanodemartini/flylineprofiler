@@ -889,6 +889,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                                     IsHead     = s.IsHead
                                })
                                .ToList(),
+            CompTargetSpeedMs = ProjectSegments.Any(s => s.HasCompensation) ? _compTargetSpeedMs : 0.0,
+            ShowCompProfile   = _inCompMode,
         };
 
         ProjectService.Save(project, path);
@@ -989,6 +991,16 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         FitAfterRefresh();
         RefreshSegmentTable();
         SpWeightColumn.IsReadOnly = _useSharedDensity;
+
+        // Restore compensated profile if one was saved
+        if (project.CompTargetSpeedMs > 0 && _isSinking && ProjectSegments.Any(s => s.SpecWeightGCm3 > 0))
+        {
+            _compTargetSpeedMs = project.CompTargetSpeedMs;
+            ComputeCompensation();
+            _inCompMode = project.ShowCompProfile;
+            UpdateCompModeUI();
+        }
+
         RefreshStatusBar();
         UpdateProjectTitle();
         UiStatus = $"Project loaded: {project.Name}  ({project.ScanPoints.Count} scan pts, {project.ImportedSeries.Count} series, {project.DesignNodes.Count} nodes)";
