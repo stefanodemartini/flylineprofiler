@@ -238,7 +238,7 @@ public static class FlyLinePdfExporter
             var compSegsAll = segments.Where(s => s.HasCompensation).ToList();
             var allDens = compSegsAll.SelectMany(s => s.CompSliceDensities).Where(d => d > 0).ToList();
             densityRange = allDens.Count > 0
-                ? $"{allDens.Min():0.000} – {allDens.Max():0.000} g/cm³"
+                ? $"{allDens.Min():0.00} – {allDens.Max():0.00} g/cm³"
                 : "—";
             hasClampedSection = compSegsAll.Any(s => s.HasClampedSlices);
         }
@@ -259,10 +259,10 @@ public static class FlyLinePdfExporter
         {
             dimNote    = "All dimensions are in millimeters. Diameters shown are compensated values.";
             weightNote = compTargetSpeedIns > 0
-                ? $"Compensated profile — uniform sink speed {compTargetSpeedIns:0.000} in/s. " +
-                  $"Material density varies per section ({densityRange}) to achieve uniform sinking."
-                : $"Compensated profile. Material density varies per section ({densityRange}).";
-            changeNote = "Do not alter diameters. Adjust density of each section as specified to achieve the target sink speed.";
+                ? $"Compensated profile — uniform sink speed {compTargetSpeedIns:0.00} in/s. " +
+                  $"Density varies along the line ({densityRange} g/cm³) — each zone must be produced at the exact specified density."
+                : $"Compensated profile. Density varies along the line ({densityRange} g/cm³).";
+            changeNote = "Do not alter diameters. Each section must be manufactured at the exact density shown — the density is calculated and fixed.";
         }
         else
         {
@@ -468,7 +468,7 @@ public static class FlyLinePdfExporter
                         var compSegs = segments.Where(s => s.HasCompensation).ToList();
                         if (compSegs.Count > 0)
                         {
-                            // Quantizza tutte le densità slice a max 4 materiali
+                            // Quantize all slice densities to max 4 materials
                             double[] qDens = Quantize1D(compSegs.SelectMany(s => s.CompSliceDensities), 4);
                             double minD = qDens.Length > 0 ? qDens[0] : 0;
                             double maxD = qDens.Length > 0 ? qDens[^1] : 1;
@@ -478,13 +478,13 @@ public static class FlyLinePdfExporter
                                 : qDens.MinBy(c => Math.Abs(c - d));
                             int MatIdx(double d) => Array.IndexOf(qDens, NearestQ(d)) + 1;
 
-                            // ── Chiave materiali (max 4 campioni) ────────────
+                            // ── Density legend (max 4 materials) ─────────────
                             col.Item().Background(C("F7F8FA"))
                                 .Border(0.5f).BorderColor(ColBorder)
                                 .PaddingVertical(3).PaddingHorizontal(5).Row(mr =>
                             {
                                 mr.AutoItem().AlignMiddle()
-                                    .Text("Materiali  ").FontSize(6.5f).Bold().FontColor(ColMuted);
+                                    .Text("Density legend  ").FontSize(6.5f).Bold().FontColor(ColMuted);
                                 for (int mi = 0; mi < qDens.Length; mi++)
                                 {
                                     double dens = qDens[mi];
@@ -493,56 +493,76 @@ public static class FlyLinePdfExporter
                                     var sw = PdfColor.FromRGB(sr, sg, sb);
                                     mr.AutoItem().Column(mc =>
                                     {
-                                        mc.Item().Width(58).Height(10).Background(sw)
+                                        mc.Item().Width(60).Height(10).Background(sw)
                                             .Border(0.5f).BorderColor(ColBorder);
-                                        mc.Item().Width(58)
+                                        mc.Item().Width(60)
                                             .Text($"Mat {mi + 1}")
                                             .FontSize(6.5f).Bold().FontColor(ColText).AlignCenter();
-                                        mc.Item().Width(58)
-                                            .Text($"{dens:0.000} g/cm³")
+                                        mc.Item().Width(60)
+                                            .Text($"{dens:0.00} g/cm³")
                                             .FontSize(7f).Bold().FontColor(C("0F6B50")).AlignCenter();
                                     });
-                                    mr.ConstantItem(6);
+                                    mr.ConstantItem(8);
                                 }
                             });
 
-                            // ── Assegnazione segmenti ────────────────────────
+                            // ── Density bands: contiguous position runs of same material ──
+                            // Build ordered list of (positionMm, matIdx, quantizedDensity) per slice
+                            var allSlices = compSegs
+                                .SelectMany(seg => seg.CompSliceXsCm
+                                    .Select((x, i) => (
+                                        PosMm: (seg.StartCm + x) * 10.0,
+                                        Mat:   MatIdx(seg.CompSliceDensities[i]),
+                                        Dens:  NearestQ(seg.CompSliceDensities[i])
+                                    )))
+                                .OrderBy(s => s.PosMm)
+                                .ToList();
+
+                            // Group into contiguous runs of same material
+                            var bands = new List<(double StartMm, double EndMm, int Mat, double Dens)>();
+                            if (allSlices.Count > 0)
+                            {
+                                double sliceStep = allSlices.Count > 1
+                                    ? allSlices[1].PosMm - allSlices[0].PosMm : 10.0;
+                                var cur = (StartMm: allSlices[0].PosMm, EndMm: allSlices[0].PosMm,
+                                           Mat: allSlices[0].Mat, Dens: allSlices[0].Dens);
+                                for (int si = 1; si < allSlices.Count; si++)
+                                {
+                                    if (allSlices[si].Mat == cur.Mat)
+                                        cur.EndMm = allSlices[si].PosMm;
+                                    else
+                                    {
+                                        bands.Add((cur.StartMm, cur.EndMm + sliceStep, cur.Mat, cur.Dens));
+                                        cur = (allSlices[si].PosMm, allSlices[si].PosMm,
+                                               allSlices[si].Mat, allSlices[si].Dens);
+                                    }
+                                }
+                                bands.Add((cur.StartMm, cur.EndMm + sliceStep, cur.Mat, cur.Dens));
+                            }
+
                             col.Item().Background(C("F7F8FA"))
                                 .Border(0.5f).BorderColor(ColBorder)
                                 .PaddingVertical(3).PaddingHorizontal(5).Row(dr =>
                             {
                                 dr.AutoItem().AlignMiddle()
-                                    .Text("Segmenti  ").FontSize(6.5f).Bold().FontColor(ColMuted);
-                                foreach (var seg in compSegs)
+                                    .Text("Density zones  ").FontSize(6.5f).Bold().FontColor(ColMuted);
+                                foreach (var (startMm, endMm, mat, dens) in bands)
                                 {
-                                    if (seg.CompSliceDensities.Length == 0) continue;
-                                    double avg = seg.CompSliceDensities.Average();
-                                    double qd  = NearestQ(avg);
-                                    int    mat = MatIdx(avg);
-                                    double t   = Math.Clamp((qd - minD) / rng, 0, 1);
-                                    var (sr, sg, sb) = DensityColorRgb(t);
-                                    var sw = PdfColor.FromRGB(sr, sg, sb);
-                                    string startD = seg.CompSliceDiamsMm.Length > 0
-                                        ? $"{seg.CompSliceDiamsMm[0]:0.00}" : "—";
-                                    string endD = seg.CompSliceDiamsMm.Length > 0
-                                        ? $"{seg.CompSliceDiamsMm[^1]:0.00}" : "—";
-                                    string pos = $"{seg.StartCm * 10:0}–{seg.EndCm * 10:0} mm";
-
+                                    double t2 = Math.Clamp((dens - minD) / rng, 0, 1);
+                                    var (sr2, sg2, sb2) = DensityColorRgb(t2);
+                                    var sw2 = PdfColor.FromRGB(sr2, sg2, sb2);
                                     dr.AutoItem().Column(sc =>
                                     {
-                                        sc.Item().Width(52).Height(10).Background(sw)
+                                        sc.Item().Width(56).Height(10).Background(sw2)
                                             .Border(0.5f).BorderColor(ColBorder);
-                                        sc.Item().Width(52)
-                                            .Text(string.IsNullOrWhiteSpace(seg.Name) ? $"S{seg.Index}" : seg.Name)
-                                            .FontSize(6.5f).Bold().FontColor(ColText).AlignCenter();
-                                        sc.Item().Width(52)
+                                        sc.Item().Width(56)
                                             .Text($"Mat {mat}")
                                             .FontSize(6.5f).Bold().FontColor(C("0F6B50")).AlignCenter();
-                                        sc.Item().Width(52)
-                                            .Text($"Ø {startD}→{endD} mm")
-                                            .FontSize(6f).FontColor(ColMuted).AlignCenter();
-                                        sc.Item().Width(52)
-                                            .Text(pos)
+                                        sc.Item().Width(56)
+                                            .Text($"{dens:0.00} g/cm³")
+                                            .FontSize(6.5f).FontColor(ColText).AlignCenter();
+                                        sc.Item().Width(56)
+                                            .Text($"{startMm:0}–{endMm:0} mm")
                                             .FontSize(6f).FontColor(ColMuted).AlignCenter();
                                     });
                                     dr.ConstantItem(6);

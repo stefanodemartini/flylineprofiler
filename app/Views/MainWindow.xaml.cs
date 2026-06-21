@@ -3401,11 +3401,26 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             return;
         }
 
+        // Ask whether to export NC or C profile when comp data exists
+        bool exportComp = false;
+        if (_isSinking && ProjectSegments.Any(s => s.HasCompensation))
+        {
+            var choice = MessageBox.Show(
+                "This project has a compensated (C) profile.\n\n" +
+                "Yes  →  Export compensated profile (C)\n" +
+                "No   →  Export original NC profile",
+                "PDF Export — Profile selection",
+                MessageBoxButton.YesNoCancel,
+                MessageBoxImage.Question);
+            if (choice == MessageBoxResult.Cancel) return;
+            exportComp = choice == MessageBoxResult.Yes;
+        }
+
         var dlg = new Microsoft.Win32.SaveFileDialog
         {
             Filter      = "PDF files (*.pdf)|*.pdf",
             DefaultExt  = ".pdf",
-            FileName    = $"{_projectName}_design.pdf"
+            FileName    = $"{_projectName}_{(exportComp ? "C" : "NC")}.pdf"
         };
         if (dlg.ShowDialog() != true) return;
 
@@ -3427,14 +3442,26 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 laserMarkText = string.IsNullOrWhiteSpace(_laserMark)
                     ? $"at {string.Join(" and ", markPos)}"
                     : $"{_laserMark}   —   at {string.Join(" and ", markPos)}";
-            bool showComp = _inCompMode && ProjectSegments.Any(s => s.HasCompensation);
-            string compNote = showComp
-                ? $"Compensated profile — target sink {_compTargetSpeedIns:0.000} in/s. " +
-                  "Diameters reflect mass-preserving compensation. Do not alter diameters; adjust density only."
+            // Render chart in the correct mode (temporarily switch if needed)
+            bool wasinCompMode = _inCompMode;
+            if (exportComp != _inCompMode)
+            {
+                _inCompMode = exportComp;
+                RefreshPlot();
+            }
+            byte[] chartBytes = RenderPdfChart();
+            if (_inCompMode != wasinCompMode)
+            {
+                _inCompMode = wasinCompMode;
+                RefreshPlot();
+            }
+            string compNote = exportComp
+                ? $"Compensated profile — target sink {_compTargetSpeedIns:0.00} in/s. " +
+                  "Diameters are mass-preserving compensated values. Manufacture each section at the exact density shown."
                 : "";
-            FlyLinePdfExporter.Export(dlg.FileName, _projectName, RenderPdfChart(), ProjectSegments.ToList(),
+            FlyLinePdfExporter.Export(dlg.FileName, _projectName, chartBytes, ProjectSegments.ToList(),
                 _isSinking, _isFullLine, _waterIsSalt, _waterTempC, AfftaBadge, _colorNote, pdfSections, designHex,
-                _coreType, laserMarkText, showComp, compNote, _compTargetSpeedIns);
+                _coreType, laserMarkText, exportComp, compNote, _compTargetSpeedIns);
             UiStatus = $"PDF exported: {System.IO.Path.GetFileName(dlg.FileName)}";
         }
         catch (Exception ex)
