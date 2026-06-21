@@ -111,6 +111,139 @@ public static class SinkingSpeedCalc
     }
 
     /// <summary>
+    /// Sink speed of the entire line (all segments) treated as a single rigid body
+    /// at a given uniform density.  All segments contribute to the combined force balance.
+    /// </summary>
+    public static double LineSinkSpeed(
+        bool isSalt, double tempC,
+        IEnumerable<(double StartDiamMm, double EndDiamMm, double LengthCm)> segments,
+        double densityGcm3,
+        double sliceLengthCm = 5.0)
+    {
+        if (densityGcm3 <= 0) return double.NaN;
+        var slices = BuildSlices(segments, sliceLengthCm);
+        return slices.Count == 0 ? double.NaN
+            : LineSinkSpeedCore(isSalt, tempC, slices, densityGcm3);
+    }
+
+    /// <summary>
+    /// Back-calculates the uniform density required to make the whole line sink
+    /// at <paramref name="targetSpeedMs"/> (m/s).
+    /// Returns (density, achievable=true) on success, or the nearest boundary
+    /// density with achievable=false when the target is outside the physical range.
+    /// </summary>
+    public static (double DensityGcm3, bool Achievable) DensityForTargetSinkSpeed(
+        bool isSalt, double tempC,
+        IEnumerable<(double StartDiamMm, double EndDiamMm, double LengthCm)> segments,
+        double targetSpeedMs,
+        double sliceLengthCm = 5.0)
+    {
+        if (targetSpeedMs <= 0) return (0, false);
+        var slices = BuildSlices(segments, sliceLengthCm);
+        if (slices.Count == 0) return (0, false);
+
+        const double rhoMin = 1.001;   // just above fresh water — anything less floats
+        const double rhoMax = 2.5;
+
+        double sMin = LineSinkSpeedCore(isSalt, tempC, slices, rhoMin);
+        double sMax = LineSinkSpeedCore(isSalt, tempC, slices, rhoMax);
+        if (double.IsNaN(sMin) || double.IsNaN(sMax)) return (0, false);
+
+        if (targetSpeedMs <= sMin) return (rhoMin, false);
+        if (targetSpeedMs >= sMax) return (rhoMax, false);
+
+        // Bisect on density
+        double lo = rhoMin, hi = rhoMax;
+        double flo = sMin - targetSpeedMs;
+        for (int i = 0; i < 80; i++)
+        {
+            double mid  = (lo + hi) / 2.0;
+            double fmid = LineSinkSpeedCore(isSalt, tempC, slices, mid) - targetSpeedMs;
+            if (Math.Abs(fmid) < 1e-7) return (mid, true);
+            if (flo * fmid <= 0.0) { hi = mid; }
+            else                    { lo = mid; flo = fmid; }
+        }
+        return ((lo + hi) / 2.0, true);
+    }
+
+    // Returns the sink speed range achievable for the line between rho 1.001 and 2.5
+    public static (double MinSpeedMs, double MaxSpeedMs) LineSinkSpeedRange(
+        bool isSalt, double tempC,
+        IEnumerable<(double StartDiamMm, double EndDiamMm, double LengthCm)> segments,
+        double sliceLengthCm = 5.0)
+    {
+        var slices = BuildSlices(segments, sliceLengthCm);
+        if (slices.Count == 0) return (double.NaN, double.NaN);
+        return (LineSinkSpeedCore(isSalt, tempC, slices, 1.001),
+                LineSinkSpeedCore(isSalt, tempC, slices, 2.5));
+    }
+
+    private static List<(double Dm, double Dl)> BuildSlices(
+        IEnumerable<(double StartDiamMm, double EndDiamMm, double LengthCm)> segments,
+        double sliceLengthCm)
+    {
+        var slices = new List<(double Dm, double Dl)>();
+        foreach (var (s, e, l) in segments)
+        {
+            if (l <= 0 || s <= 0 || e <= 0) continue;
+            double Lm = l / 100.0;
+            int    n  = Math.Max(1, (int)Math.Ceiling(l / sliceLengthCm));
+            double dl = Lm / n;
+            for (int i = 0; i < n; i++)
+            {
+                double t  = (i + 0.5) / n;
+                double dm = (s + t * (e - s)) / 1000.0;
+                slices.Add((dm, dl));
+            }
+        }
+        return slices;
+    }
+
+    private static double LineSinkSpeedCore(
+        bool isSalt, double tempC,
+        List<(double Dm, double Dl)> slices,
+        double densityGcm3)
+    {
+        (double rhoW, double nu) = WaterProps(isSalt, tempC);
+        double rhoL = densityGcm3 * 1000.0;
+
+        double totalGrav = 0;
+        foreach (var (dm, dl) in slices)
+            totalGrav += (Math.PI / 4.0) * dm * dm * dl * G * (rhoL - rhoW);
+
+        double lo, hi;
+        if (totalGrav >= 0.0) { lo = 0.0; hi = 3.0; }
+        else                   { lo = -3.0; hi = 0.0; }
+
+        double ResidualFull(double v)
+        {
+            double drag = 0;
+            foreach (var (dm, dl) in slices)
+            {
+                double re = Math.Abs(v) * dm / nu;
+                if (re < Tol) re = Tol;
+                double cd = 1.0 + 10.0 / Math.Pow(re, 2.0 / 3.0);
+                drag += 0.5 * cd * Math.Abs(v) * v * dm * dl * rhoW;
+            }
+            return totalGrav - drag;
+        }
+
+        double flo = ResidualFull(lo), fhi = ResidualFull(hi);
+        if (flo * fhi > 0.0) return double.NaN;
+
+        double mid = 0.0;
+        for (int i = 0; i < MaxIter; i++)
+        {
+            mid = (lo + hi) / 2.0;
+            double fmid = ResidualFull(mid);
+            if (Math.Abs(fmid) < Tol) break;
+            if (flo * fmid <= 0.0) { hi = mid; }
+            else                    { lo = mid; flo = ResidualFull(lo); }
+        }
+        return mid;
+    }
+
+    /// <summary>
     /// Accurate sink speed for a tapered segment.
     ///
     /// The segment is divided into sub-cylinders of at most <paramref name="sliceLengthCm"/> cm.

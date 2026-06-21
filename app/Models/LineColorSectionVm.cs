@@ -1,18 +1,71 @@
+using System.Collections.ObjectModel;
 using System.ComponentModel;
 
 namespace DiametroLineaDesktop.Models;
 
 /// <summary>
-/// View-model for a coloured band painted over the profile, editable in the DataGrid.
-/// StartCm / EndCm are positions along the line in cm.
-/// ColorHex is a 6-char RGB string without '#' (e.g. "DC3232").
+/// ViewModel for one nozzle definition (M1–M4).
+/// Color + density are both fixed properties of the nozzle material.
 /// </summary>
-public class LineColorSectionVm : INotifyPropertyChanged
+public class NozzleDefinitionVm : INotifyPropertyChanged
 {
+    private string _colorHex    = "DC3232";
+    private double _densityGCm3 = 0.0;
+    private string _label       = string.Empty;
+
+    public int Number { get; init; }   // 1-based display number (M1 … M4)
+
+    private bool _isActive;
+    public bool IsActive
+    {
+        get => _isActive;
+        set { _isActive = value; OnPropertyChanged(nameof(IsActive)); }
+    }
+
+    public string ColorHex
+    {
+        get => _colorHex;
+        set
+        {
+            _colorHex = (value ?? "DC3232").TrimStart('#').ToUpperInvariant();
+            OnPropertyChanged(nameof(ColorHex));
+        }
+    }
+
+    public double DensityGCm3
+    {
+        get => _densityGCm3;
+        set { _densityGCm3 = value; OnPropertyChanged(nameof(DensityGCm3)); }
+    }
+
+    public string Label
+    {
+        get => _label;
+        set { _label = value ?? string.Empty; OnPropertyChanged(nameof(Label)); }
+    }
+
+    public string DisplayName => $"M{Number}";
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+    protected void OnPropertyChanged(string name) =>
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+}
+
+/// <summary>
+/// ViewModel for a zone assigned to one nozzle.
+/// The zone's colour and density are derived entirely from the assigned nozzle.
+/// </summary>
+public class NozzleZoneVm : INotifyPropertyChanged
+{
+    private readonly ObservableCollection<NozzleDefinitionVm> _nozzles;
     private double _startCm;
     private double _endCm;
-    private string _colorHex = "DC3232";
-    private string _label    = string.Empty;
+    private int    _nozzleIndex;
+
+    public NozzleZoneVm(ObservableCollection<NozzleDefinitionVm> nozzles)
+    {
+        _nozzles = nozzles;
+    }
 
     public double StartCm
     {
@@ -26,18 +79,24 @@ public class LineColorSectionVm : INotifyPropertyChanged
         set { _endCm = value; OnPropertyChanged(nameof(EndCm)); }
     }
 
-    /// <summary>6-char RGB hex, no '#'. E.g. "DC3232" for red.</summary>
-    public string ColorHex
+    /// <summary>0-based index into the Nozzles collection.</summary>
+    public int NozzleIndex
     {
-        get => _colorHex;
-        set { _colorHex = (value ?? "DC3232").TrimStart('#').ToUpperInvariant(); OnPropertyChanged(nameof(ColorHex)); }
+        get => _nozzleIndex;
+        set
+        {
+            _nozzleIndex = Math.Clamp(value, 0, 3);
+            OnPropertyChanged(nameof(NozzleIndex));
+            OnPropertyChanged(nameof(ColorHex));
+            OnPropertyChanged(nameof(DensityGCm3));
+            OnPropertyChanged(nameof(NozzleLabel));
+        }
     }
 
-    public string Label
-    {
-        get => _label;
-        set { _label = value ?? string.Empty; OnPropertyChanged(nameof(Label)); }
-    }
+    // Derived from nozzle definition
+    public string ColorHex    => _nozzleIndex < _nozzles.Count ? _nozzles[_nozzleIndex].ColorHex    : "888888";
+    public double DensityGCm3 => _nozzleIndex < _nozzles.Count ? _nozzles[_nozzleIndex].DensityGCm3 : 0;
+    public string NozzleLabel => _nozzleIndex < _nozzles.Count ? _nozzles[_nozzleIndex].DisplayName  : $"M{_nozzleIndex + 1}";
 
     public event PropertyChangedEventHandler? PropertyChanged;
     private void OnPropertyChanged(string name) =>

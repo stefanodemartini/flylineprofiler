@@ -226,7 +226,8 @@ public static class FlyLinePdfExporter
         double tempC,
         string afftaBadge,
         string colorNote = "",
-        List<LineColorSection>? colorSections = null,
+        List<NozzleDefinition>? nozzleDefinitions = null,
+        List<NozzleZone>?       nozzleZones       = null,
         string designColorHex = "DC3232",
         string coreType = "",
         string laserMark = "",
@@ -421,60 +422,70 @@ public static class FlyLinePdfExporter
                     // ── Profile chart ──────────────────────────────────────
                     col.Item().Image(chartBytes).FitWidth();
 
-                    // ── Colour legend — always present ────────────────────
-                    // Base line colour first (it covers everything the sections don't),
-                    // then one entry per colour section with its range.
-                    var legendEntries = new List<(string Hex, string Label, string Range)>();
-                    bool hasSections = colorSections != null && colorSections.Count > 0;
-                    legendEntries.Add((designColorHex.TrimStart('#'),
-                                       hasSections ? "Base colour" : "", ""));
-                    if (hasSections)
-                    {
-                        foreach (var cs in colorSections!)
-                        {
-                            string range = $"{cs.StartCm:0.0}–{cs.EndCm:0.0} cm";
-                            legendEntries.Add((cs.ColorHex.TrimStart('#'), cs.Label ?? "", range));
-                        }
-                    }
+                    // ── Materials legend (nozzle definitions) ─────────────
+                    // Shows each active nozzle slot: colour swatch, density, label, zone range.
+                    bool hasNozzles = nozzleDefinitions != null && nozzleDefinitions.Count > 0;
+                    bool hasZones   = nozzleZones       != null && nozzleZones.Count   > 0;
 
-                    col.Item().Background(C("F7F8FA"))
-                        .Border(0.5f).BorderColor(ColBorder)
-                        .PaddingVertical(3).PaddingHorizontal(5).Row(legRow =>
+                    if (hasNozzles || !string.IsNullOrWhiteSpace(designColorHex))
                     {
-                        legRow.AutoItem().AlignMiddle()
-                            .Text("Colour  ").FontSize(6.5f).Bold().FontColor(ColMuted);
-                        foreach (var (hex, label, range) in legendEntries)
+                        col.Item().Background(C("F7F8FA"))
+                            .Border(0.5f).BorderColor(ColBorder)
+                            .PaddingVertical(3).PaddingHorizontal(5).Row(legRow =>
                         {
-                            if (hex.Length < 6) continue;
-                            try
+                            legRow.AutoItem().AlignMiddle()
+                                .Text("Materials  ").FontSize(6.5f).Bold().FontColor(ColMuted);
+
+                            // If no nozzle definitions defined, show base design colour
+                            var nozzlesToShow = hasNozzles
+                                ? nozzleDefinitions!
+                                : new List<NozzleDefinition>
+                                    { new NozzleDefinition { ColorHex = designColorHex.TrimStart('#'), DensityGCm3 = 0, Label = "" } };
+
+                            for (int nmi = 0; nmi < nozzlesToShow.Count; nmi++)
                             {
-                                byte r = System.Convert.ToByte(hex[0..2], 16);
-                                byte g = System.Convert.ToByte(hex[2..4], 16);
-                                byte b = System.Convert.ToByte(hex[4..6], 16);
-                                var swatchColor = PdfColor.FromRGB(r, g, b);
-                                // Each entry: swatch + hex + optional label, all stacked vertically
-                                legRow.AutoItem().Column(sCol =>
+                                var nd  = nozzlesToShow[nmi];
+                                string hex = (nd.ColorHex ?? "DC3232").TrimStart('#');
+                                if (hex.Length < 6) continue;
+                                try
                                 {
-                                    sCol.Item().Border(0.5f).BorderColor(ColBorder)
-                                        .Element(e => DrawLambertSwatch(e, swatchColor, 44, 10));
-                                    sCol.Item().Width(44).Text($"#{hex.ToUpperInvariant()}")
-                                        .FontSize(6.5f).Bold().FontColor(ColText).AlignCenter();
-                                    sCol.Item().Width(44).Text($"rgb({r}, {g}, {b})")
-                                        .FontSize(6f).FontColor(ColMuted).AlignCenter();
-                                    if (!string.IsNullOrWhiteSpace(label) || !string.IsNullOrWhiteSpace(range))
+                                    byte nr = System.Convert.ToByte(hex[0..2], 16);
+                                    byte ng = System.Convert.ToByte(hex[2..4], 16);
+                                    byte nb = System.Convert.ToByte(hex[4..6], 16);
+                                    var swatchColor = PdfColor.FromRGB(nr, ng, nb);
+
+                                    // Zone range for this nozzle slot
+                                    string zoneRange = "";
+                                    if (hasZones)
                                     {
-                                        string sub = string.IsNullOrWhiteSpace(label) ? range
-                                                   : string.IsNullOrWhiteSpace(range)  ? label
-                                                   : $"{label}  {range}";
-                                        sCol.Item().Width(44).Text(sub)
-                                            .FontSize(6).FontColor(ColMuted).AlignCenter();
+                                        var myZones = nozzleZones!.Where(z => z.NozzleIndex == nmi).ToList();
+                                        if (myZones.Count > 0)
+                                            zoneRange = string.Join(", ",
+                                                myZones.Select(z => $"{z.StartCm:0.0}–{z.EndCm:0.0} cm"));
                                     }
-                                });
-                                legRow.ConstantItem(10);
+
+                                    legRow.AutoItem().Column(sCol =>
+                                    {
+                                        sCol.Item().Text($"M{nmi + 1}")
+                                            .FontSize(6.5f).Bold().FontColor(ColText).AlignCenter();
+                                        sCol.Item().Border(0.5f).BorderColor(ColBorder)
+                                            .Element(e => DrawLambertSwatch(e, swatchColor, 44, 10));
+                                        if (nd.DensityGCm3 > 0)
+                                            sCol.Item().Width(44).Text($"ρ {nd.DensityGCm3:0.000} g/cm³")
+                                                .FontSize(6f).Bold().FontColor(ColText).AlignCenter();
+                                        if (!string.IsNullOrWhiteSpace(nd.Label))
+                                            sCol.Item().Width(44).Text(nd.Label)
+                                                .FontSize(6f).FontColor(ColMuted).AlignCenter();
+                                        if (!string.IsNullOrWhiteSpace(zoneRange))
+                                            sCol.Item().Width(44).Text(zoneRange)
+                                                .FontSize(5.5f).FontColor(ColMuted).AlignCenter();
+                                    });
+                                    legRow.ConstantItem(10);
+                                }
+                                catch { /* ignore bad hex */ }
                             }
-                            catch { /* ignore bad hex */ }
-                        }
-                    });
+                        });
+                    }
 
                     // ── Compensation note + density legend ────────────────
                     if (showCompensation && !string.IsNullOrWhiteSpace(compensationNote))

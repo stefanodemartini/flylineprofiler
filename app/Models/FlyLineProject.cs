@@ -46,13 +46,34 @@ public class FlyLineProject
     public string LaserMarkFromTipMm { get; set; } = string.Empty;
     /// <summary>Mark position: mm from the rear end of the line. Empty = no mark at the rear side.</summary>
     public string LaserMarkFromEndMm { get; set; } = string.Empty;
-    /// <summary>Coloured bands painted over the profile, independent of nodes.</summary>
+    /// <summary>Coloured bands — legacy field kept for migration of old .flp files.</summary>
     public List<LineColorSection> ColorSections { get; set; } = new();
+
+    /// <summary>Up to 4 nozzle materials, each with a fixed colour + density.</summary>
+    public List<NozzleDefinition> NozzleDefinitions { get; set; } = new();
+    /// <summary>Zone assignments: each zone uses one nozzle for its entire length.</summary>
+    public List<NozzleZone>       NozzleZones       { get; set; } = new();
 
     /// <summary>Target sink speed (m/s) for the compensated profile. 0 = no C profile saved.</summary>
     public double CompTargetSpeedMs  { get; set; } = 0.0;
     /// <summary>Whether the compensated view was active when the project was last saved.</summary>
     public bool   ShowCompProfile    { get; set; } = false;
+}
+
+/// <summary>One nozzle = one material: a fixed (colour, density) compound.</summary>
+public class NozzleDefinition
+{
+    public string ColorHex    { get; set; } = "DC3232";   // 6-char RGB, no '#'
+    public double DensityGCm3 { get; set; } = 0.0;
+    public string Label       { get; set; } = string.Empty;
+}
+
+/// <summary>A zone on the line that is extruded by a single nozzle.</summary>
+public class NozzleZone
+{
+    public double StartCm    { get; set; }
+    public double EndCm      { get; set; }
+    public int    NozzleIndex { get; set; }   // 0-based index into NozzleDefinitions
 }
 
 public class ProjectImportedSeries
