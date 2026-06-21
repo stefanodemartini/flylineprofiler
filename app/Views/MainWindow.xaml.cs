@@ -131,12 +131,15 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     // Key: 0-based segment order index — stable even when node X positions are edited.
     private readonly Dictionary<int, (string Name, double SpecWeight, bool IsHead)> _segmentMetadata = new();
 
-    private bool   _useSharedDensity = true;
+    private bool   _useSharedDensity = true; // always true — uniform material density
     private double _sharedDensity    = 0.0;
 
     private bool   _waterIsSalt = false;
     private double _waterTempC  = 20.0;
-    private double _compTargetSpeedIns = 1.0; // desired compensation speed in in/s
+    private double _compTargetSpeedIns = 1.0; // current comp target in in/s (display only)
+    private double _compMinSpeedMs     = 0;   // min NC sink speed across segments
+    private double _compMaxSpeedMs     = 0;   // max NC sink speed across segments
+    private double _compTargetSpeedMs  = 0;   // user-selected target (0 = use max)
     private bool   _isSinking  = false;
     private bool   _isFullLine = false;
     private string _afftaBadge = "AFFTA: —";
@@ -957,8 +960,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         for (int mi = 0; mi < sortedMeta.Count; mi++)
             _segmentMetadata[mi] = (sortedMeta[mi].Name, sortedMeta[mi].SpecWeight, sortedMeta[mi].IsHead);
 
-        _useSharedDensity = project.UseSharedDensity;
+        _useSharedDensity = true; // always uniform
         _sharedDensity    = project.SharedDensityGCm3;
+        // Old projects may have had per-segment densities with SharedDensityGCm3 = 0 — infer from meta
+        if (_sharedDensity <= 0 && project.SegmentMetadata.Any(m => m.SpecWeight > 0))
+            _sharedDensity = project.SegmentMetadata.Where(m => m.SpecWeight > 0).Average(m => m.SpecWeight);
         _isSinking        = project.IsSinking;
         _isFullLine       = project.IsFullLine;
         _waterIsSalt      = project.WaterType == "salt";
@@ -1248,10 +1254,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     {
         string mode;
         if (_designMode)
-            mode = (_inCompMode && _showOriginalProfile)
-                 ? "Non compensato — velocità affondamento"
-                 : _inCompMode
-                 ? $"Compensato  {_compTargetSpeedIns:0.00} in/s — gradiente densità"
+            mode = _inCompMode
+                 ? $"Compensated  {_compTargetSpeedIns:0.00} in/s — density gradient{(_showOriginalProfile ? " + NC ghost" : "")}"
                  : "Design";
         else
             mode = "Scan";
@@ -1709,21 +1713,18 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         if (sorted.Count >= 2)
         {
-            if (!inComp || showOrig)
+            if (!inComp)
             {
-                // ── Profilo originale / design ──────────────────────────────
+                // ── Profilo originale / design (NC mode) ────────────────────
                 DrawLineFill(plot, xs, halfYs, negHalfYs, designColor, solid: true);
                 if (ColorSections.Count > 0)
                     RenderColorSections(plot, sorted);
 
-                // Mappa velocità: sempre visibile in modalità "Non compensato", altrimenti toggle
-                if (inComp || _showSinkSpeedMap)
+                if (_showSinkSpeedMap)
                     RenderSinkSpeedOverlay(plot, sorted);
 
                 var topLine = plot.Add.Scatter(xs, halfYs);
-                topLine.LegendText = inComp && showOrig
-                    ? $"Non compensato ({sorted.Count} nodi)"
-                    : $"Design ({sorted.Count} nodes)";
+                topLine.LegendText = $"Design ({sorted.Count} nodes)";
                 topLine.Color = designColor; topLine.LineWidth = 2.5f; topLine.MarkerSize = 0;
 
                 var botLine = plot.Add.Scatter(xs, negHalfYs);
@@ -1739,6 +1740,21 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             }
             else
             {
+                // ── Comp mode: NC ghost (optional) + compensated profile ────
+                if (showOrig)
+                {
+                    // NC ghost — translucent, thin
+                    var ghostColor = new ScottColor(160, 160, 160, 70);
+                    DrawLineFill(plot, xs, halfYs, negHalfYs, ghostColor, solid: true);
+                    var ncTop = plot.Add.Scatter(xs, halfYs);
+                    ncTop.LegendText = "NC (original)";
+                    ncTop.Color      = new ScottColor(160, 160, 160, 120);
+                    ncTop.LineWidth  = 1.2f; ncTop.MarkerSize = 0;
+                    var ncBot = plot.Add.Scatter(xs, negHalfYs);
+                    ncBot.Color     = new ScottColor(160, 160, 160, 120);
+                    ncBot.LineWidth = 1.2f; ncBot.MarkerSize = 0;
+                }
+
                 // ── Profilo compensato con gradiente densità ────────────────
                 var cn = GetCompNodes();
                 if (cn.Count >= 2)
@@ -1804,7 +1820,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
 
         // ── Label nodi ──────────────────────────────────────────────────────
-        if (!inComp || showOrig)
+        if (!inComp)
         {
             // Nodi originali
             var markers = plot.Add.Scatter(xs, halfYs);
@@ -1966,7 +1982,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     // Preserves compensation data across RefreshSegmentTable() rebuilds (keyed by 0-based index)
     private readonly record struct CompSnapshot(
         double StartCm, double[] SliceXsCm, double[] SliceDiamsMm,
-        double[] SliceDensities, double TargetSpeedMs);
+        double[] SliceDensities, bool[] Clamped, double TargetSpeedMs);
 
     private void RefreshSegmentTable()
     {
@@ -1979,7 +1995,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             if (s.HasCompensation)
                 compSnapshots[si] = new CompSnapshot(
                     s.CompStartCm, s.CompSliceXsCm, s.CompSliceDiamsMm,
-                    s.CompSliceDensities, s.CompensatedTargetSpeedMs);
+                    s.CompSliceDensities, s.CompSliceClamped, s.CompensatedTargetSpeedMs);
             s.PropertyChanged -= OnSegmentPropertyChanged;
         }
 
@@ -2014,7 +2030,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
             // Restore compensation data when the segment count and order didn't change
             if (compSnapshots.TryGetValue(i, out var cs))
-                seg.SetCompensation(cs.StartCm, cs.SliceXsCm, cs.SliceDiamsMm, cs.SliceDensities, cs.TargetSpeedMs);
+                seg.SetCompensation(cs.StartCm, cs.SliceXsCm, cs.SliceDiamsMm, cs.SliceDensities, cs.Clamped, cs.TargetSpeedMs);
 
             seg.PropertyChanged += OnSegmentPropertyChanged;
             ProjectSegments.Add(seg);
@@ -2241,6 +2257,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         SyncListFromDesignNodes();
         RefreshPlot();
         RefreshSegmentTable();
+        TriggerCompRecompute();
         e.Handled = true;
     }
 
@@ -2259,19 +2276,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         set { _taperDescription = value; OnPropertyChanged(nameof(TaperDescription)); }
     }
 
-    public bool UseSharedDensity
-    {
-        get => _useSharedDensity;
-        set
-        {
-            _useSharedDensity = value;
-            OnPropertyChanged(nameof(UseSharedDensity));
-            // Update the column read-only state
-            SpWeightColumn.IsReadOnly = value;
-            if (value) ApplySharedDensity();
-            MarkDirty();
-        }
-    }
+    public bool UseSharedDensity => true; // always uniform — no per-segment override
 
     public double SharedDensity
     {
@@ -2280,7 +2285,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         {
             _sharedDensity = value;
             OnPropertyChanged(nameof(SharedDensity));
-            if (_useSharedDensity) ApplySharedDensity();
+            ApplySharedDensity();
+            TriggerCompRecompute();
             MarkDirty();
         }
     }
@@ -2311,34 +2317,14 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         double density = dlg.ResultDensity;
 
-        if (dlg.IsWholeLineScope)
-        {
-            // Whole line: apply as shared density
-            _sharedDensity    = density;
-            _useSharedDensity = true;
-            OnPropertyChanged(nameof(SharedDensity));
-            OnPropertyChanged(nameof(UseSharedDensity));
-            SpWeightColumn.IsReadOnly = true;
-            ApplySharedDensity();
-            MarkDirty();
-            UiStatus = $"Shared density set to {density:0.000} g/cm³ from measured weight";
-        }
-        else
-        {
-            // Partial selection: set per-segment density and switch to per-segment mode
-            foreach (int idx in dlg.AffectedIndices)
-            {
-                var seg = ProjectSegments.FirstOrDefault(s => s.Index == idx);
-                if (seg is not null) seg.SpecWeightGCm3 = density;
-            }
-            _useSharedDensity = false;
-            OnPropertyChanged(nameof(UseSharedDensity));
-            SpWeightColumn.IsReadOnly = false;
-            RefreshTotals();
-            UpdateSinkingSpeeds();
-            MarkDirty();
-            UiStatus = $"Density {density:0.000} g/cm³ applied to {dlg.AffectedIndices.Count} segment(s)";
-        }
+        // Always apply as uniform material density (single ρ along the entire line)
+        _sharedDensity = density;
+        OnPropertyChanged(nameof(SharedDensity));
+        SpWeightColumn.IsReadOnly = true;
+        ApplySharedDensity();
+        TriggerCompRecompute();
+        MarkDirty();
+        UiStatus = $"Material density set to {density:0.000} g/cm³ from measured weight";
     }
 
     // ── Water / sinking speed ────────────────────────────────────────────────
@@ -2402,24 +2388,65 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             UpdateLineTypeUI();
             MarkDirty();
         }
+
+        // Compute NC min/max sink speeds for the comp target slider
+        var validSpeeds = ProjectSegments
+            .Where(s => s.SpecWeightGCm3 > 0 && !double.IsNaN(s.SinkSpeedMs) && s.SinkSpeedMs > 0)
+            .Select(s => s.SinkSpeedMs)
+            .ToList();
+        if (validSpeeds.Count > 0)
+        {
+            _compMinSpeedMs = validSpeeds.Min();
+            _compMaxSpeedMs = validSpeeds.Max();
+            if (IsLoaded) UpdateCompSpeedSlider();
+        }
+    }
+
+    private void UpdateCompSpeedSlider()
+    {
+        double minIns = _compMinSpeedMs * 39.3701;
+        double maxIns = _compMaxSpeedMs * 39.3701;
+        CompSpeedSlider.Minimum = minIns;
+        CompSpeedSlider.Maximum = maxIns;
+        double targetIns = _compTargetSpeedMs > 0
+            ? _compTargetSpeedMs * 39.3701
+            : maxIns;
+        CompSpeedSlider.Value     = Math.Clamp(targetIns, minIns, maxIns);
+        CompSpeedMinLabel.Text    = $"{minIns:0.00}";
+        CompSpeedMaxLabel.Text    = $"{maxIns:0.00}";
+        CompSpeedValueLabel.Text  = $"{CompSpeedSlider.Value:0.000}";
+    }
+
+    private void CompSpeedSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        _compTargetSpeedMs  = e.NewValue / 39.3701;
+        _compTargetSpeedIns = e.NewValue;
+        if (CompSpeedValueLabel != null)
+            CompSpeedValueLabel.Text = $"{e.NewValue:0.000}";
+        if (_inCompMode) ComputeCompensation();
+    }
+
+    private void TriggerCompRecompute()
+    {
+        if (_inCompMode && _isSinking) ComputeCompensation();
     }
 
     private void ComputeCompensation()
     {
-        // Velocità target = massimo SinkSpeedMs tra i segmenti con densità impostata
-        UpdateSinkingSpeeds();
-        double targetMs = ProjectSegments
-            .Where(s => s.SpecWeightGCm3 > 0 && !double.IsNaN(s.SinkSpeedMs) && s.SinkSpeedMs > 0)
-            .Select(s => s.SinkSpeedMs)
-            .DefaultIfEmpty(0)
-            .Max();
-        if (targetMs <= 0)
+        UpdateSinkingSpeeds(); // also updates _compMinSpeedMs / _compMaxSpeedMs
+
+        if (_compMaxSpeedMs <= 0)
         {
-            UiStatus = "Nessun segmento con velocità di affondamento valida — imposta la densità prima";
+            UiStatus = "No segment with valid sink speed — set material density first";
             return;
         }
-        _compTargetSpeedIns = targetMs * 39.3701; // salva per display
 
+        // Init target to max if not set, clamp to valid range
+        if (_compTargetSpeedMs <= 0) _compTargetSpeedMs = _compMaxSpeedMs;
+        _compTargetSpeedMs  = Math.Clamp(_compTargetSpeedMs, _compMinSpeedMs, _compMaxSpeedMs);
+        _compTargetSpeedIns = _compTargetSpeedMs * 39.3701;
+
+        bool anyClampedSlice = false;
         foreach (var seg in ProjectSegments)
         {
             if (seg.SpecWeightGCm3 <= 0 || seg.LengthCm <= 0)
@@ -2428,40 +2455,42 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 continue;
             }
 
-            var (sliceXs, sliceDiams, sliceDens) = SinkingSpeedCalc.CompensateProfile(
+            var (sliceXs, sliceDiams, sliceDens, clamped) = SinkingSpeedCalc.CompensateProfile(
                 _waterIsSalt, _waterTempC,
                 seg.StartDiameterMm, seg.EndDiameterMm,
                 seg.LengthCm,
                 seg.SpecWeightGCm3,
-                targetMs);
+                _compTargetSpeedMs);
 
-            seg.SetCompensation(seg.StartCm, sliceXs, sliceDiams, sliceDens, targetMs);
+            seg.SetCompensation(seg.StartCm, sliceXs, sliceDiams, sliceDens, clamped, _compTargetSpeedMs);
+            if (seg.HasClampedSlices) anyClampedSlice = true;
         }
         int compCount = ProjectSegments.Count(s => s.HasCompensation);
         if (compCount > 0)
         {
             _inCompMode = true;
-            _showOriginalProfile = false;
-            if (IsLoaded) ShowOriginalToggle.IsChecked = false;
+            _showOriginalProfile = ShowOriginalToggle.IsChecked ?? true;
             UpdateCompModeUI();
         }
         RefreshPlot();
+        string clampWarn = anyClampedSlice
+            ? " ⚠ Some sections clamped to ρ = 0.94 g/cm³ (will float at target speed)."
+            : string.Empty;
         UiStatus = compCount > 0
-            ? $"Compensazione calcolata per {_compTargetSpeedIns:0.000} in/s ({compCount}/{ProjectSegments.Count} segmenti)"
-            : "Compensazione saltata — imposta prima la densità dei segmenti";
+            ? $"Compensated at {_compTargetSpeedIns:0.000} in/s ({compCount}/{ProjectSegments.Count} segments).{clampWarn}"
+            : "Compensation skipped — set material density first";
     }
 
     private void UpdateCompModeUI()
     {
         if (!IsLoaded) return;
-        bool c = _inCompMode && !_showOriginalProfile;
+        bool c = _inCompMode; // in comp mode: show comp columns, hide NC-only controls
         SinkMapToggle.Visibility      = c ? Visibility.Collapsed : Visibility.Visible;
         ShowOriginalToggle.Visibility = c ? Visibility.Visible   : Visibility.Collapsed;
+        CompSpeedPanel.Visibility     = c ? Visibility.Visible   : Visibility.Collapsed;
+        if (c) UpdateCompSpeedSlider();
 
-        // DataGridColumn non è un Visual: il cambio di Visibility non attiva
-        // automaticamente un layout pass. Deferire al prossimo ciclo di rendering
-        // garantisce che WPF misuri/ridisegni il DataGrid con le colonne aggiornate.
-        // NodesDataGrid: in comp mode mostra i diametri compensati, read-only
+        // NodesDataGrid: in comp mode show compensated boundary diameters, read-only
         AddNodeButton.Visibility   = c ? Visibility.Collapsed : Visibility.Visible;
         NodesDataGrid.IsReadOnly   = c;
         if (c) SyncCompNodesToDesignList();
@@ -2489,12 +2518,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private void ShowOriginalProfile_Click(object sender, RoutedEventArgs e)
     {
-        _showOriginalProfile = ShowOriginalToggle.IsChecked ?? false;
-        UpdateCompModeUI();
+        _showOriginalProfile = ShowOriginalToggle.IsChecked ?? true;
         RefreshPlot();
         UiStatus = _showOriginalProfile
-            ? "Profilo originale — mappa velocità affondamento"
-            : "Profilo compensato — gradiente densità";
+            ? "Overlay: compensated profile + NC ghost"
+            : "Compensated profile — density gradient only";
     }
 
     // ── Line type / format ────────────────────────────────────────────────────
@@ -2503,12 +2531,20 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private void UpdateLineTypeUI()
     {
         if (!IsLoaded) return;
-        // Nasconde il pannello solo quando la densità è impostata E la fisica conferma che la linea
-        // galleggia. Senza densità il pannello resta visibile (default per nuovi progetti).
+        // Hide compensation tools for floating lines
         bool hasAnyDensity = ProjectSegments.Any(s => s.SpecWeightGCm3 > 0);
         SinkingToolsPanel.Visibility = (hasAnyDensity && !_isSinking)
             ? Visibility.Collapsed : Visibility.Visible;
         HeadColumn.Visibility = _isFullLine ? Visibility.Visible : Visibility.Collapsed;
+
+        // Exit comp mode when the profile is floating
+        if (!_isSinking && _inCompMode)
+        {
+            _inCompMode = false;
+            _showOriginalProfile = true;
+            foreach (var seg in ProjectSegments) seg.ClearCompensation();
+            UpdateCompModeUI();
+        }
     }
 
     private void RefreshAfftaBadge() => AfftaBadge = ComputeAfftaBadge();
@@ -2579,6 +2615,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         RefreshSegmentTable();
         RefreshPlot();
+        TriggerCompRecompute();
         MarkDirty();
         UiStatus = "Profile reversed — position 0 is now the fly tip";
     }
@@ -2880,6 +2917,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         RemapLabelOffset(_dragStartNodeX!.Value, _draggingNodeX.Value);
         _dragStartNodeX = null;
         RefreshSegmentTable();
+        TriggerCompRecompute();
         MarkDirty();
         UiStatus = $"Node placed at {_draggingNodeX.Value:0} cm  ({_segmentNodes.Count} nodes total)";
         _draggingNodeX = null;
@@ -2900,6 +2938,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         RefreshPlot();
         RefreshSegmentTable();
+        TriggerCompRecompute();
         MarkDirty();
         UiStatus = $"Node removed at {closest.X:0} cm  ({_segmentNodes.Count} remaining)";
         e.Handled = true;
@@ -2949,6 +2988,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _segmentNodes.AddRange(snapshot);
         RefreshPlot();
         RefreshSegmentTable();
+        TriggerCompRecompute();
         MarkDirty();
         UiStatus = $"Undo  ({_segmentNodes.Count} nodes, {_undoHistory.Count} steps left)";
     }
@@ -3352,14 +3392,14 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 laserMarkText = string.IsNullOrWhiteSpace(_laserMark)
                     ? $"at {string.Join(" and ", markPos)}"
                     : $"{_laserMark}   —   at {string.Join(" and ", markPos)}";
-            bool showComp = _inCompMode && !_showOriginalProfile && ProjectSegments.Any(s => s.HasCompensation);
+            bool showComp = _inCompMode && ProjectSegments.Any(s => s.HasCompensation);
             string compNote = showComp
-                ? $"Compensated profile — target sink {_compTargetSpeedIns:0.00} in/s. " +
+                ? $"Compensated profile — target sink {_compTargetSpeedIns:0.000} in/s. " +
                   "Diameters reflect mass-preserving compensation. Do not alter diameters; adjust density only."
                 : "";
             FlyLinePdfExporter.Export(dlg.FileName, _projectName, RenderPdfChart(), ProjectSegments.ToList(),
                 _isSinking, _isFullLine, _waterIsSalt, _waterTempC, AfftaBadge, _colorNote, pdfSections, designHex,
-                _coreType, laserMarkText, showComp, compNote);
+                _coreType, laserMarkText, showComp, compNote, _compTargetSpeedIns);
             UiStatus = $"PDF exported: {System.IO.Path.GetFileName(dlg.FileName)}";
         }
         catch (Exception ex)

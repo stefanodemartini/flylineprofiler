@@ -13,9 +13,10 @@ namespace DiametroLineaDesktop.Services;
 /// </summary>
 public static class SinkingSpeedCalc
 {
-    private const double G       = 9.80665;
-    private const int    MaxIter = 100;
-    private const double Tol     = 1e-12;
+    private const double G        = 9.80665;
+    private const int    MaxIter  = 100;
+    private const double Tol      = 1e-12;
+    public  const double RhoFloor = 0.94; // g/cm³ — minimum practical material density (0.94 < ρ_water → will float)
 
     // ── Public API ──────────────────────────────────────────────────────────
 
@@ -25,10 +26,14 @@ public static class SinkingSpeedCalc
     ///   1. Slice mass is preserved: ρ_new · d_new² = ρ_orig · d_orig²
     ///   2. The slice sinks at exactly targetSpeedMs
     ///
+    /// When the required density would drop below RhoFloor (0.94 g/cm³), the density
+    /// is clamped and the diameter recomputed from mass conservation. The affected
+    /// slice is flagged in the returned <c>clamped</c> array.
+    ///
     /// Returns parallel arrays: slice-centre X (cm from segment start),
-    /// compensated diameters (mm), and required densities (g/cm³).
+    /// compensated diameters (mm), required densities (g/cm³), clamped flags.
     /// </summary>
-    public static (double[] sliceXsCm, double[] sliceDiamsMm, double[] sliceDensitiesGcm3)
+    public static (double[] sliceXsCm, double[] sliceDiamsMm, double[] sliceDensitiesGcm3, bool[] clamped)
         CompensateProfile(
             bool isSalt, double tempC,
             double startDiamMm, double endDiamMm, double lengthCm,
@@ -36,7 +41,7 @@ public static class SinkingSpeedCalc
             double sliceLenCm = 1.0)   // 1 cm slices for fine resolution
     {
         if (densityGcm3 <= 0 || lengthCm <= 0 || startDiamMm <= 0 || endDiamMm <= 0)
-            return (Array.Empty<double>(), Array.Empty<double>(), Array.Empty<double>());
+            return (Array.Empty<double>(), Array.Empty<double>(), Array.Empty<double>(), Array.Empty<bool>());
 
         (double rhoW, double nu) = WaterProps(isSalt, tempC);
         double rhoOrig = densityGcm3 * 1000.0; // kg/m³
@@ -47,6 +52,7 @@ public static class SinkingSpeedCalc
         double[] xs    = new double[n];
         double[] diams = new double[n];
         double[] dens  = new double[n];
+        bool[]   clmpd = new bool[n];
 
         for (int i = 0; i < n; i++)
         {
@@ -91,9 +97,17 @@ public static class SinkingSpeedCalc
             diams[i] = dNew * 1000.0; // m → mm
             // Density from mass conservation: ρ_new = ρ_orig × (dOrig/dNew)²
             dens[i] = (rhoOrig * (dOrig * dOrig) / (dNew * dNew)) / 1000.0; // g/cm³
+            // Clamp to floor: slice cannot be lighter than RhoFloor (would float)
+            if (dens[i] < RhoFloor)
+            {
+                dens[i]   = RhoFloor;
+                dNew      = dOrig * Math.Sqrt(rhoOrig / (RhoFloor * 1000.0)); // recompute d from mass conservation
+                diams[i]  = dNew * 1000.0;
+                clmpd[i]  = true;
+            }
         }
 
-        return (xs, diams, dens);
+        return (xs, diams, dens, clmpd);
     }
 
     /// <summary>

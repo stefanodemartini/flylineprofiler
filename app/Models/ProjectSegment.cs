@@ -119,12 +119,15 @@ public class ProjectSegment : INotifyPropertyChanged
     private double[] _compSliceXsCm      = Array.Empty<double>();
     private double[] _compSliceDiamsMm   = Array.Empty<double>();
     private double[] _compSliceDensities = Array.Empty<double>(); // g/cm³ per slice
+    private bool[]   _compSliceClamped   = Array.Empty<bool>();   // true → density hit RhoFloor
     private double   _compStartCm = 0;
 
     public double[] CompSliceXsCm       => _compSliceXsCm;
     public double[] CompSliceDiamsMm    => _compSliceDiamsMm;
     public double[] CompSliceDensities  => _compSliceDensities;
+    public bool[]   CompSliceClamped    => _compSliceClamped;
     public double   CompStartCm         => _compStartCm;
+    public bool HasClampedSlices        => _compSliceClamped.Any(c => c);
 
     private double _compensatedTargetSpeedMs = double.NaN;
     public double CompensatedTargetSpeedMs
@@ -135,14 +138,16 @@ public class ProjectSegment : INotifyPropertyChanged
 
     public bool HasCompensation => _compSliceDiamsMm.Length > 0;
 
-    public void SetCompensation(double startCm, double[] sliceXsCm, double[] sliceDiamsMm, double[] sliceDensities, double targetSpeedMs)
+    public void SetCompensation(double startCm, double[] sliceXsCm, double[] sliceDiamsMm, double[] sliceDensities, bool[] clamped, double targetSpeedMs)
     {
         _compStartCm        = startCm;
         _compSliceXsCm      = sliceXsCm;
         _compSliceDiamsMm   = sliceDiamsMm;
         _compSliceDensities = sliceDensities;
+        _compSliceClamped   = clamped;
         _compensatedTargetSpeedMs = targetSpeedMs;
         Notify(nameof(HasCompensation));
+        Notify(nameof(HasClampedSlices));
         Notify(nameof(CompSpeedText));
         Notify(nameof(CompStartDiamText));
         Notify(nameof(CompEndDiamText));
@@ -155,8 +160,10 @@ public class ProjectSegment : INotifyPropertyChanged
         _compSliceXsCm      = Array.Empty<double>();
         _compSliceDiamsMm   = Array.Empty<double>();
         _compSliceDensities = Array.Empty<double>();
+        _compSliceClamped   = Array.Empty<bool>();
         _compensatedTargetSpeedMs = double.NaN;
         Notify(nameof(HasCompensation));
+        Notify(nameof(HasClampedSlices));
         Notify(nameof(CompSpeedText));
         Notify(nameof(CompStartDiamText));
         Notify(nameof(CompEndDiamText));

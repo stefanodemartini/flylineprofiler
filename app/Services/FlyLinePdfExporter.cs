@@ -205,7 +205,8 @@ public static class FlyLinePdfExporter
         string coreType = "",
         string laserMark = "",
         bool showCompensation = false,
-        string compensationNote = "")
+        string compensationNote = "",
+        double compTargetSpeedIns = 0)
     {
         QuestPDF.Settings.License = LicenseType.Community;
 
@@ -225,25 +226,54 @@ public static class FlyLinePdfExporter
         double headLenMm    = headSegs.Count > 0
             ? (headSegs[^1].EndCm - headSegs[0].StartCm) * 10.0 : 0;
 
-        // Density range of head segments
-        var headDensities = headSegs.Where(s => s.SpecWeightGCm3 > 0)
-                                    .Select(s => s.SpecWeightGCm3).ToList();
-        string densityRange = headDensities.Count > 0
-            ? $"{headDensities.Min():0.00} – {headDensities.Max():0.00} g/cm³"
-            : "—";
-
         string lineType   = isSinking  ? "Sinking"    : "Floating";
         string lineFormat = isFullLine ? "Full Line"  : "Shooting Head";
         string water      = isSalt     ? "Salt water" : "Fresh water";
 
-        // Build key notes (mimicking the RazorBlade notes block)
-        string weightNote = headMassGr > 0
-            ? $"With diameters indicated and target weight close to {headMassGr:0} gr " +
-              $"the density of the head is {densityRange}."
-            : $"Head density: {densityRange}.";
-        const string dimNote    = "All dimensions are in millimeters.";
-        const string changeNote = "Do not change length and diameters of segments. " +
-                                  "For any adjustment please change specific weight only.";
+        // Density range — use compensated slice densities when exporting a compensated profile
+        string densityRange;
+        bool hasClampedSection = false;
+        if (showCompensation)
+        {
+            var compSegsAll = segments.Where(s => s.HasCompensation).ToList();
+            var allDens = compSegsAll.SelectMany(s => s.CompSliceDensities).Where(d => d > 0).ToList();
+            densityRange = allDens.Count > 0
+                ? $"{allDens.Min():0.000} – {allDens.Max():0.000} g/cm³"
+                : "—";
+            hasClampedSection = compSegsAll.Any(s => s.HasClampedSlices);
+        }
+        else
+        {
+            var headDensities = headSegs.Where(s => s.SpecWeightGCm3 > 0)
+                                        .Select(s => s.SpecWeightGCm3).ToList();
+            densityRange = headDensities.Count > 0
+                ? $"{headDensities.Min():0.00} – {headDensities.Max():0.00} g/cm³"
+                : "—";
+        }
+
+        // Notes block
+        string dimNote;
+        string weightNote;
+        string changeNote;
+        if (showCompensation)
+        {
+            dimNote    = "All dimensions are in millimeters. Diameters shown are compensated values.";
+            weightNote = compTargetSpeedIns > 0
+                ? $"Compensated profile — uniform sink speed {compTargetSpeedIns:0.000} in/s. " +
+                  $"Material density varies per section ({densityRange}) to achieve uniform sinking."
+                : $"Compensated profile. Material density varies per section ({densityRange}).";
+            changeNote = "Do not alter diameters. Adjust density of each section as specified to achieve the target sink speed.";
+        }
+        else
+        {
+            dimNote    = "All dimensions are in millimeters.";
+            weightNote = headMassGr > 0
+                ? $"With diameters indicated and target weight close to {headMassGr:0} gr " +
+                  $"the density of the head is {densityRange}."
+                : $"Head density: {densityRange}.";
+            changeNote = "Do not change length and diameters of segments. " +
+                         "For any adjustment please change specific weight only.";
+        }
 
         // ── Logo — load from embedded assembly resource (always available) ──
         byte[]? logoBytes = null;
@@ -335,22 +365,29 @@ public static class FlyLinePdfExporter
                         SpecBlock("Format",        lineFormat,    ColText);
                         if (!string.IsNullOrWhiteSpace(coreType))
                             SpecBlock("Core",      coreType,      ColText);
-                        SpecBlock("Head density",  densityRange,  ColAccent);
+                        SpecBlock("Density",       densityRange,  ColAccent);
                         SpecBlock("Total length",  $"{totalLenMm / 10.0:0} cm ({totalLenMm / 304.8:0.0} ft)", ColText);
                         SpecBlock("Head length",   headLenMm > 0 ? $"{headLenMm / 10.0:0} cm ({headLenMm / 304.8:0.0} ft)" : "—", ColText);
-                        SpecBlock("Head weight",   headMassGr > 0 ? $"{headMassGr:0.0} gr" : "—", ColAccent2);
-                        SpecBlock("Total weight",  totalMassGr > 0 ? $"{totalMassGr:0.0} gr" : "—", ColText);
-                        // Centre of mass of the head, % from the front tip + character
-                        var (comPct, rgPct, _) = ComputeMassCentroid(headSegs);
-                        SpecBlock("CoM (head)",
-                                  comPct >= 0 ? $"{comPct:0.0}% · Rg {rgPct:0.0}%" : "—",
-                                  ColAccent);
-                        SpecBlock("Character", ClassifyCom(comPct), ColText);
-                        // Column header already says "AFFTA" — drop the word from the value
-                        string afftaValue = afftaBadge.StartsWith("AFFTA", StringComparison.OrdinalIgnoreCase)
-                            ? afftaBadge.Substring(5).TrimStart()
-                            : afftaBadge;
-                        SpecBlock("AFFTA",         afftaValue,    ColAccent2);
+                        if (!showCompensation)
+                        {
+                            SpecBlock("Head weight",  headMassGr > 0 ? $"{headMassGr:0.0} gr" : "—", ColAccent2);
+                            SpecBlock("Total weight", totalMassGr > 0 ? $"{totalMassGr:0.0} gr" : "—", ColText);
+                            var (comPct, rgPct, _) = ComputeMassCentroid(headSegs);
+                            SpecBlock("CoM (head)", comPct >= 0 ? $"{comPct:0.0}% · Rg {rgPct:0.0}%" : "—", ColAccent);
+                            SpecBlock("Character",  ClassifyCom(comPct), ColText);
+                            string afftaValue = afftaBadge.StartsWith("AFFTA", StringComparison.OrdinalIgnoreCase)
+                                ? afftaBadge.Substring(5).TrimStart()
+                                : afftaBadge;
+                            SpecBlock("AFFTA", afftaValue, ColAccent2);
+                        }
+                        else
+                        {
+                            SpecBlock("Target sink",  compTargetSpeedIns > 0 ? $"{compTargetSpeedIns:0.000} in/s" : "—", ColAccent2);
+                            SpecBlock("Water",        water,  ColText);
+                            SpecBlock("Type",         "Compensated — uniform sink",  ColAccent);
+                            if (hasClampedSection)
+                                SpecBlock("Warning", "⚠ sections at ρ min (0.94)", ColRed);
+                        }
                     });
 
                     col.Item().LineHorizontal(0.5f).LineColor(ColBorder);
@@ -573,13 +610,21 @@ public static class FlyLinePdfExporter
                              .BorderBottom(0.8f).BorderColor(PdfColor.FromHex("C8CBD4"))
                              .PaddingVertical(2).PaddingHorizontal(2);
 
-                        var hdrs = new[]
-                        {
-                            "#", "Name", "Start\nmm", "End\nmm", "Len\nmm",
-                            "Ø1\nmm", "Ø2\nmm", "Taper\nmm/m",
-                            "Density\ng/cm³", "Mass\ng", "Mass\ngr",
-                            "gr/ft", "Sink\nin/s", "Type"
-                        };
+                        var hdrs = showCompensation
+                            ? new[]
+                            {
+                                "#", "Name", "Start\nmm", "End\nmm", "Len\nmm",
+                                "Ø start\nmm", "Ø end\nmm", "Taper\nmm/m",
+                                "ρ avg\ng/cm³", "Mass\ng", "Mass\ngr",
+                                "gr/ft", "Sink\nin/s", "Note"
+                            }
+                            : new[]
+                            {
+                                "#", "Name", "Start\nmm", "End\nmm", "Len\nmm",
+                                "Ø1\nmm", "Ø2\nmm", "Taper\nmm/m",
+                                "Density\ng/cm³", "Mass\ng", "Mass\ngr",
+                                "gr/ft", "Sink\nin/s", "Type"
+                            };
 
                         table.Header(hdr =>
                         {
@@ -588,11 +633,12 @@ public static class FlyLinePdfExporter
                                    .Text(h).FontSize(6.5f).Bold().FontColor(ColAccent);
                         });
 
+                        double totalCompMassG = 0;
                         for (int i = 0; i < segments.Count; i++)
                         {
-                            var seg    = segments[i];
-                            bool isHd  = !isFullLine || seg.IsHead;
-                            var  bg    = i % 2 == 0 ? BgPage : BgTblAlt;
+                            var seg   = segments[i];
+                            bool isHd = !isFullLine || seg.IsHead;
+                            var  bg   = i % 2 == 0 ? BgPage : BgTblAlt;
 
                             void Cell(string text, PdfColor? fc = null, bool bold = false)
                             {
@@ -604,23 +650,63 @@ public static class FlyLinePdfExporter
                                 if (fc.HasValue) t.FontColor(fc.Value);
                             }
 
-                            double grPerFt = seg.MassG > 0 && seg.LengthCm > 0
-                                ? (seg.MassG * GramsToGrains) / (seg.LengthCm * CmToFt) : 0;
+                            if (showCompensation && seg.HasCompensation)
+                            {
+                                // ── Compensated row ────────────────────────
+                                double d1 = seg.CompSliceDiamsMm.Length > 0 ? seg.CompSliceDiamsMm[0]  : seg.StartDiameterMm;
+                                double d2 = seg.CompSliceDiamsMm.Length > 0 ? seg.CompSliceDiamsMm[^1] : seg.EndDiameterMm;
+                                double avgRho = seg.CompSliceDensities.Length > 0 ? seg.CompSliceDensities.Average() : 0;
+                                // Comp mass: sum(π/4 × d_i² × dl × ρ_i) with d in cm
+                                double compMassG = 0;
+                                double dl = seg.LengthCm / Math.Max(1, seg.CompSliceXsCm.Length);
+                                for (int si = 0; si < seg.CompSliceDiamsMm.Length; si++)
+                                {
+                                    double dCm = seg.CompSliceDiamsMm[si] / 10.0;
+                                    compMassG += Math.PI / 4.0 * dCm * dCm * dl * seg.CompSliceDensities[si];
+                                }
+                                totalCompMassG += compMassG;
+                                double compTaper = Math.Abs(d2 - d1) < 0.001 ? 0 : (d2 - d1) / (seg.LengthCm / 100.0);
+                                double grPerFt  = compMassG > 0 && seg.LengthCm > 0
+                                    ? (compMassG * GramsToGrains) / (seg.LengthCm * CmToFt) : 0;
+                                bool clamped = seg.HasClampedSlices;
 
-                            Cell(seg.Index.ToString());
-                            Cell(seg.Name, isHd ? ColAccent : ColBlue, true);
-                            Cell($"{seg.StartCm  * 10:0}");
-                            Cell($"{seg.EndCm    * 10:0}");
-                            Cell($"{seg.LengthCm * 10:0}");
-                            Cell($"{seg.StartDiameterMm:0.000}");
-                            Cell($"{seg.EndDiameterMm:0.000}");
-                            Cell(seg.IsCylinder ? "—" : $"{seg.TaperMmPerMeter:+0.00;-0.00}");
-                            Cell(seg.SpecWeightGCm3 > 0 ? $"{seg.SpecWeightGCm3:0.000}" : "—");
-                            Cell(seg.MassG > 0 ? $"{seg.MassG:0.000}" : "—");
-                            Cell(seg.MassG > 0 ? $"{seg.MassG * GramsToGrains:0.0}" : "—");
-                            Cell(grPerFt > 0 ? $"{grPerFt:0.0}" : "—");
-                            Cell(seg.SinkSpeedText);
-                            Cell(isHd ? "HEAD" : "RUN", isHd ? ColAccent : ColMuted);
+                                Cell(seg.Index.ToString());
+                                Cell(seg.Name, isHd ? ColAccent : ColBlue, true);
+                                Cell($"{seg.StartCm  * 10:0}");
+                                Cell($"{seg.EndCm    * 10:0}");
+                                Cell($"{seg.LengthCm * 10:0}");
+                                Cell($"{d1:0.000}");
+                                Cell($"{d2:0.000}");
+                                Cell(Math.Abs(compTaper) < 0.001 ? "—" : $"{compTaper:+0.00;-0.00}");
+                                Cell(avgRho > 0 ? $"{avgRho:0.000}" : "—", clamped ? (PdfColor?)ColRed : null);
+                                Cell(compMassG > 0 ? $"{compMassG:0.000}" : "—");
+                                Cell(compMassG > 0 ? $"{compMassG * GramsToGrains:0.0}" : "—");
+                                Cell(grPerFt > 0 ? $"{grPerFt:0.0}" : "—");
+                                Cell(compTargetSpeedIns > 0 ? $"{compTargetSpeedIns:0.000}" : "—");
+                                Cell(clamped ? "⚠ ρ min" : "OK", clamped ? ColRed : ColAccent);
+                            }
+                            else
+                            {
+                                // ── NC row (fallback or no comp data) ─────────
+                                double grPerFt = seg.MassG > 0 && seg.LengthCm > 0
+                                    ? (seg.MassG * GramsToGrains) / (seg.LengthCm * CmToFt) : 0;
+
+                                Cell(seg.Index.ToString());
+                                Cell(seg.Name, isHd ? ColAccent : ColBlue, true);
+                                Cell($"{seg.StartCm  * 10:0}");
+                                Cell($"{seg.EndCm    * 10:0}");
+                                Cell($"{seg.LengthCm * 10:0}");
+                                Cell($"{seg.StartDiameterMm:0.000}");
+                                Cell($"{seg.EndDiameterMm:0.000}");
+                                Cell(seg.IsCylinder ? "—" : $"{seg.TaperMmPerMeter:+0.00;-0.00}");
+                                Cell(seg.SpecWeightGCm3 > 0 ? $"{seg.SpecWeightGCm3:0.000}" : "—");
+                                Cell(seg.MassG > 0 ? $"{seg.MassG:0.000}" : "—");
+                                Cell(seg.MassG > 0 ? $"{seg.MassG * GramsToGrains:0.0}" : "—");
+                                Cell(grPerFt > 0 ? $"{grPerFt:0.0}" : "—");
+                                Cell(seg.SinkSpeedText);
+                                Cell(isHd ? "HEAD" : "RUN", isHd ? ColAccent : ColMuted);
+                                totalCompMassG += seg.MassG;
+                            }
                         }
 
                         // Totals row
@@ -634,12 +720,14 @@ public static class FlyLinePdfExporter
                                 .FontColor(hi ? ColAccent2 : ColText);
                         }
 
+                        double sumMassG  = showCompensation ? totalCompMassG : totalMassG;
+                        double sumMassGr = sumMassG * GramsToGrains;
                         TotCell("∑"); TotCell("TOTAL");
                         TotCell(""); TotCell(""); TotCell("");
                         TotCell(""); TotCell(""); TotCell("");
-                        TotCell(segments.Where(s => s.SpecWeightGCm3 > 0).Any() ? densityRange : "—");
-                        TotCell($"{totalMassG:0.000}", true);
-                        TotCell($"{totalMassGr:0.0}", true);
+                        TotCell(densityRange);
+                        TotCell($"{sumMassG:0.000}", true);
+                        TotCell($"{sumMassGr:0.0}", true);
                         TotCell(""); TotCell(""); TotCell("");
                     });
 

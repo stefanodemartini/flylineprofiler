@@ -531,7 +531,35 @@
                             <Button Content="⚖ Compensate"
                                     Style="{StaticResource BtnSecondary}"
                                     Click="Compensate_Click"
-                                    ToolTip="Compute per-slice compensated diameter profile for the target sink speed (slice mass preserved)"/>
+                                    ToolTip="Compute compensated profile: mass-preserving per-slice bisection to achieve uniform sink speed"/>
+                            <!-- Target speed slider — visible after first compensation -->
+                            <StackPanel x:Name="CompSpeedPanel" Orientation="Horizontal"
+                                        VerticalAlignment="Center" Visibility="Collapsed">
+                                <Separator Style="{StaticResource ToolSep}"/>
+                                <TextBlock Text="Target:" FontSize="11"
+                                           Foreground="{StaticResource TextMuted}"
+                                           VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                <TextBlock x:Name="CompSpeedMinLabel" Text="—" FontSize="10"
+                                           Foreground="{StaticResource TextMuted}"
+                                           VerticalAlignment="Center" Margin="0,0,2,0"/>
+                                <Slider x:Name="CompSpeedSlider" Width="110"
+                                        VerticalAlignment="Center"
+                                        Minimum="0" Maximum="5" Value="0"
+                                        IsMoveToPointEnabled="True"
+                                        SmallChange="0.005" LargeChange="0.05"
+                                        ValueChanged="CompSpeedSlider_ValueChanged"
+                                        Margin="4,0"/>
+                                <TextBlock x:Name="CompSpeedMaxLabel" Text="—" FontSize="10"
+                                           Foreground="{StaticResource TextMuted}"
+                                           VerticalAlignment="Center" Margin="2,0,8,0"/>
+                                <TextBlock x:Name="CompSpeedValueLabel" Text="—" FontSize="11"
+                                           FontWeight="SemiBold"
+                                           Foreground="{StaticResource Accent}"
+                                           VerticalAlignment="Center" Margin="0,0,2,0"/>
+                                <TextBlock Text="in/s" FontSize="10"
+                                           Foreground="{StaticResource TextMuted}"
+                                           VerticalAlignment="Center"/>
+                            </StackPanel>
                             <Separator Style="{StaticResource ToolSep}"/>
                             <ToggleButton x:Name="SinkMapToggle"
                                           Content="Sink Map"
@@ -540,12 +568,12 @@
                                           Click="ShowSinkMap_Click"
                                           ToolTip="Show sinking speed heat-map overlay (blue=slow, red=fast)"/>
                             <ToggleButton x:Name="ShowOriginalToggle"
-                                          Content="Non compensato"
+                                          Content="Show NC"
                                           Style="{StaticResource ToggleBase}"
-                                          IsChecked="False"
+                                          IsChecked="True"
                                           Visibility="Collapsed"
                                           Click="ShowOriginalProfile_Click"
-                                          ToolTip="Mostra il profilo originale non compensato con la mappa della velocità di affondamento"/>
+                                          ToolTip="Overlay the original non-compensated profile (ghost) on the compensated view"/>
                         </StackPanel>
 
                         <ToggleButton x:Name="ShowDesignToggle"
@@ -865,20 +893,19 @@
                                VerticalAlignment="Center"
                                Margin="0,0,16,0"
                                ToolTipService.ShowDuration="60000"/>
-                    <!-- Shared density controls -->
-                    <CheckBox Content="Same density"
-                              IsChecked="{Binding ElementName=MainWin, Path=UseSharedDensity}"
-                              VerticalAlignment="Center"
-                              Foreground="{StaticResource TextMuted}"
-                              FontSize="11"
-                              Margin="0,0,8,0"/>
+                    <!-- Material density (uniform along the entire line) -->
+                    <TextBlock Text="Material ρ:"
+                               FontSize="11"
+                               Foreground="{StaticResource TextMuted}"
+                               VerticalAlignment="Center"
+                               Margin="0,0,6,0"/>
                     <TextBox x:Name="SharedDensityBox"
                              Width="68"
                              FontSize="11"
                              VerticalAlignment="Center"
                              HorizontalContentAlignment="Center"
                              Text="{Binding ElementName=MainWin, Path=SharedDensity, StringFormat='0.000', UpdateSourceTrigger=LostFocus}"
-                             ToolTip="Specific weight in g/cm³ — applies to all segments when Same density is checked"
+                             ToolTip="Material density in g/cm³ — uniform along the entire NC line"
                              Margin="0,0,4,0"/>
                     <TextBlock Text="g/cm³"
                                FontSize="11"
