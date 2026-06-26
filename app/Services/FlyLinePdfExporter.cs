@@ -20,27 +20,22 @@ public static class FlyLinePdfExporter
     private static PdfColor C(string hex) => PdfColor.FromHex(hex);
 
     /// <summary>
-    /// Renders a horizontal swatch with Lambert cylindrical shading (bright centre, dark edges)
-    /// using N thin vertical strips — gives a 3D round-section feel in PDF.
+    /// Renders a horizontal colour swatch with a simple linear gradient (bright left, darker right)
+    /// using N thin vertical strips at high resolution.
     /// </summary>
     private static void DrawLambertSwatch(IContainer container, PdfColor baseColor,
-                                          float totalWidth, float height, int strips = 16)
+                                          float totalWidth, float height, int strips = 10)
     {
-        container.Width(totalWidth).Height(height).Row(row =>
+        container.Width(totalWidth).Height(height).Column(col =>
         {
-            float sw = totalWidth / strips;
+            float sh = height / strips;
             for (int i = 0; i < strips; i++)
             {
-                // v = distance from centre (0 = centre, 1 = edge)
-                double v     = Math.Abs((i + 0.5) / strips * 2.0 - 1.0);
-                double b     = Math.Sqrt(1.0 - v * v);         // Lambert: 0 at edge, 1 at centre
-                float  shade = (float)(0.28 + 0.72 * b);
-                // Specular glint in inner 15%
-                if (b > 0.85) shade = Math.Min(1.0f, shade + (float)((b - 0.85) / 0.15 * 0.45));
-                byte r = (byte)Math.Min(255, (int)(baseColor.Red   * shade));
-                byte g = (byte)Math.Min(255, (int)(baseColor.Green * shade));
-                byte bl= (byte)Math.Min(255, (int)(baseColor.Blue  * shade));
-                row.ConstantItem(sw).Height(height).Background(PdfColor.FromRGB(r, g, bl));
+                double shade = 0.95 - 0.45 * ((double)i / (strips - 1));  // 0.95 top → 0.50 bottom
+                byte r  = (byte)Math.Min(255, (int)(baseColor.Red   * shade));
+                byte g  = (byte)Math.Min(255, (int)(baseColor.Green * shade));
+                byte bl = (byte)Math.Min(255, (int)(baseColor.Blue  * shade));
+                col.Item().Width(totalWidth).Height(sh).Background(PdfColor.FromRGB(r, g, bl));
             }
         });
     }
@@ -293,13 +288,11 @@ public static class FlyLinePdfExporter
         }
         else
         {
-            dimNote    = "All dimensions are in millimeters.";
+            dimNote    = "All dimensions are in millimeters, unless otherwise indicated.";
             weightNote = headMassGr > 0
-                ? $"With diameters indicated and target weight close to {headMassGr:0} gr " +
-                  $"the density of the head is {densityRange}."
-                : $"Head density: {densityRange}.";
-            changeNote = "Do not change length and diameters of segments. " +
-                         "For any adjustment please change specific weight only.";
+                ? $"With diameters indicated and target weight the density of the line is {densityRange}."
+                : $"Line density: {densityRange}.";
+            changeNote = "Do not change length and diameters of segments.";
         }
 
         // ── Logo — load from embedded assembly resource (always available) ──
@@ -352,10 +345,14 @@ public static class FlyLinePdfExporter
                                     .FontSize(7).FontColor(ColMuted).Italic();
                         });
 
-                        // Centre: project title
-                        row.RelativeItem().AlignMiddle().AlignCenter()
-                            .Text(projectName)
-                            .FontSize(16).Bold().FontColor(ColText);
+                        // Centre: project title + profile mode
+                        row.RelativeItem().AlignMiddle().AlignCenter().Column(tc =>
+                        {
+                            tc.Item().Text(projectName)
+                                .FontSize(16).Bold().FontColor(ColText).AlignCenter();
+                            tc.Item().Text(showCompensation ? "C  —  Compensated profile" : "NC  —  Original profile")
+                                .FontSize(7.5f).FontColor(ColMuted).Italic().AlignCenter();
+                        });
 
                         // Right: line specs only (AFFTA already in spec row below)
                         row.ConstantItem(200).AlignRight().Column(c =>
@@ -390,8 +387,6 @@ public static class FlyLinePdfExporter
                         }
                         SpecBlock("Type",          lineType,      ColText);
                         SpecBlock("Format",        lineFormat,    ColText);
-                        if (!string.IsNullOrWhiteSpace(coreType))
-                            SpecBlock("Core",      coreType,      ColText);
                         SpecBlock("Density",       densityRange,  ColAccent);
                         SpecBlock("Total length",  $"{totalLenMm / 10.0:0} cm ({totalLenMm / 304.8:0.0} ft)", ColText);
                         SpecBlock("Head length",   headLenMm > 0 ? $"{headLenMm / 10.0:0} cm ({headLenMm / 304.8:0.0} ft)" : "—", ColText);
@@ -422,68 +417,165 @@ public static class FlyLinePdfExporter
                     // ── Profile chart ──────────────────────────────────────
                     col.Item().Image(chartBytes).FitWidth();
 
-                    // ── Materials legend (nozzle definitions) ─────────────
-                    // Shows each active nozzle slot: colour swatch, density, label, zone range.
+                    // ── Materials legend (NC: nozzles with zones; C: comp materials) ──
                     bool hasNozzles = nozzleDefinitions != null && nozzleDefinitions.Count > 0;
                     bool hasZones   = nozzleZones       != null && nozzleZones.Count   > 0;
 
-                    if (hasNozzles || !string.IsNullOrWhiteSpace(designColorHex))
+                    if (!showCompensation)
                     {
+                        // NC PDF — build entries from zones: one card per nozzle actually used.
+                        // Entry = (original nozzle index, definition, zone-range text).
+                        // If no zones defined, fall back to a single design-colour card.
+                        var entries = new List<(int Idx, NozzleDefinition Def, string ZoneRange)>();
+
+                        if (hasZones)
+                        {
+                            var usedIndices = nozzleZones!
+                                .Select(z => z.NozzleIndex).Distinct().OrderBy(x => x).ToList();
+                            foreach (int idx in usedIndices)
+                            {
+                                var def = (hasNozzles && idx < nozzleDefinitions!.Count)
+                                    ? nozzleDefinitions![idx]
+                                    : new NozzleDefinition { ColorHex = designColorHex.TrimStart('#'), DensityGCm3 = 0, Label = "" };
+                                var zones = nozzleZones!.Where(z => z.NozzleIndex == idx)
+                                    .OrderBy(z => z.StartCm).ToList();
+                                string zoneRange = string.Join("  |  ",
+                                    zones.Select(z => $"{z.StartCm:0.0} – {z.EndCm:0.0} cm"));
+                                entries.Add((idx, def, zoneRange));
+                            }
+                        }
+
+                        if (entries.Count == 0)
+                        {
+                            // No zones: single material — use design colour + shared density
+                            var singleDef = hasNozzles
+                                ? nozzleDefinitions![0]
+                                : new NozzleDefinition { ColorHex = designColorHex.TrimStart('#'), DensityGCm3 = 0, Label = "" };
+                            entries.Add((0, singleDef, "full line"));
+                        }
+
                         col.Item().Background(C("F7F8FA"))
                             .Border(0.5f).BorderColor(ColBorder)
-                            .PaddingVertical(3).PaddingHorizontal(5).Row(legRow =>
+                            .PaddingVertical(3).PaddingHorizontal(5).Column(legCol =>
                         {
-                            legRow.AutoItem().AlignMiddle()
-                                .Text("Materials  ").FontSize(6.5f).Bold().FontColor(ColMuted);
-
-                            // If no nozzle definitions defined, show base design colour
-                            var nozzlesToShow = hasNozzles
-                                ? nozzleDefinitions!
-                                : new List<NozzleDefinition>
-                                    { new NozzleDefinition { ColorHex = designColorHex.TrimStart('#'), DensityGCm3 = 0, Label = "" } };
-
-                            for (int nmi = 0; nmi < nozzlesToShow.Count; nmi++)
+                            legCol.Item().AlignCenter()
+                                .Text("Materials").FontSize(6.5f).Bold().FontColor(ColMuted);
+                            legCol.Item().PaddingTop(3).Row(legRow =>
                             {
-                                var nd  = nozzlesToShow[nmi];
-                                string hex = (nd.ColorHex ?? "DC3232").TrimStart('#');
-                                if (hex.Length < 6) continue;
-                                try
+                                foreach (var (origIdx, nd, zoneRange) in entries)
                                 {
-                                    byte nr = System.Convert.ToByte(hex[0..2], 16);
-                                    byte ng = System.Convert.ToByte(hex[2..4], 16);
-                                    byte nb = System.Convert.ToByte(hex[4..6], 16);
-                                    var swatchColor = PdfColor.FromRGB(nr, ng, nb);
-
-                                    // Zone range for this nozzle slot
-                                    string zoneRange = "";
-                                    if (hasZones)
+                                    string hex = (nd.ColorHex ?? "DC3232").TrimStart('#');
+                                    if (hex.Length < 6) continue;
+                                    try
                                     {
-                                        var myZones = nozzleZones!.Where(z => z.NozzleIndex == nmi).ToList();
-                                        if (myZones.Count > 0)
-                                            zoneRange = string.Join(", ",
-                                                myZones.Select(z => $"{z.StartCm:0.0}–{z.EndCm:0.0} cm"));
-                                    }
+                                        byte nr = System.Convert.ToByte(hex[0..2], 16);
+                                        byte ng = System.Convert.ToByte(hex[2..4], 16);
+                                        byte nb = System.Convert.ToByte(hex[4..6], 16);
+                                        var swatchColor = PdfColor.FromRGB(nr, ng, nb);
 
-                                    legRow.AutoItem().Column(sCol =>
-                                    {
-                                        sCol.Item().Text($"M{nmi + 1}")
-                                            .FontSize(6.5f).Bold().FontColor(ColText).AlignCenter();
-                                        sCol.Item().Border(0.5f).BorderColor(ColBorder)
-                                            .Element(e => DrawLambertSwatch(e, swatchColor, 44, 10));
-                                        if (nd.DensityGCm3 > 0)
-                                            sCol.Item().Width(44).Text($"ρ {nd.DensityGCm3:0.000} g/cm³")
-                                                .FontSize(6f).Bold().FontColor(ColText).AlignCenter();
-                                        if (!string.IsNullOrWhiteSpace(nd.Label))
-                                            sCol.Item().Width(44).Text(nd.Label)
-                                                .FontSize(6f).FontColor(ColMuted).AlignCenter();
-                                        if (!string.IsNullOrWhiteSpace(zoneRange))
-                                            sCol.Item().Width(44).Text(zoneRange)
+                                        legRow.AutoItem().Column(sCol =>
+                                        {
+                                            sCol.Item().Text($"M{origIdx + 1}")
+                                                .FontSize(6.5f).Bold().FontColor(ColText).AlignCenter();
+                                            sCol.Item().Border(0.5f).BorderColor(ColBorder)
+                                                .Element(e => DrawLambertSwatch(e, swatchColor, 44, 10));
+                                            sCol.Item().Width(44).Text($"#{hex.ToUpper()}")
                                                 .FontSize(5.5f).FontColor(ColMuted).AlignCenter();
-                                    });
-                                    legRow.ConstantItem(10);
+                                            if (nd.DensityGCm3 > 0)
+                                                sCol.Item().Width(44).Text($"ρ {nd.DensityGCm3:0.00} g/cm³")
+                                                    .FontSize(6f).Bold().FontColor(ColText).AlignCenter();
+                                            if (!string.IsNullOrWhiteSpace(nd.Label) && !nd.Label.StartsWith("ρ ") && nd.Label != "N/A")
+                                                sCol.Item().Width(44).Text(nd.Label)
+                                                    .FontSize(6f).FontColor(ColMuted).AlignCenter();
+                                            if (!string.IsNullOrWhiteSpace(zoneRange))
+                                                sCol.Item().Width(44).Text(zoneRange)
+                                                    .FontSize(5.5f).FontColor(ColMuted).AlignCenter();
+                                        });
+                                        legRow.ConstantItem(10);
+                                    }
+                                    catch { /* ignore bad hex */ }
                                 }
-                                catch { /* ignore bad hex */ }
-                            }
+
+                                // Core material card — neutral gray, no colour swatch
+                                if (!string.IsNullOrWhiteSpace(coreType))
+                                {
+                                    legRow.AutoItem()
+                                        .Border(0.5f).BorderColor(ColBorder)
+                                        .Background(C("E4E5EA"))
+                                        .PaddingVertical(2).PaddingHorizontal(5).Column(sCol =>
+                                    {
+                                        sCol.Item().Text("Core")
+                                            .FontSize(6f).Bold().FontColor(ColMuted).AlignCenter();
+                                        sCol.Item().PaddingTop(2).Text(coreType)
+                                            .FontSize(6.5f).Bold().FontColor(ColText).AlignCenter();
+                                    });
+                                }
+                            });
+                        });
+                    }
+                    else if (hasNozzles || !string.IsNullOrWhiteSpace(designColorHex))
+                    {
+                        // C PDF — show all comp-derived nozzle definitions
+                        col.Item().Background(C("F7F8FA"))
+                            .Border(0.5f).BorderColor(ColBorder)
+                            .PaddingVertical(3).PaddingHorizontal(5).Column(legCol =>
+                        {
+                            legCol.Item().AlignCenter()
+                                .Text("Materials").FontSize(6.5f).Bold().FontColor(ColMuted);
+                            legCol.Item().PaddingTop(3).Row(legRow =>
+                            {
+                                var nozzlesToShow = hasNozzles
+                                    ? nozzleDefinitions!
+                                    : new List<NozzleDefinition>
+                                        { new NozzleDefinition { ColorHex = designColorHex.TrimStart('#'), DensityGCm3 = 0, Label = "" } };
+
+                                for (int nmi = 0; nmi < nozzlesToShow.Count; nmi++)
+                                {
+                                    var nd  = nozzlesToShow[nmi];
+                                    string hex = (nd.ColorHex ?? "DC3232").TrimStart('#');
+                                    if (hex.Length < 6) continue;
+                                    try
+                                    {
+                                        byte nr = System.Convert.ToByte(hex[0..2], 16);
+                                        byte ng = System.Convert.ToByte(hex[2..4], 16);
+                                        byte nb = System.Convert.ToByte(hex[4..6], 16);
+                                        var swatchColor = PdfColor.FromRGB(nr, ng, nb);
+
+                                        legRow.AutoItem().Column(sCol =>
+                                        {
+                                            sCol.Item().Text($"M{nmi + 1}")
+                                                .FontSize(6.5f).Bold().FontColor(ColText).AlignCenter();
+                                            sCol.Item().Border(0.5f).BorderColor(ColBorder)
+                                                .Element(e => DrawLambertSwatch(e, swatchColor, 44, 10));
+                                            sCol.Item().Width(44).Text($"#{hex.ToUpper()}")
+                                                .FontSize(5.5f).FontColor(ColMuted).AlignCenter();
+                                            if (nd.DensityGCm3 > 0)
+                                                sCol.Item().Width(44).Text($"ρ {nd.DensityGCm3:0.00} g/cm³")
+                                                    .FontSize(6f).Bold().FontColor(ColText).AlignCenter();
+                                            if (!string.IsNullOrWhiteSpace(nd.Label) && !nd.Label.StartsWith("ρ ") && nd.Label != "N/A")
+                                                sCol.Item().Width(44).Text(nd.Label)
+                                                    .FontSize(6f).FontColor(ColMuted).AlignCenter();
+                                        });
+                                        legRow.ConstantItem(10);
+                                    }
+                                    catch { /* ignore bad hex */ }
+                                }
+
+                                // Core material card — neutral gray, no colour swatch
+                                if (!string.IsNullOrWhiteSpace(coreType))
+                                {
+                                    legRow.AutoItem()
+                                        .Border(0.5f).BorderColor(ColBorder)
+                                        .Background(C("E4E5EA"))
+                                        .PaddingVertical(2).PaddingHorizontal(5).Column(sCol =>
+                                    {
+                                        sCol.Item().Text("Core")
+                                            .FontSize(6f).Bold().FontColor(ColMuted).AlignCenter();
+                                        sCol.Item().PaddingTop(2).Text(coreType)
+                                            .FontSize(6.5f).Bold().FontColor(ColText).AlignCenter();
+                                    });
+                                }
+                            });
                         });
                     }
 
@@ -734,7 +826,7 @@ public static class FlyLinePdfExporter
                                 Cell($"{d1:0.00}");
                                 Cell($"{d2:0.00}");
                                 Cell(Math.Abs(compTaper) < 0.001 ? "—" : $"{compTaper:+0.00;-0.00}");
-                                Cell(avgRho > 0 ? $"{avgRho:0.000}" : "—", clamped ? (PdfColor?)ColRed : null);
+                                Cell(avgRho > 0 ? $"{avgRho:0.00}" : "—", clamped ? (PdfColor?)ColRed : null);
                                 Cell(compMassG > 0 ? $"{compMassG:0.000}" : "—");
                                 Cell(compMassG > 0 ? $"{compMassG * GramsToGrains:0.0}" : "—");
                                 Cell(grPerFt > 0 ? $"{grPerFt:0.0}" : "—");
@@ -755,7 +847,7 @@ public static class FlyLinePdfExporter
                                 Cell($"{seg.StartDiameterMm:0.00}");
                                 Cell($"{seg.EndDiameterMm:0.00}");
                                 Cell(seg.IsCylinder ? "—" : $"{seg.TaperMmPerMeter:+0.00;-0.00}");
-                                Cell(seg.SpecWeightGCm3 > 0 ? $"{seg.SpecWeightGCm3:0.000}" : "—");
+                                Cell(seg.SpecWeightGCm3 > 0 ? $"{seg.SpecWeightGCm3:0.00}" : "—");
                                 Cell(seg.MassG > 0 ? $"{seg.MassG:0.000}" : "—");
                                 Cell(seg.MassG > 0 ? $"{seg.MassG * GramsToGrains:0.0}" : "—");
                                 Cell(grPerFt > 0 ? $"{grPerFt:0.0}" : "—");

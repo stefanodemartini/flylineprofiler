@@ -118,17 +118,26 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private string  _projectName        = "Untitled";
     private DateTime _projectCreatedAt  = DateTime.UtcNow;
     private bool    _designMode         = true;
-    // User-selectable design profile color
-    private ScottColor _designLineColor = new ScottColor(220, 50, 50);
-    private static readonly ScottColor[] DesignColorPresets =
+    // Design line color is always derived from M1 (Nozzles[0])
+    private ScottColor DesignColor
     {
-        new ScottColor(220,  50,  50),   // red (default)
-        new ScottColor( 50, 180, 255),   // blue
-        new ScottColor( 50, 210, 120),   // green
-        new ScottColor(255, 180,  30),   // amber
-        new ScottColor(200,  80, 220),   // purple
-        new ScottColor(255, 255, 255),   // white
-    };
+        get
+        {
+            if (Nozzles.Count > 0)
+            {
+                try
+                {
+                    var hex = Nozzles[0].ColorHex;
+                    return new ScottColor(
+                        Convert.ToByte(hex[0..2], 16),
+                        Convert.ToByte(hex[2..4], 16),
+                        Convert.ToByte(hex[4..6], 16));
+                }
+                catch { }
+            }
+            return new ScottColor(220, 50, 50);
+        }
+    }
 
     // Persists user-edited segment names and specific weights across RefreshSegmentTable() calls.
     // Key: 0-based segment order index — stable even when node X positions are edited.
@@ -136,6 +145,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private bool   _useSharedDensity = true; // always true — uniform material density
     private double _sharedDensity    = 0.0;
+
+    // NC nozzle state: saved before each comp sync, restored when switching back to NC mode
+    private readonly string[] _ncNozzleColors = { "DC3232", "F5F5F5", "28A428", "3296FF" };
+    private readonly string[] _ncNozzleLabels = { "", "", "", "" };
 
     private bool   _waterIsSalt = false;
     private double _waterTempC  = 20.0;
@@ -327,7 +340,13 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             Nozzles.Add(noz);
         }
         Nozzles[0].IsActive = true;
-        NozzleZones.CollectionChanged += (_, _) => { RefreshPlot(); MarkDirty(); };
+        NozzleZones.CollectionChanged += (_, e) =>
+        {
+            if (e.NewItems != null)
+                foreach (NozzleZoneVm z in e.NewItems)
+                    z.PropertyChanged += (_, _) => UpdateNozzleUsageLabels();
+            RefreshPlot(); MarkDirty(); UpdateNozzleUsageLabels();
+        };
 
         PlotControl.Refresh();
 
@@ -785,6 +804,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private bool ConfirmDiscardIfDirty()
     {
         if (!_isDirty) return true;
+        // Never prompt for an untitled project that was never saved — nothing meaningful to lose
+        if (_currentProjectPath == null && _projectName == "Untitled") return true;
         var r = MessageBox.Show(
             $"Project \"{_projectName}\" has unsaved changes.\nDiscard and continue?",
             "Unsaved Changes", MessageBoxButton.YesNo, MessageBoxImage.Warning);
@@ -818,11 +839,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         OnPropertyChanged(nameof(LaserMarkFromTip));
         _laserMarkFromEnd = string.Empty;
         OnPropertyChanged(nameof(LaserMarkFromEnd));
-        // Reset profile colour field to default red (no side-effects during clear)
-        _designLineColor = new ScottColor(220, 50, 50);
-        if (ProfileColorBtn != null)
-            ProfileColorBtn.Background = new System.Windows.Media.SolidColorBrush(
-                System.Windows.Media.Color.FromRgb(220, 50, 50));
         foreach (var seg in ProjectSegments) seg.PropertyChanged -= OnSegmentPropertyChanged;
         _segmentMetadata.Clear();
         ProjectSegments.Clear();
@@ -894,14 +910,15 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             NodeLabelOffsets = _nodeLabelOffsets
                             .Select(kv => new NodeLabelOffset { NodeX = kv.Key, LX = kv.Value.LX, LY = kv.Value.LY })
                             .ToList(),
-            DesignLineColorHex = $"{_designLineColor.R:X2}{_designLineColor.G:X2}{_designLineColor.B:X2}",
+            DesignLineColorHex = Nozzles.Count > 0 ? Nozzles[0].ColorHex : "DC3232",
             ColorNote     = _colorNote,
             CoreType      = _coreType,
             LaserMark     = _laserMark,
             LaserMarkFromTipMm = _laserMarkFromTip,
             LaserMarkFromEndMm = _laserMarkFromEnd,
             NozzleDefinitions = Nozzles.Select(n => new NozzleDefinition
-                              { ColorHex = n.ColorHex, DensityGCm3 = n.DensityGCm3, Label = n.Label })
+                              { ColorHex = n.ColorHex, DensityGCm3 = n.DensityGCm3,
+                                Label = n.Label == "N/A" ? string.Empty : n.Label })
                               .ToList(),
             NozzleZones = NozzleZones.Select(z => new NozzleZone
                           { StartCm = z.StartCm, EndCm = z.EndCm, NozzleIndex = z.NozzleIndex })
@@ -958,11 +975,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             if (lo.LX != 0 || lo.LY != 0)
                 _nodeLabelOffsets[lo.NodeX] = (lo.LX, lo.LY);
 
-        // Restore profile line colour
-        if (!string.IsNullOrWhiteSpace(project.DesignLineColorHex))
-            ApplyDesignColor(project.DesignLineColorHex);
-
         // Restore nozzle definitions (4 fixed slots)
+        string[] defaultNozzleCols = { "DC3232", "F5F5F5", "28A428", "3296FF" };
         for (int ni = 0; ni < 4; ni++)
         {
             if (ni < project.NozzleDefinitions.Count)
@@ -974,8 +988,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             }
             else
             {
-                string[] defaultNozzleCols = { "DC3232", "F5F5F5", "28A428", "3296FF" };
-                Nozzles[ni].ColorHex    = defaultNozzleCols[ni];
+                // Backward compat: old .flp files had DesignLineColorHex but no NozzleDefinitions
+                string col = (ni == 0 && !string.IsNullOrWhiteSpace(project.DesignLineColorHex))
+                    ? project.DesignLineColorHex
+                    : defaultNozzleCols[ni];
+                Nozzles[ni].ColorHex    = col;
                 Nozzles[ni].DensityGCm3 = 0;
                 Nozzles[ni].Label       = string.Empty;
             }
@@ -1590,7 +1607,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             {
                 double tm = (i + 0.5) / n;
                 double dm = d0 + tm * (d1 - d0);
-                double v  = SinkingSpeedCalc.CylinderSinkSpeed(_waterIsSalt, _waterTempC, dm, seg.SpecWeightGCm3);
+                double v  = Math.Max(0, SinkingSpeedCalc.CylinderSinkSpeed(_waterIsSalt, _waterTempC, dm, seg.SpecWeightGCm3));
                 if (!double.IsNaN(v)) { minV = Math.Min(minV, v); maxV = Math.Max(maxV, v); }
             }
         }
@@ -1627,8 +1644,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 double ds = d0 + t0 * (d1 - d0), de = d0 + t1 * (d1 - d0);
                 double dm = d0 + tm * (d1 - d0);
 
-                double v = SinkingSpeedCalc.CylinderSinkSpeed(
-                    _waterIsSalt, _waterTempC, dm, seg.SpecWeightGCm3);
+                double v = Math.Max(0, SinkingSpeedCalc.CylinderSinkSpeed(
+                    _waterIsSalt, _waterTempC, dm, seg.SpecWeightGCm3));
                 if (!double.IsNaN(v))
                     slices.Add((xs, xe, ds, de, v));
             }
@@ -1657,16 +1674,27 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             poly.LineColor = Colors.Transparent;
         }
 
-        // ── 4-stop gradient legend ─────────────────────────────────────────
+        // ── Gradient legend ────────────────────────────────────────────────
         double minIns = minV * 39.3701, maxIns = maxV * 39.3701;
-        for (int stop = 0; stop < 4; stop++)
+        if (maxIns - minIns < 1e-6)
         {
-            double t     = stop / 3.0;
-            double speed = minIns + t * (maxIns - minIns);
-            var entry    = plot.Add.Scatter(new double[] {}, new double[] {});
-            entry.Color      = SpeedColor(t);
+            // Uniform or all-floating — single legend entry
+            var entry = plot.Add.Scatter(new double[] {}, new double[] {});
+            entry.Color      = SpeedColor(0);
             entry.LineWidth  = 8;
-            entry.LegendText = $"{speed:+0.000;-0.000} in/s";
+            entry.LegendText = maxIns < 1e-6 ? "Floating" : $"{maxIns:0.000} in/s";
+        }
+        else
+        {
+            for (int stop = 0; stop < 4; stop++)
+            {
+                double t     = stop / 3.0;
+                double speed = minIns + t * (maxIns - minIns);
+                var entry    = plot.Add.Scatter(new double[] {}, new double[] {});
+                entry.Color      = SpeedColor(t);
+                entry.LineWidth  = 8;
+                entry.LegendText = $"{speed:0.000} in/s";
+            }
         }
     }
 
@@ -1770,7 +1798,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         double[] halfYs    = sorted.Select(n =>  n.Y / 2.0).ToArray();
         double[] negHalfYs = sorted.Select(n => -n.Y / 2.0).ToArray();
 
-        var designColor = _designLineColor;
+        var designColor = DesignColor;
         bool hasComp    = ProjectSegments.Any(s => s.HasCompensation);
         bool inComp     = _inCompMode && hasComp;
         bool showOrig   = _showOriginalProfile;
@@ -2183,6 +2211,19 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         NozzleCountBadge.Text = $"{Math.Min(active, 4)}/4";
     }
 
+    private void UpdateNozzleUsageLabels()
+    {
+        var usedIndices = new HashSet<int>(NozzleZones.Select(z => z.NozzleIndex));
+        for (int i = 0; i < Nozzles.Count; i++)
+        {
+            bool inUse = usedIndices.Contains(i);
+            if (!inUse && Nozzles[i].Label != "N/A")
+                Nozzles[i].Label = "N/A";
+            else if (inUse && Nozzles[i].Label == "N/A")
+                Nozzles[i].Label = string.Empty;
+        }
+    }
+
     private void NozzleRadio_Checked(object sender, RoutedEventArgs e)
     {
         if (sender is System.Windows.Controls.RadioButton rb && rb.Tag is int num)
@@ -2407,7 +2448,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         ApplySharedDensity();
         TriggerCompRecompute();
         MarkDirty();
-        UiStatus = $"Material density set to {density:0.000} g/cm³ from measured weight";
+        UiStatus = $"Material density set to {density:0.00} g/cm³ from measured weight";
     }
 
     private void FromSinkSpeed_Click(object sender, RoutedEventArgs e)
@@ -2433,7 +2474,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         ApplySharedDensity();
         TriggerCompRecompute();
         MarkDirty();
-        UiStatus = $"Material density set to {density:0.000} g/cm³ from target sink speed";
+        UiStatus = $"Material density set to {density:0.00} g/cm³ from target sink speed";
     }
 
     // ── Water / sinking speed ────────────────────────────────────────────────
@@ -2477,11 +2518,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 seg.SinkSpeedMs = double.NaN;
                 continue;
             }
-            seg.SinkSpeedMs = SinkingSpeedCalc.TaperedSegmentSinkSpeed(
+            seg.SinkSpeedMs = Math.Max(0, SinkingSpeedCalc.TaperedSegmentSinkSpeed(
                 _waterIsSalt, _waterTempC,
                 seg.StartDiameterMm, seg.EndDiameterMm,
                 seg.LengthCm,
-                seg.SpecWeightGCm3);
+                seg.SpecWeightGCm3));
 
             anyComputed = true;
             if (!double.IsNaN(seg.SinkSpeedMs) && seg.SinkSpeedMs > 0)
@@ -2596,8 +2637,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     /// <summary>
     /// After computing a compensated profile, auto-populate nozzle M1–M4 with the
     /// 4 quantized density levels so the manufacturer sees the required materials immediately.
-    /// Colors follow the same density-to-hue map used in the chart.
-    /// Only fills slots whose density hasn't already been set by the user.
+    /// Colors and labels are auto-generated from the same density-to-hue map used in the chart.
     /// </summary>
     private void SyncNozzleDensitiesFromComp()
     {
@@ -2607,18 +2647,35 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         double[] qDens = Quantize1D(compSegs.SelectMany(s => s.CompSliceDensities), 4);
         if (qDens.Length == 0) return;
 
+        // Save current NC state before overwriting with comp-derived values.
+        // Skip slots whose label already starts with "ρ " — those are comp-derived and
+        // must not be saved as NC state (avoids loading a C-saved file and poisoning the snapshot).
+        for (int i = 0; i < 4; i++)
+        {
+            if (!Nozzles[i].Label.StartsWith("ρ ") && Nozzles[i].Label != "N/A")
+            {
+                _ncNozzleColors[i] = Nozzles[i].ColorHex;
+                _ncNozzleLabels[i] = Nozzles[i].Label;
+            }
+        }
+
+        double minD = qDens[0];
+        double rng  = qDens[qDens.Length - 1] - minD;
+
         for (int i = 0; i < qDens.Length && i < 4; i++)
         {
-            Nozzles[i].DensityGCm3 = Math.Round(qDens[i], 4);
-            // Preserve user-set colours — only update auto-generated labels (blank or "ρ X.XXX")
+            double t   = rng > 0 ? (qDens[i] - minD) / rng : 0.5;
+            var    col = DensityColor(t);
+            Nozzles[i].ColorHex    = $"{col.R:X2}{col.G:X2}{col.B:X2}";
+            Nozzles[i].DensityGCm3 = Math.Round(qDens[i], 2);
             if (string.IsNullOrWhiteSpace(Nozzles[i].Label) || Nozzles[i].Label.StartsWith("ρ "))
-                Nozzles[i].Label = $"ρ {qDens[i]:0.000}";
+                Nozzles[i].Label = $"ρ {qDens[i]:0.00}";
         }
         // Clear unused nozzle slot densities (keep colours and custom labels)
         for (int i = qDens.Length; i < 4; i++)
         {
             Nozzles[i].DensityGCm3 = 0;
-            if (Nozzles[i].Label.StartsWith("ρ "))
+            if (Nozzles[i].Label.StartsWith("ρ ") || Nozzles[i].Label == "N/A")
                 Nozzles[i].Label = string.Empty;
         }
         NozzleDefsGrid?.Items.Refresh();
@@ -2653,8 +2710,14 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             SyncNozzleDensitiesFromComp();
         else
         {
+            // Restore NC nozzle colors and labels saved before the last comp sync
             double ncDens = _sharedDensity > 0 ? _sharedDensity : 0;
-            for (int i = 0; i < 4; i++) Nozzles[i].DensityGCm3 = ncDens;
+            for (int i = 0; i < 4; i++)
+            {
+                Nozzles[i].ColorHex    = _ncNozzleColors[i];
+                Nozzles[i].Label       = _ncNozzleLabels[i];
+                Nozzles[i].DensityGCm3 = ncDens;
+            }
             NozzleDefsGrid?.Items.Refresh();
             UpdateNozzleBadge();
         }
@@ -2665,24 +2728,52 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         if (c) SyncCompNodesToDesignList();
         else   SyncDesignNodesToList();
 
-        // SegmentsDataGrid: le colonne vengono aggiornate nel prossimo ciclo di rendering
-        // (DataGridColumn non è un Visual — il cambio di Visibility richiede un layout pass esplicito)
-        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Render, () =>
+        // SegmentsDataGrid: Sink e Comp. Sink entrambe ultime a destra nei rispettivi modi.
+        // NC: Start/End/Shape/Taper/SpW/Sink   C: CompStart/CompEnd/ρStart/ρFine/CompSink
+        OrigStartDiamColumn.Visibility = c ? Visibility.Collapsed : Visibility.Visible;
+        OrigEndDiamColumn.Visibility   = c ? Visibility.Collapsed : Visibility.Visible;
+        ShapeColumn.Visibility         = c ? Visibility.Collapsed : Visibility.Visible;
+        TaperColumn.Visibility         = c ? Visibility.Collapsed : Visibility.Visible;
+        SpWeightColumn.Visibility      = c ? Visibility.Collapsed : Visibility.Visible;
+        OrigSinkColumn.Visibility      = c ? Visibility.Collapsed : Visibility.Visible;
+        CompStartDiamColumn.Visibility = c ? Visibility.Visible   : Visibility.Collapsed;
+        CompEndDiamColumn.Visibility   = c ? Visibility.Visible   : Visibility.Collapsed;
+        CompStartDensColumn.Visibility = c ? Visibility.Visible   : Visibility.Collapsed;
+        CompEndDensColumn.Visibility   = c ? Visibility.Visible   : Visibility.Collapsed;
+        CompSinkColumn.Visibility      = c ? Visibility.Visible   : Visibility.Collapsed;
+        RestoreSegmentsColumnOrder();
+    }
+
+    // Ripristina l'ordine fisico delle colonne nella Columns collection al loro ordine XAML.
+    // WPF DataGrid modifica i DisplayIndex quando si cambia Visibility; rimuovere e reinserire
+    // la colonna nella posizione corretta è l'unico modo affidabile per ripristinare l'ordine.
+    private void RestoreSegmentsColumnOrder()
+    {
+        var cols = SegmentsDataGrid.Columns;
+        // Pos: 0=#  1=Head  2=Name  3=Length  4=Volume  5=Mass
+        //      6=OrigStart  7=OrigEnd  8=Shape  9=Taper  10=SpWeight  11=OrigSink (ultima NC)
+        //      12=CompStart 13=CompEnd 14=CompStartDens 15=CompEndDens 16=CompSink (ultima C)
+        var desired = new[]
         {
-            OrigStartDiamColumn.Visibility = c ? Visibility.Collapsed : Visibility.Visible;
-            OrigEndDiamColumn.Visibility   = c ? Visibility.Collapsed : Visibility.Visible;
-            ShapeColumn.Visibility         = c ? Visibility.Collapsed : Visibility.Visible;
-            TaperColumn.Visibility         = c ? Visibility.Collapsed : Visibility.Visible;
-            SpWeightColumn.Visibility      = c ? Visibility.Collapsed : Visibility.Visible;
-            OrigSinkColumn.Visibility      = c ? Visibility.Collapsed : Visibility.Visible;
-            CompSinkColumn.Visibility      = c ? Visibility.Visible   : Visibility.Collapsed;
-            CompStartDiamColumn.Visibility = c ? Visibility.Visible   : Visibility.Collapsed;
-            CompEndDiamColumn.Visibility   = c ? Visibility.Visible   : Visibility.Collapsed;
-            CompStartDensColumn.Visibility = c ? Visibility.Visible   : Visibility.Collapsed;
-            CompEndDensColumn.Visibility   = c ? Visibility.Visible   : Visibility.Collapsed;
-            SegmentsDataGrid.InvalidateMeasure();
-            SegmentsDataGrid.UpdateLayout();
-        });
+            (col: (System.Windows.Controls.DataGridColumn)HeadColumn,         idx: 1),
+            (col: (System.Windows.Controls.DataGridColumn)OrigStartDiamColumn,idx: 6),
+            (col: (System.Windows.Controls.DataGridColumn)OrigEndDiamColumn,  idx: 7),
+            (col: (System.Windows.Controls.DataGridColumn)ShapeColumn,        idx: 8),
+            (col: (System.Windows.Controls.DataGridColumn)TaperColumn,        idx: 9),
+            (col: (System.Windows.Controls.DataGridColumn)SpWeightColumn,     idx:10),
+            (col: (System.Windows.Controls.DataGridColumn)OrigSinkColumn,     idx:11),
+            (col: (System.Windows.Controls.DataGridColumn)CompStartDiamColumn,idx:12),
+            (col: (System.Windows.Controls.DataGridColumn)CompEndDiamColumn,  idx:13),
+            (col: (System.Windows.Controls.DataGridColumn)CompStartDensColumn,idx:14),
+            (col: (System.Windows.Controls.DataGridColumn)CompEndDensColumn,  idx:15),
+            (col: (System.Windows.Controls.DataGridColumn)CompSinkColumn,     idx:16),
+        };
+        foreach (var (col, idx) in desired)
+        {
+            int current = cols.IndexOf(col);
+            if (current != idx)
+                cols.Move(current, idx);
+        }
     }
 
     private void ShowOriginalProfile_Click(object sender, RoutedEventArgs e)
@@ -3186,43 +3277,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         UiStatus = "Design cleared";
     }
 
-    // ── Profile colour picker ────────────────────────────────────────────────
-    private void ProfileColorBtn_Click(object sender, RoutedEventArgs e)
-    {
-        // Pre-fill hex box with current colour
-        HexColorBox.Text = $"{_designLineColor.R:X2}{_designLineColor.G:X2}{_designLineColor.B:X2}";
-        ColorPickerPopup.IsOpen = true;
-        HexColorBox.Focus();
-        HexColorBox.SelectAll();
-    }
-
-    private void ApplyHexColor_Click(object sender, RoutedEventArgs e) => ApplyHexInput();
-
-    private void HexColorBox_KeyDown(object sender, KeyEventArgs e)
-    {
-        if (e.Key == Key.Enter) { ApplyHexInput(); e.Handled = true; }
-        if (e.Key == Key.Escape) { ColorPickerPopup.IsOpen = false; e.Handled = true; }
-    }
-
-    private void Swatch_Click(object sender, RoutedEventArgs e)
-    {
-        if (sender is System.Windows.Controls.Button btn && btn.Tag is string hex)
-        {
-            ApplyDesignColor(hex.TrimStart('#'));
-            ColorPickerPopup.IsOpen = false;
-        }
-    }
-
-    private void ApplyHexInput()
-    {
-        string hex = HexColorBox.Text.Trim().TrimStart('#');
-        if (hex.Length == 6 && ApplyDesignColor(hex))
-            ColorPickerPopup.IsOpen = false;
-        else
-            HexColorBox.Background = new System.Windows.Media.SolidColorBrush(
-                System.Windows.Media.Color.FromRgb(255, 220, 220));
-    }
-
     /// <summary>Opens the full Windows colour dialog; returns 6-char hex or null if cancelled.</summary>
     private string? ShowColorDialog(string currentHex)
     {
@@ -3245,38 +3299,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             : null;
     }
 
-    private void PickProfileColor_Click(object sender, RoutedEventArgs e)
-    {
-        var hex = ShowColorDialog(HexColorBox.Text);
-        if (hex == null) return;
-        HexColorBox.Text = hex;
-        if (ApplyDesignColor(hex)) ColorPickerPopup.IsOpen = false;
-    }
-
     private void PickSectionColor_Click(object sender, RoutedEventArgs e)
     {
         var hex = ShowColorDialog(SectionHexBox.Text);
         if (hex == null) return;
         SectionHexBox.Text = hex;
         if (ApplyNozzleColor(hex)) SectionColorPopup.IsOpen = false;
-    }
-
-    private bool ApplyDesignColor(string hex6)
-    {
-        try
-        {
-            byte r = Convert.ToByte(hex6[0..2], 16);
-            byte g = Convert.ToByte(hex6[2..4], 16);
-            byte b = Convert.ToByte(hex6[4..6], 16);
-            _designLineColor = new ScottColor(r, g, b);
-            ProfileColorBtn.Background = new System.Windows.Media.SolidColorBrush(
-                System.Windows.Media.Color.FromRgb(r, g, b));
-            HexColorBox.Background = System.Windows.Media.Brushes.Transparent;
-            RefreshPlot();
-            MarkDirty();
-            return true;
-        }
-        catch { return false; }
     }
 
     // ── PDF export ──────────────────────────────────────────────────────────
@@ -3314,7 +3342,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             double[] xs    = sorted.Select(n => n.X).ToArray();
             double[] topYs = sorted.Select(n =>  n.Y / 2.0).ToArray();
             double[] botYs = sorted.Select(n => -n.Y / 2.0).ToArray();
-            var dc = _designLineColor;
+            var dc = DesignColor;
 
             if (pdfUseComp)
             {
@@ -3385,7 +3413,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             double maxDiam  = sorted.Max(n => n.Y);
             double rowGap   = maxDiam * 0.40;   // uniform row height regardless of local diameter
             // Approximate label box size in data units (chart rendered ~3200×600 px)
-            const int pdfLblSize = 14;
+            const int pdfLblSize = 17;
             double dataPerPxX = (xSpan * 1.15) / 3000.0;
             double yEstSpan   = maxDiam + 2 * rowGap * (1.6 + 3 * 1.2);
             double dataPerPxY = yEstSpan / 480.0;
@@ -3522,6 +3550,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         plot.XLabel("Length (cm)");
         plot.YLabel("Diameter (mm)");
+        plot.Axes.Bottom.TickLabelStyle.FontSize = 15;
+        plot.Axes.Left.TickLabelStyle.FontSize   = 15;
+        plot.Axes.Bottom.Label.FontSize           = 16;
+        plot.Axes.Left.Label.FontSize             = 16;
         plot.Axes.AutoScale();
         var yRange = plot.Axes.GetLimits().Rect.Height;
         var lim    = plot.Axes.GetLimits();
@@ -3571,7 +3603,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 { ColorHex = n.ColorHex, DensityGCm3 = n.DensityGCm3, Label = n.Label }).ToList();
             var pdfNozzleZones = NozzleZones.Select(z => new NozzleZone
                 { StartCm = z.StartCm, EndCm = z.EndCm, NozzleIndex = z.NozzleIndex }).ToList();
-            string designHex = $"{_designLineColor.Red:X2}{_designLineColor.Green:X2}{_designLineColor.Blue:X2}";
+            string designHex = Nozzles.Count > 0 ? Nozzles[0].ColorHex : "DC3232";
             // Append mark positions (mm from tip / from rear end) to the laser-mark text
             var markPos = new List<string>();
             if (!string.IsNullOrWhiteSpace(_laserMarkFromTip))

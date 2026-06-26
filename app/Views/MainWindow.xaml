@@ -459,75 +459,6 @@
                         <Button Content="Export Seg. CSV"
                                 Style="{StaticResource BtnGhost}"
                                 Click="ExportSegmentsCsv_Click"/>
-                        <!-- Profile colour picker -->
-                        <Grid Margin="4,0,0,0">
-                            <Button x:Name="ProfileColorBtn"
-                                    Width="28" Height="22"
-                                    Background="#DC3232"
-                                    BorderBrush="#555" BorderThickness="1"
-                                    Click="ProfileColorBtn_Click"
-                                    ToolTip="Click to open colour picker"/>
-                            <Popup x:Name="ColorPickerPopup"
-                                   StaysOpen="False"
-                                   Placement="Bottom"
-                                   PlacementTarget="{Binding ElementName=ProfileColorBtn}">
-                                <Border Background="White"
-                                        BorderBrush="#BBBBBB" BorderThickness="1"
-                                        Padding="10"
-                                        Effect="{DynamicResource DropShadow}">
-                                    <StackPanel Width="180">
-                                        <TextBlock Text="Profile Colour"
-                                                   Foreground="#555" FontSize="10"
-                                                   Margin="0,0,0,7"/>
-                                        <!-- Hex input row -->
-                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,9">
-                                            <Border Background="White"
-                                                    BorderBrush="#AAAAAA" BorderThickness="1"
-                                                    CornerRadius="3" Padding="4,2">
-                                                <StackPanel Orientation="Horizontal">
-                                                    <TextBlock Text="#" Foreground="#666"
-                                                               VerticalAlignment="Center"
-                                                               FontSize="11" Margin="0,0,1,0"/>
-                                                    <TextBox x:Name="HexColorBox"
-                                                             Width="68" Height="18"
-                                                             FontSize="11" MaxLength="6"
-                                                             CharacterCasing="Upper"
-                                                             Background="Transparent"
-                                                             Foreground="#222"
-                                                             BorderThickness="0"
-                                                             VerticalContentAlignment="Center"
-                                                             KeyDown="HexColorBox_KeyDown"/>
-                                                </StackPanel>
-                                            </Border>
-                                            <Button Content="✓"
-                                                    Width="26" Height="26" Margin="4,0,0,0"
-                                                    FontSize="12"
-                                                    Click="ApplyHexColor_Click"
-                                                    ToolTip="Apply hex colour"/>
-                                        </StackPanel>
-                                        <!-- Preset swatches -->
-                                        <WrapPanel>
-                                            <Button Click="Swatch_Click" Tag="#DC3232" Width="22" Height="22" Margin="2" Background="#DC3232" BorderThickness="0" ToolTip="#DC3232"/>
-                                            <Button Click="Swatch_Click" Tag="#3296FF" Width="22" Height="22" Margin="2" Background="#3296FF" BorderThickness="0" ToolTip="#3296FF"/>
-                                            <Button Click="Swatch_Click" Tag="#32D278" Width="22" Height="22" Margin="2" Background="#32D278" BorderThickness="0" ToolTip="#32D278"/>
-                                            <Button Click="Swatch_Click" Tag="#FFB41E" Width="22" Height="22" Margin="2" Background="#FFB41E" BorderThickness="0" ToolTip="#FFB41E"/>
-                                            <Button Click="Swatch_Click" Tag="#C850DC" Width="22" Height="22" Margin="2" Background="#C850DC" BorderThickness="0" ToolTip="#C850DC"/>
-                                            <Button Click="Swatch_Click" Tag="#FF6B35" Width="22" Height="22" Margin="2" Background="#FF6B35" BorderThickness="0" ToolTip="#FF6B35"/>
-                                            <Button Click="Swatch_Click" Tag="#28C996" Width="22" Height="22" Margin="2" Background="#28C996" BorderThickness="0" ToolTip="#28C996"/>
-                                            <Button Click="Swatch_Click" Tag="#FFFFFF" Width="22" Height="22" Margin="2" Background="#FFFFFF" BorderThickness="0" ToolTip="#FFFFFF"/>
-                                            <Button Click="Swatch_Click" Tag="#FFD700" Width="22" Height="22" Margin="2" Background="#FFD700" BorderThickness="0" ToolTip="#FFD700"/>
-                                            <Button Click="Swatch_Click" Tag="#00CFFF" Width="22" Height="22" Margin="2" Background="#00CFFF" BorderThickness="0" ToolTip="#00CFFF"/>
-                                            <Button Click="Swatch_Click" Tag="#FF3CAC" Width="22" Height="22" Margin="2" Background="#FF3CAC" BorderThickness="0" ToolTip="#FF3CAC"/>
-                                            <Button Click="Swatch_Click" Tag="#AAAAAA" Width="22" Height="22" Margin="2" Background="#AAAAAA" BorderThickness="0" ToolTip="#AAAAAA"/>
-                                        </WrapPanel>
-                                        <Button Content="🎨 More colours…"
-                                                Margin="0,8,0,0" Height="24" FontSize="11"
-                                                Click="PickProfileColor_Click"
-                                                ToolTip="Open the full colour picker"/>
-                                    </StackPanel>
-                                </Border>
-                            </Popup>
-                        </Grid>
                         <Button Content="📄 Export PDF"
                                 Style="{StaticResource BtnGhost}"
                                 Click="ExportPdf_Click"
@@ -920,7 +851,7 @@
                                  FontSize="11"
                                  VerticalAlignment="Center"
                                  HorizontalContentAlignment="Center"
-                                 Text="{Binding ElementName=MainWin, Path=SharedDensity, StringFormat='0.000', UpdateSourceTrigger=LostFocus}"
+                                 Text="{Binding ElementName=MainWin, Path=SharedDensity, StringFormat='0.00', UpdateSourceTrigger=LostFocus}"
                                  ToolTip="Material density in g/cm³ — uniform along the entire NC line"
                                  Margin="0,0,4,0"/>
                         <TextBlock Text="g/cm³"
@@ -1029,6 +960,7 @@
                               IsReadOnly="False"
                               CanUserAddRows="False"
                               CanUserDeleteRows="False"
+                              CanUserReorderColumns="False"
                               CellEditEnding="SegmentsDataGrid_CellEditEnding">
                         <DataGrid.RowStyle>
                             <Style TargetType="DataGridRow">
@@ -1041,6 +973,7 @@
                             </Style>
                         </DataGrid.RowStyle>
                         <DataGrid.Columns>
+                            <!-- Colonne sempre visibili (posizioni 0-5): non cambiano mai posto -->
                             <DataGridTextColumn Header="#"
                                                Binding="{Binding Index}"
                                                Width="28"
@@ -1052,6 +985,18 @@
                             <DataGridTextColumn Header="Name"
                                                Binding="{Binding Name, UpdateSourceTrigger=PropertyChanged}"
                                                Width="90"/>
+                            <DataGridTextColumn Header="Length (cm)"
+                                               Binding="{Binding LengthCm, StringFormat='0.0'}"
+                                               Width="90"/>
+                            <DataGridTextColumn Header="Volume (cm³)"
+                                               Binding="{Binding VolumeText}"
+                                               Width="90"
+                                               IsReadOnly="True"/>
+                            <DataGridTextColumn Header="Mass (g)"
+                                               Binding="{Binding MassText}"
+                                               Width="80"
+                                               IsReadOnly="True"/>
+                            <!-- Colonne modo NC (posizioni 6-11): Sink è l'ultima a destra -->
                             <DataGridTextColumn x:Name="OrigStartDiamColumn"
                                                Header="Start Ø (mm)"
                                                Binding="{Binding StartDiameterMm, StringFormat='0.00'}"
@@ -1060,9 +1005,6 @@
                                                Header="End Ø (mm)"
                                                Binding="{Binding EndDiameterMm, StringFormat='0.00'}"
                                                Width="95"/>
-                            <DataGridTextColumn Header="Length (cm)"
-                                               Binding="{Binding LengthCm, StringFormat='0.0'}"
-                                               Width="90"/>
                             <DataGridTextColumn x:Name="ShapeColumn"
                                                Header="Shape"
                                                Binding="{Binding Shape}"
@@ -1073,30 +1015,16 @@
                                                Binding="{Binding TaperText}"
                                                Width="100"
                                                IsReadOnly="True"/>
-                            <DataGridTextColumn Header="Volume (cm³)"
-                                               Binding="{Binding VolumeText}"
-                                               Width="90"
-                                               IsReadOnly="True"/>
                             <DataGridTextColumn x:Name="SpWeightColumn"
                                                Header="Sp.W. (g/cm³)"
-                                               Binding="{Binding SpecWeightGCm3, StringFormat='0.000', UpdateSourceTrigger=PropertyChanged}"
+                                               Binding="{Binding SpecWeightGCm3, StringFormat='0.00', UpdateSourceTrigger=PropertyChanged}"
                                                Width="105"/>
-                            <DataGridTextColumn Header="Mass (g)"
-                                               Binding="{Binding MassText}"
-                                               Width="80"
-                                               IsReadOnly="True"/>
                             <DataGridTextColumn x:Name="OrigSinkColumn"
                                                Header="Sink (in/s)"
                                                Binding="{Binding SinkSpeedText}"
                                                Width="90"
                                                IsReadOnly="True"/>
-                            <!-- Colonne modo compensato — visibili solo quando _inCompMode -->
-                            <DataGridTextColumn x:Name="CompSinkColumn"
-                                               Header="Comp. Sink (in/s)"
-                                               Binding="{Binding CompSpeedText}"
-                                               Width="115"
-                                               Visibility="Collapsed"
-                                               IsReadOnly="True"/>
+                            <!-- Colonne modo C (posizioni 12-16): Comp. Sink è l'ultima a destra -->
                             <DataGridTextColumn x:Name="CompStartDiamColumn"
                                                Header="Comp. Start Ø (mm)"
                                                Binding="{Binding CompStartDiamText}"
@@ -1119,6 +1047,12 @@
                                                Header="ρ Fine (g/cm³)"
                                                Binding="{Binding CompEndDensityText}"
                                                Width="105"
+                                               Visibility="Collapsed"
+                                               IsReadOnly="True"/>
+                            <DataGridTextColumn x:Name="CompSinkColumn"
+                                               Header="Comp. Sink (in/s)"
+                                               Binding="{Binding CompSpeedText}"
+                                               Width="115"
                                                Visibility="Collapsed"
                                                IsReadOnly="True"/>
                         </DataGrid.Columns>
@@ -1191,7 +1125,7 @@
                                 </DataGridTemplateColumn>
                                 <!-- Density -->
                                 <DataGridTextColumn Header="ρ g/cm³"
-                                                   Binding="{Binding DensityGCm3, StringFormat='0.000'}"
+                                                   Binding="{Binding DensityGCm3, StringFormat='0.00'}"
                                                    Width="70"/>
                                 <!-- Label -->
                                 <DataGridTextColumn Header="Label"
@@ -1246,7 +1180,7 @@
                                                    Binding="{Binding EndCm, StringFormat='0.0'}"
                                                    Width="75"/>
                                 <DataGridTextColumn Header="ρ g/cm³" Width="60" IsReadOnly="True"
-                                                   Binding="{Binding DensityGCm3, StringFormat='0.000'}"/>
+                                                   Binding="{Binding DensityGCm3, StringFormat='0.00'}"/>
                             </DataGrid.Columns>
                         </DataGrid>
                     </Border>

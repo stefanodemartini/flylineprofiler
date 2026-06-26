@@ -71,7 +71,7 @@ public partial class WeightToDensityDialog : Window
         bool canApply = weightOk && vol > 0;
 
         if (DensityDisplay is not null)
-            DensityDisplay.Text = canApply ? $"{weightG / vol:0.000}" : "—";
+            DensityDisplay.Text = canApply ? $"{weightG / vol:0.00}" : "—";
 
         if (ApplyBtn is not null)
             ApplyBtn.IsEnabled = canApply;

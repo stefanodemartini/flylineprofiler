@@ -62,12 +62,12 @@ public partial class SinkSpeedToDensityDialog : Window
             return;
         }
 
-        DensityDisplay.Text = $"{density:0.000}";
+        DensityDisplay.Text = $"{density:0.00}";
 
         if (density > MaxPracticalDensity)
         {
             DensityDisplay.Foreground = FindResource("Warn") as System.Windows.Media.Brush;
-            WarnDisplay.Text = $"Required density {density:0.000} g/cm³ exceeds the practical maximum " +
+            WarnDisplay.Text = $"Required density {density:0.00} g/cm³ exceeds the practical maximum " +
                                $"({MaxPracticalDensity:0.0} g/cm³ for tungsten-loaded compounds). " +
                                "This sink speed may not be achievable with standard materials.";
             WarnDisplay.Visibility = Visibility.Visible;
