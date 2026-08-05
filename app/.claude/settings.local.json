@@ -52,7 +52,9 @@
       "Bash(find \"C:\\\\Users\\\\Stefano\\\\.claude\" -name \"MEMORY.md\" 2>/dev/null)",
       "PowerShell(Copy-Item publish\\\\FlyLineProfiler.exe \"$env:USERPROFILE\\\\Desktop\\\\FlyLineProfiler.exe\" -Force)",
       "PowerShell(dotnet build \"c:\\\\Users\\\\Stefano\\\\Documents\\\\Arduino\\\\flylineprofiler\\\\app\\\\DiametroLineaDesktop.csproj\" -c Release 2>&1)",
-      "PowerShell(Start-Process \"c:\\\\Users\\\\Stefano\\\\Documents\\\\Arduino\\\\flylineprofiler\\\\app\\\\bin\\\\Release\\\\net8.0-windows\\\\FlyLineProfiler.exe\")"
+      "PowerShell(Start-Process \"c:\\\\Users\\\\Stefano\\\\Documents\\\\Arduino\\\\flylineprofiler\\\\app\\\\bin\\\\Release\\\\net8.0-windows\\\\FlyLineProfiler.exe\")",
+      "PowerShell(dotnet publish \"c:\\\\Users\\\\Stefano\\\\Documents\\\\Arduino\\\\flylineprofiler\\\\app\\\\DiametroLineaDesktop.csproj\" -r win-x64 --self-contained -p:PublishSingleFile=true -c Release 2>&1)",
+      "PowerShell(Copy-Item \"c:\\\\Users\\\\Stefano\\\\Documents\\\\Arduino\\\\flylineprofiler\\\\app\\\\bin\\\\Release\\\\net8.0-windows\\\\win-x64\\\\publish\\\\FlyLineProfiler.exe\" \"$env:USERPROFILE\\\\Desktop\\\\FlyLineProfiler.exe\" -Force)"
     ]
   }
 }

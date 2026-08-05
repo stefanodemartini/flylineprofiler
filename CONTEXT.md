@@ -1,6 +1,6 @@
 # flylineprofiler — Coding Context
 
-> Last updated: 2026-05-29 | Firmware: v0.4.22 | Status: **stable, working**
+> Firmware section last updated: 2026-05-29 (v0.4.22, stable, working) | WPF app section refreshed: 2026-08-05
 
 ---
 
@@ -215,8 +215,8 @@ Examples: `STATUS:SCAN:FWD`, `STATUS:GOTOPOS:FWD:1500`, `STATUS:STOP:FWD`
 
 - `actualPositionCm` variable (line 184) is still declared and reset in `resetpos`/`clearAllData` but is **no longer updated in the scan loop** (v0.4.22). It is now unused dead code — safe to remove in a future cleanup.
 - Chart uses CDN for Chart.js — no internet → blank chart. Consider embedding the JS locally.
-- WPF app (`app/`) ScottPlot NuGet package is a placeholder — not yet added.
 - Encoder true PPC (30.21) slightly differs from formula (30.0) — EEPROM value takes precedence; formula is the fallback if EEPROM is blank.
+- WPF app: nearly all Design Mode logic (nozzles, compensation, plotting, PDF/CSV export) lives in `MainWindow.xaml.cs` code-behind (~4600 lines) rather than in `MainViewModel`. `MainViewModel` only handles the SCAN/backend half. Worth a ViewModel split if the file keeps growing.
 
 ---
 
@@ -232,15 +232,18 @@ Examples: `STATUS:SCAN:FWD`, `STATUS:GOTOPOS:FWD:1500`, `STATUS:STOP:FWD`
 
 ## WPF Desktop App (`app/`)
 
-Windows alternative to the browser UI. Connects to the same ESP32 backend over WebSocket/HTTP.
+> App section last verified: 2026-08-05 (code had drifted ~2 months ahead of this doc — nozzle system, NC→C compensation and PDF export below did not exist when this doc was last fully written).
+
+Windows alternative to the browser UI. Connects to the same ESP32 backend over WebSocket/HTTP. Also the primary tool now for **designing** fly line profiles (Design Mode) independent of any hardware scan — see `MANUALE.md` for full user-facing docs (Italian).
 
 ### Stack
 | Item | Value |
 |---|---|
 | Target | .NET 8 WinExe, WPF |
-| MVVM | `CommunityToolkit.Mvvm` 8.4 (`ObservableObject`) |
+| MVVM | `CommunityToolkit.Mvvm` 8.4 (`ObservableObject`) — used only by `MainViewModel` (SCAN/backend side) |
 | UI shell | `Fluent.Ribbon` 10.0 |
 | Chart | `ScottPlot.WPF` 5.0.52 |
+| PDF export | `FlyLinePdfExporter.cs` (custom, no 3rd-party PDF lib dependency noted here — see file) |
 | Project files | `.flp` (JSON, saved in `Documents\FlyLineProfiler\Projects\`) |
 
 ### File structure
@@ -248,23 +251,39 @@ Windows alternative to the browser UI. Connects to the same ESP32 backend over W
 app/
 ├── Models/
 │   ├── AppSettings.cs         — AppSettings, BackendSettings, ChartSettings, MeasurementPoint
-│   ├── FlyLineProject.cs      — FlyLineProject, ProjectImportedSeries, ProjectDesignNode, ProjectSegmentMeta
-│   ├── ProjectSegment.cs      — INotifyPropertyChanged segment with physics (volume, mass, taper, sink speed)
+│   ├── FlyLineProject.cs      — FlyLineProject (.flp schema), NozzleDefinition, NozzleZone,
+│   │                             ProjectImportedSeries, ProjectDesignNode, ProjectSegmentMeta,
+│   │                             LineColorSection (legacy, kept for migration)
+│   ├── ProjectSegment.cs      — INotifyPropertyChanged segment: volume/mass/taper/sink speed +
+│   │                             per-slice compensation results (CompSlice*, HasClampedSlices)
+│   ├── LineColorSectionVm.cs  — NozzleDefinitionVm / NozzleZoneVm (view-model wrappers for nozzles)
 │   └── DesignNode.cs          — single design node on the chart
 ├── Services/
-│   ├── BackendClient.cs       — WebSocket client (ClientWebSocket) + HTTP /export fetcher
+│   ├── BackendClient.cs       — WebSocket client (ClientWebSocket) + HTTP /export fetcher;
+│   │                             reassembles fragmented WS frames, single-fire Disconnected event
 │   ├── ProjectService.cs      — Save/Load .flp files (JSON)
+│   ├── RecentFilesService.cs  — "Open Recent" MRU list
 │   ├── SettingsService.cs     — Load/save appsettings.json
-│   └── SinkingSpeedCalc.cs    — Physics engine (bisection solver)
+│   ├── SinkingSpeedCalc.cs    — Physics engine (bisection solver): per-cylinder, tapered-segment,
+│   │                             whole-line, CompensateProfile (NC→C), DensityForTargetSinkSpeed
+│   └── FlyLinePdfExporter.cs  — ~900 lines; NC/C production-worksheet PDF export
 ├── ViewModels/
-│   └── MainViewModel.cs       — Single ViewModel for main window
+│   └── MainViewModel.cs       — SCAN-mode ViewModel only: backend connect/scan/motor control,
+│                                 GOTOPOS, live chart points. ~430 lines.
 ├── Views/
-│   ├── MainWindow.xaml/.cs    — Main UI with ScottPlot WpfPlot chart
+│   ├── MainWindow.xaml/.cs    — code-behind IS the app: Design Mode, nozzle system, compensation
+│   │                             (NC→C), sink map, AFFTA badge, PDF/CSV export, chart interaction.
+│   │                             ~4600 lines — the real "controller" of the app, not MainViewModel.
 │   ├── SettingsWindow.xaml/.cs
+│   ├── AboutDialog.xaml/.cs
+│   ├── WeightToDensityDialog.xaml/.cs      — density from measured mass ("From Weight")
+│   ├── SinkSpeedToDensityDialog.xaml/.cs   — density from target sink speed ("From Sink Speed")
 │   └── InverseBoolConverter.cs
 ├── appsettings.json           — Host, ports, chart options (canonical config location)
 └── DiametroLineaDesktop.csproj
 ```
+
+**Note on architecture:** despite the name, `MainViewModel` only owns the hardware-SCAN half of the app (WebSocket connect, live points, motor/GOTOPOS). All Design Mode logic — nozzles, segments, compensation, physics glue, plotting, PDF/CSV export, project load/save — lives directly in `MainWindow.xaml.cs` as code-behind, not in a ViewModel. `MainWindow` implements its own `INotifyPropertyChanged` for XAML bindings.
 
 ### `appsettings.json` (canonical config — never hardcode in C#)
 ```json
@@ -315,19 +334,54 @@ Each segment is a frustum (truncated cone) or cylinder. Key computed properties:
 | `MassG` | `VolumeCm3 × SpecWeightGCm3` (0 if density not set) |
 | `TaperMmPerMeter` | `(EndDiam − StartDiam) / (LengthCm / 100)` |
 | `SinkSpeedText` | in/s (`m/s × 39.3701`), positive = sinking |
-| `HasCompensation` | True after `SetCompensation()` called |
+| `HasCompensation` / `HasClampedSlices` | True after `SetCompensation()`; clamped = any slice hit `RhoFloor` |
+| `CompSliceXsCm/DiamsMm/Densities/Clamped` | Per-1cm-slice compensated profile arrays, set by `SetCompensation()` |
 
 ### `SinkingSpeedCalc.cs` — physics engine
-Bisection solver for cylinder drag. Units: mm / cm / g/cm³ in, m/s out.
+Bisection solver for cylinder drag. Units: mm / cm / g/cm³ in, m/s out. `RhoFloor = 0.94 g/cm³` (min practical material density).
 
 | Method | Description |
 |---|---|
 | `CylinderSinkSpeed(isSalt, tempC, diamMm, densGcm3)` | Single uniform cylinder terminal speed |
 | `TaperedSegmentSinkSpeed(...)` | Tapered segment sliced into N cylinders, single shared equilibrium speed |
-| `CompensateProfile(...)` | Per slice: new diameter + density at a given target speed (mass conserved) |
+| `LineSinkSpeed(...)` | Whole line (all segments) as one rigid body at a uniform density |
+| `DensityForTargetSinkSpeed(...)` | Inverse: density (g/cm³) needed for the whole line to hit a target speed |
+| `LineSinkSpeedRange(...)` | (min, max) achievable speed for the line across ρ 1.001–2.5 |
+| `CompensateProfile(isSalt, tempC, startDiam, endDiam, lengthCm, densityGcm3, targetSpeedMs, sliceLenCm=1)` | NC→C: per 1cm slice, new diameter + density at `targetSpeedMs`, mass-conserved (`ρ_new·d_new² = ρ_orig·d_orig²`); density floored at `RhoFloor`, floored slices flagged in `clamped[]` |
 
 Drag model: `Cd = 1 + 10/Re^(2/3)`. Bisection: 100 iterations, tol=1e-12.  
 Water: fresh density = 5th-order polynomial; viscosity = lookup table (0–40 °C). Salt: `ρ=1027−0.2T`, `ν=1.07×ν_fresh`.
+
+### Nozzle system (M1–M4) — replaces old `ColorSections`
+A project has exactly 4 `NozzleDefinition` slots (color + density g/cm³ + label), each assignable to zero or more `NozzleZone`s (start cm, end cm → nozzle index). This is how both design coloring and physical extrusion material are specified.
+
+- **M1's color always drives `DesignColor`** — the main profile line color on the chart.
+- Unused nozzles (no zone assigned, density = 0) auto-label `"N/A"` (`UpdateNozzleUsageLabels()`).
+- `NozzleCountBadge` shows `x/4` active nozzles (`UpdateNozzleBadge()`).
+- Old `.flp` files with `ColorSections` are migrated on load: each distinct color becomes a nozzle (up to 4), zones map 1:1.
+- `SyncNozzleDensitiesFromComp` / comp mode: when a C (compensated) profile is shown, M1–M4 are temporarily auto-populated with the 4 K-means-quantized densities from the comp gradient (color = density gradient, label = `ρ X.XX`); the original NC nozzle colors/labels/densities are cached in `_ncNozzleColors`/`_ncNozzleLabels` and restored on switching back to NC.
+
+### Compensation (NC → C)
+`compensation.md`, `compensation_physics.md`, `comp_design_report.md` contain the original design rationale. Implemented state:
+
+- **One file, no separate C project**: comp results live in the same `.flp` (`CompTargetSpeedMs`, `ShowCompProfile`), computed on the fly from the NC segments + target speed — not a separate save.
+- **Workflow**: set material density → line must classify as Sinking → **⚖ Compensate** computes C with a density gradient → a speed slider appears, range = `LineSinkSpeedRange` (V_min slowest slice … V_max fastest slice), default V_max.
+- Dragging the slider recomputes C live (`ComputeCompensation()` → `SinkingSpeedCalc.CompensateProfile` per segment).
+- **Show C** toggles NC/C display; **Show NC ghost** overlays the original NC profile translucent-gray for comparison.
+- C profile rendered with Lambert-cylindrical shading, colored by density gradient (blue=light → red=heavy); adjacent slices overlap 18% to hide anti-alias seams between swatches.
+- Floating projects (`IsSinking == false`) hide compensation entirely — physically meaningless.
+- Density floor 0.94 g/cm³ (`RhoFloor`): slices that would need to go lighter are clamped and flagged (`HasClampedSlices`) with a UI warning.
+- Segments table: NC and Comp are separate column groups; **Sink is always the rightmost column**.
+
+### PDF export (`FlyLinePdfExporter.cs`, ~900 lines)
+- If the project has a saved C profile, export prompts **NC or C** and suffixes the filename `_NC` / `_C`.
+- Content: header (name/date/NC-or-C), profile chart (3200×600px) with node/segment labels, full segment table, info card (core type, laser mark, color note), nozzle swatches (Lambert-gradient, matching in-app legend at 0.00 precision), AFFTA badge + CoM/Rg + taper classification.
+- C-specific PDF text is English-only per design decision; density zones and clamped-slice warnings called out explicitly.
+
+### AFFTA badge & mass-analysis chart
+- Status bar badge: `AFFTA  LW <n>  <weight> gr  ✓/✗` — computed from mass of the first 30 ft (914.4 cm, AFFTA standard length); ✓ if within ±6 gr of the nominal class.
+- **Full Line** toggle enables a "Head" column in the segments table; when set, CoM/Rg/AFFTA calculations use only head segments.
+- Mass-analysis chart (Design Mode, below main chart): red bars = head segments, blue = running line, ◆ = per-segment center of mass, dashed line = total CoM, yellow dashed = AFFTA 30ft boundary, green curve = cumulative weight.
 
 ### `FlyLineProject.cs` — `.flp` save format (JSON)
 ```json
@@ -335,14 +389,22 @@ Water: fresh density = 5th-order polynomial; viscosity = lookup table (0–40 °
   "Name": "...",
   "UseSharedDensity": true,
   "SharedDensityGCm3": 0.65,
+  "IsSinking": true,
+  "IsFullLine": false,
   "WaterType": "fresh",
   "WaterTempC": 20.0,
   "ScanPoints": [{"X": 1, "RawY": 0.85, "FilteredY": 0.82}],
   "ImportedSeries": [{"Name": "...", "Xs": [], "Ys": [], "ColorHex": "#28C996"}],
   "DesignNodes": [{"X": 5.0, "Y": 1.2}],
-  "SegmentMetadata": [{"StartCm": 0, "EndCm": 10, "Name": "Head", "SpecWeight": 0.65, "IsHead": true}]
+  "SegmentMetadata": [{"StartCm": 0, "EndCm": 10, "Name": "Head", "SpecWeight": 0.65, "IsHead": true}],
+  "NozzleDefinitions": [{"ColorHex": "DC3232", "DensityGCm3": 0.65, "Label": ""}],
+  "NozzleZones": [{"StartCm": 0, "EndCm": 100, "NozzleIndex": 0}],
+  "CompTargetSpeedMs": 0.038,
+  "ShowCompProfile": true,
+  "ColorSections": []
 }
 ```
+`ColorSections` is a legacy field kept only so old files still load; new files always use `NozzleDefinitions`/`NozzleZones`.
 
 ---
 

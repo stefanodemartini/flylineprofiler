@@ -1,6 +1,8 @@
 # .NET build output
 app/bin/
 app/obj/
+app/publish_test/
+publish/
 
 # Visual Studio / Rider
 .vs/
