@@ -4149,10 +4149,32 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         try
         {
-            var proj  = ProjectService.Load(dlg.FileName);
+            var proj      = ProjectService.Load(dlg.FileName);
+            bool hasDesign = proj.DesignNodes.Count >= 2;
+            bool hasScan   = proj.ScanPoints.Count > 0;
+
+            if (!hasDesign && !hasScan)
+            {
+                MessageBox.Show("The selected project contains no design nodes and no scan points.",
+                                "Overlay Project", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            var selection = OverlaySelection.Both;
+            if (hasDesign && hasScan)
+            {
+                var choiceDlg = new OverlaySelectDialog(proj.Name) { Owner = this };
+                if (choiceDlg.ShowDialog() != true) return;
+                selection = choiceDlg.Selection;
+            }
+            else
+            {
+                selection = hasDesign ? OverlaySelection.Design : OverlaySelection.Scan;
+            }
+
             int added = 0;
 
-            if (proj.DesignNodes.Count >= 2)
+            if (hasDesign && selection is OverlaySelection.Design or OverlaySelection.Both)
             {
                 var sorted = proj.DesignNodes.OrderBy(n => n.X).ToList();
                 _importedSeries.Add(new ImportedSeries
@@ -4165,7 +4187,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 added++;
             }
 
-            if (proj.ScanPoints.Count > 0)
+            if (hasScan && selection is OverlaySelection.Scan or OverlaySelection.Both)
             {
                 var pts = proj.ScanPoints.OrderBy(p => p.X).ToList();
                 _importedSeries.Add(new ImportedSeries
@@ -4176,13 +4198,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     Color = PickImportColor(_importedSeries.Count)
                 });
                 added++;
-            }
-
-            if (added == 0)
-            {
-                MessageBox.Show("The selected project contains no design nodes and no scan points.",
-                                "Overlay Project", MessageBoxButton.OK, MessageBoxImage.Information);
-                return;
             }
 
             _lastImportedFile = Path.GetFileName(dlg.FileName);

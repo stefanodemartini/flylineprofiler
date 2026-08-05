@@ -314,8 +314,9 @@ AFFTA  LW 5   142.3 gr   ✓
 
 ### Overlay di un Progetto Esterno
 - **Overlay Project** → selezionare un file `.flp`
-- Vengono importati: design nodes e/o scan points come serie separate
-- Entrambe le serie appaiono in legenda
+- Se il progetto contiene sia design nodes sia scan points, viene chiesto quale/i importare: **Design profile only**, **Scan profile only** o **Both profiles**
+- Se il progetto ha solo uno dei due tipi di dati, viene importato direttamente senza chiedere
+- Le serie importate appaiono in legenda
 
 ### Gestire le Overlay
 - **Clear Overlays** → rimuove tutte le serie importate (con conferma se più di una)
