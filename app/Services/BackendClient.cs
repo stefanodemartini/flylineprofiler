@@ -2,12 +2,14 @@ using System.IO;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
 using DiametroLineaDesktop.Models;
 namespace DiametroLineaDesktop.Services;
 public class BackendClient
 {
     private ClientWebSocket? _ws;
     private CancellationTokenSource? _cts;
+    private int _disconnectNotified;
     public event Action<string>? RawMessageReceived;
     public event Action? Connected;
     public event Action? Disconnected;
@@ -18,6 +20,7 @@ public class BackendClient
         _cts?.Dispose();
         _ws?.Dispose();
 
+        Interlocked.Exchange(ref _disconnectNotified, 0);
         _cts = new CancellationTokenSource(TimeSpan.FromSeconds(settings.ConnectTimeoutSeconds));
         _ws = new ClientWebSocket();
 
@@ -41,7 +44,7 @@ public class BackendClient
     {
         if (_ws is { State: WebSocketState.Open })
             await _ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "bye", CancellationToken.None);
-        Disconnected?.Invoke();
+        NotifyDisconnectedOnce();
     }
 
     public async Task SendAsync(string command)
@@ -72,10 +75,23 @@ public class BackendClient
         {
             while (ws.State == WebSocketState.Open && !ct.IsCancellationRequested)
             {
-                var segment = new ArraySegment<byte>(buffer);
-                var result = await ws.ReceiveAsync(segment, ct);
-                if (result.MessageType == WebSocketMessageType.Close) break;
-                var message = Encoding.UTF8.GetString(buffer, 0, result.Count);
+                using var messageBuffer = new MemoryStream();
+                WebSocketReceiveResult result;
+
+                do
+                {
+                    var segment = new ArraySegment<byte>(buffer);
+                    result = await ws.ReceiveAsync(segment, ct);
+
+                    if (result.MessageType == WebSocketMessageType.Close)
+                        return;
+
+                    if (result.Count > 0)
+                        messageBuffer.Write(buffer, 0, result.Count);
+
+                } while (!result.EndOfMessage);
+
+                var message = Encoding.UTF8.GetString(messageBuffer.GetBuffer(), 0, (int)messageBuffer.Length);
                 RawMessageReceived?.Invoke(message);
             }
         }
@@ -84,8 +100,14 @@ public class BackendClient
         catch (IOException) { /* network reset */ }
         finally
         {
-            Disconnected?.Invoke();
+            NotifyDisconnectedOnce();
         }
+    }
+
+    private void NotifyDisconnectedOnce()
+    {
+        if (Interlocked.Exchange(ref _disconnectNotified, 1) == 0)
+            Disconnected?.Invoke();
     }
 
     public static JsonDocument? TryParseJson(string text)
