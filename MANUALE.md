@@ -275,6 +275,12 @@ La compensazione risolve il problema fisico: sezioni di diametri diversi affonda
 - Colore corrispondente al gradiente densità; label `ρ X.XX`
 - Al ritorno alla modalità NC i colori/label originali vengono ripristinati
 
+### Salvataggio del Profilo Compensato
+Il profilo C non viene mai salvato nello stesso file del progetto NC originale. Se si salva (`Ctrl+S` o Save As) mentre si sta visualizzando "Show C":
+- Viene creato automaticamente un file separato `NomeProgetto C X.XXins.flp` (X.XX = velocità target in in/s) con lo snapshot compensato
+- Il file NC originale salva solo il proprio profilo NC — resta sempre "puro" e ricompensabile
+- Il file compensato, una volta riaperto, si apre già in modalità C e **non può essere compensato ulteriormente**: il pulsante "⚖ Compensate" e i controlli densità sono disabilitati. Per cambiare la compensazione occorre tornare al file NC originale e ricompensare da lì
+
 ---
 
 ## 8. Grafico Analisi Massa
@@ -306,7 +312,39 @@ AFFTA  LW 5   142.3 gr   ✓
 
 ---
 
-## 10. Confronto e Overlay
+## 10. Generazione Famiglia Pesi Linea (#1–#14)
+
+Dato un profilo disegnato (o ricostruito da scan), è possibile generare automaticamente le varianti dello stesso profilo per le altre classi AFTMA (#1–#14), mantenendo la stessa forma di taper e lo stesso materiale.
+
+### Come funziona
+- Il pulsante **Generate Family…** (toolbar Design Tools) apre un dialogo con una checkbox per ciascuna classe #1–#14; la classe corrente del progetto è disabilitata
+- Per ogni classe selezionata, **tutti** i diametri della linea (testa, transizione e running line) vengono scalati con lo stesso fattore, a parità di lunghezza — è quello che preserva la "forma" del profilo, running line inclusa
+- Il fattore di scala si ricava in forma chiusa (la massa nei primi 30 ft scala esattamente come il quadrato del fattore, a parità di lunghezze), quindi **ogni classe è sempre raggiungibile**, per costruzione
+- Nessuna posizione cambia (le lunghezze dei segmenti restano identiche), quindi zone ugello e laser mark non hanno bisogno di essere riposizionati
+- La densità (materiale) non viene mai toccata — resta identica in ogni classe generata
+
+### File generati
+Ogni classe selezionata produce un nuovo file `NomeProgetto #N.flp` accanto al progetto originale (che deve essere già stato salvato in precedenza). Il progetto originale non viene mai modificato.
+
+---
+
+## 11. Generazione Famiglia per Velocità di Affondamento
+
+L'opposto della generazione per peso linea (§10): stessa geometria (stesso taper, stessa classe AFFTA), densità uniforme diversa per ogni velocità di affondamento target.
+
+### Come funziona
+- Il pulsante **Generate by Sink Speed…** (toolbar Design Tools) apre un dialogo con uno slider da **Floating** a **10.0 in/s**
+- Si trascina lo slider sulla velocità desiderata e si preme **+ Add to list**; si ripete per ogni variante voluta, poi **Generate**
+- Per ogni velocità, densità (uniforme) e diametro (fattore di scala uniforme su tutta la linea) vengono risolti **insieme**: la densità si ricava con lo stesso metodo del pulsante "⏬ From sink speed…" (`SinkingSpeedCalc.DensityForTargetSinkSpeed`), il diametro si scala per compensarla in modo che la **massa nei primi 30 ft resti identica a quella della linea sorgente** — nessuna compensazione per-slice, ma nemmeno densità libera di far variare il peso
+- Risultato: tutte le varianti generate restano nella **stessa classe AFFTA** della sorgente, esattamente come nelle linee reali in famiglia (es. WF6F / WF6I / WF6S3 / WF6S5 sono tutte "WF6"). Per andare più veloci a parità di peso, il diametro si riduce (materiale più denso, meno volume); per la variante Floating (densità fissata a `RhoFloor` = 0.94 g/cm³, che galleggia), il diametro invece aumenta
+- Se una velocità richiesta supera quella raggiungibile a ρ = 2.5 g/cm³ (limite pratico) a parità di massa, il file viene generato comunque alla densità limite e segnalato nel riepilogo come "non esattamente raggiungibile"
+
+### File generati
+Ogni velocità produce un file `NomeProgetto X.XXips.flp` (o `NomeProgetto Floating.flp` per lo 0) accanto al progetto originale (che deve essere già stato salvato).
+
+---
+
+## 12. Confronto e Overlay
 
 ### Importare una Serie di Confronto
 - **Import CSV** → selezionare file (2 colonne cm/mm, o formato Dataset)
@@ -328,7 +366,7 @@ AFFTA  LW 5   142.3 gr   ✓
 
 ---
 
-## 11. Export
+## 13. Export
 
 | Funzione | Formato | Come accedere |
 |---|---|---|
@@ -351,7 +389,7 @@ Quando il progetto ha un profilo C salvato, al click Export PDF viene chiesto se
 
 ---
 
-## 12. Impostazioni
+## 14. Impostazioni
 
 **Settings** (pulsante ingranaggio) → finestra modale.
 
@@ -383,7 +421,7 @@ Quando il progetto ha un profilo C salvato, al click Export PDF viene chiesto se
 
 ---
 
-## 13. Interazione con il Grafico
+## 15. Interazione con il Grafico
 
 ### Navigazione
 - **Scroll mouse**: zoom in/out
@@ -404,7 +442,7 @@ In Design Mode è possibile trascinare il box dell'etichetta di ogni nodo. La po
 
 ---
 
-## 14. Shortcut Tastiera
+## 16. Shortcut Tastiera
 
 | Shortcut | Azione |
 |---|---|
@@ -416,7 +454,7 @@ In Design Mode è possibile trascinare il box dell'etichetta di ogni nodo. La po
 
 ---
 
-## 15. Formati File
+## 17. Formati File
 
 ### `.flp` (FlyLine Project)
 
@@ -436,7 +474,8 @@ JSON con i campi principali:
   "WaterType": "fresh",
   "WaterTempC": 15.0,
   "CompTargetSpeedMs": 0.042,
-  "ShowCompProfile": true
+  "ShowCompProfile": true,
+  "IsCompensatedDerivative": false
 }
 ```
 
@@ -465,3 +504,4 @@ Position cm,Diameter mm
 | **EMA** | Exponential Moving Average — filtro digitale smoothing |
 | **Frustum** | Tronco di cono — forma geometrica di un segmento conico |
 | **ρ (rho)** | Densità del materiale in g/cm³ |
+| **Snapshot compensato** | File `.flp` forkato al salvataggio da un profilo C — non ricompensabile |

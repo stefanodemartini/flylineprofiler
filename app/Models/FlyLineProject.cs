@@ -58,6 +58,8 @@ public class FlyLineProject
     public double CompTargetSpeedMs  { get; set; } = 0.0;
     /// <summary>Whether the compensated view was active when the project was last saved.</summary>
     public bool   ShowCompProfile    { get; set; } = false;
+    /// <summary>True if this file is a forked compensated snapshot — it must not be compensated further.</summary>
+    public bool   IsCompensatedDerivative { get; set; } = false;
 }
 
 /// <summary>One nozzle = one material: a fixed (colour, density) compound.</summary>

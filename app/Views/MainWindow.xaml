@@ -463,6 +463,14 @@
                                 Style="{StaticResource BtnGhost}"
                                 Click="ExportPdf_Click"
                                 ToolTip="Export design sheet as PDF"/>
+                        <Button Content="Generate Family…"
+                                Style="{StaticResource BtnGhost}"
+                                Click="GenerateLineFamily_Click"
+                                ToolTip="Generate sibling designs for other AFTMA line weights (#1–#14) — same taper shape and material, scaled to hit each class's grain weight"/>
+                        <Button Content="Generate by Sink Speed…"
+                                Style="{StaticResource BtnGhost}"
+                                Click="GenerateSinkSpeedFamily_Click"
+                                ToolTip="Generate sibling designs at different target sink speeds — same geometry, only the uniform material density changes"/>
                         <!-- Sinking-only tools — hidden for floating lines -->
                         <StackPanel x:Name="SinkingToolsPanel" Orientation="Horizontal" VerticalAlignment="Center">
                             <Button x:Name="CompensateBtn"

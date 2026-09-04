@@ -37,6 +37,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private bool _showDesignLayer  = true;
     private bool _showSinkSpeedMap = false;
     private bool _inCompMode          = false;
+    private bool _isCompensatedDerivative = false; // true when the loaded file is itself a forked C snapshot
     private bool _showOriginalProfile = false;
 
     // Segment drawing — node.Y stores FULL DIAMETER in mm (not radius)
@@ -848,6 +849,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _useSharedDensity = true;
         _sharedDensity    = 0.0;
         _waterIsSalt      = false;
+        _isCompensatedDerivative = false;
 
         // Clear analysis chart
         if (_plotInitialized)
@@ -863,26 +865,20 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _vm.Points.CollectionChanged += Points_CollectionChanged;
     }
 
-    private void SaveProjectToFile(string path)
+    /// <summary>
+    /// Assembles a <see cref="FlyLineProject"/> from live MainWindow state. Comp-related fields
+    /// are passed in explicitly (rather than read from live state) so the same builder can produce
+    /// both the base NC file and a forked compensated-snapshot file — see <see cref="SaveProjectToFile"/>.
+    /// </summary>
+    private FlyLineProject BuildProjectObject(
+        List<ImportedSeries> seriesToSave,
+        double compTargetSpeedMs, bool showCompProfile, bool isCompensatedDerivative,
+        string? nameOverride = null)
     {
-        // Overlays are comparison aids, not project data — only persist them on request
-        var seriesToSave = _importedSeries;
-        if (_importedSeries.Count > 0)
-        {
-            string names = string.Join("\n", _importedSeries.Select(s => "  • " + s.Name));
-            var answer = MessageBox.Show(
-                $"Include the comparison overlays in the saved project?\n\n{names}\n\n" +
-                "Yes — overlays reappear when you reopen this project\n" +
-                "No — save the project without them (overlays stay on screen)",
-                "Save Overlays?", MessageBoxButton.YesNo, MessageBoxImage.Question);
-            if (answer != MessageBoxResult.Yes)
-                seriesToSave = new List<ImportedSeries>();
-        }
-
-        var project = new FlyLineProject
+        return new FlyLineProject
         {
             Version            = 1,
-            Name               = _projectName,
+            Name               = nameOverride ?? _projectName,
             CreatedAt          = _projectCreatedAt,
             UseSharedDensity   = _useSharedDensity,
             SharedDensityGCm3  = _sharedDensity,
@@ -933,16 +929,66 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                                     IsHead     = s.IsHead
                                })
                                .ToList(),
-            CompTargetSpeedMs = ProjectSegments.Any(s => s.HasCompensation) ? _compTargetSpeedMs : 0.0,
-            ShowCompProfile   = _inCompMode,
+            CompTargetSpeedMs       = compTargetSpeedMs,
+            ShowCompProfile         = showCompProfile,
+            IsCompensatedDerivative = isCompensatedDerivative,
         };
+    }
+
+    private static string SanitizeFileName(string name)
+    {
+        foreach (char c in Path.GetInvalidFileNameChars())
+            name = name.Replace(c, '_');
+        return name;
+    }
+
+    private void SaveProjectToFile(string path)
+    {
+        // Overlays are comparison aids, not project data — only persist them on request
+        var seriesToSave = _importedSeries;
+        if (_importedSeries.Count > 0)
+        {
+            string names = string.Join("\n", _importedSeries.Select(s => "  • " + s.Name));
+            var answer = MessageBox.Show(
+                $"Include the comparison overlays in the saved project?\n\n{names}\n\n" +
+                "Yes — overlays reappear when you reopen this project\n" +
+                "No — save the project without them (overlays stay on screen)",
+                "Save Overlays?", MessageBoxButton.YesNo, MessageBoxImage.Question);
+            if (answer != MessageBoxResult.Yes)
+                seriesToSave = new List<ImportedSeries>();
+        }
+
+        // A compensated profile is never saved into the base NC file — it forks a sibling
+        // file instead, so the original design stays a pure, always-recompensable NC source.
+        // This triggers whenever compensation exists, regardless of whether "Show C" happens
+        // to be toggled on at this exact moment — otherwise saving while looking at NC would
+        // silently drop the compensation work instead of preserving it in the fork.
+        bool hasComp = ProjectSegments.Any(s => s.HasCompensation);
+        string? compSavedFileName = null;
+        if (hasComp && !_isCompensatedDerivative)
+        {
+            string compName = $"{_projectName} C {_compTargetSpeedIns:0.00}ins";
+            var compProject = BuildProjectObject(seriesToSave, _compTargetSpeedMs,
+                showCompProfile: true, isCompensatedDerivative: true, nameOverride: compName);
+            string compPath = Path.Combine(Path.GetDirectoryName(path)!,
+                SanitizeFileName(compName) + ProjectService.FileExtension);
+            ProjectService.Save(compProject, compPath);
+            compSavedFileName = Path.GetFileName(compPath);
+        }
+
+        var project = BuildProjectObject(seriesToSave,
+            compTargetSpeedMs: _isCompensatedDerivative ? _compTargetSpeedMs : 0.0,
+            showCompProfile:   _isCompensatedDerivative ? _inCompMode : false,
+            isCompensatedDerivative: _isCompensatedDerivative);
 
         ProjectService.Save(project, path);
         _currentProjectPath = path;
         _isDirty            = false;
         RecentFilesService.Add(path);
         UpdateProjectTitle();
-        UiStatus = $"Project saved: {Path.GetFileName(path)}";
+        UiStatus = compSavedFileName != null
+            ? $"Project saved: {Path.GetFileName(path)}  |  Compensated snapshot: {compSavedFileName}"
+            : $"Project saved: {Path.GetFileName(path)}";
     }
 
     private void LoadProjectFromFile(string path)
@@ -1059,6 +1105,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _projectCreatedAt   = project.CreatedAt;
         _currentProjectPath = path;
         _isDirty            = false;
+        _isCompensatedDerivative = project.IsCompensatedDerivative;
         _lastImportedFile   = _importedSeries.Count > 0 ? _importedSeries[^1].Name : "-";
         RecentFilesService.Add(path);
 
@@ -2569,6 +2616,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private void CompSpeedSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
+        if (_isCompensatedDerivative) return; // frozen snapshot — never recompute, even from a programmatic slider update
         _compTargetSpeedMs  = e.NewValue / 39.3701;
         _compTargetSpeedIns = e.NewValue;
         if (CompSpeedValueLabel != null)
@@ -2691,6 +2739,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         // "Compensate" button label reflects whether C profile exists
         CompensateBtn.Content = hasComp ? "⚖ Recompute C" : "⚖ Compensate";
+        // A compensated snapshot file can't be compensated again — edit the original design instead
+        CompensateBtn.IsEnabled = !_isCompensatedDerivative;
+        CompensateBtn.ToolTip = _isCompensatedDerivative
+            ? "This file is already a compensated snapshot — edit the original design instead"
+            : "Compute compensated (C) profile — mass-preserving per-slice bisection for uniform sink speed";
+        NcDensityPanel.IsEnabled = !_isCompensatedDerivative;
 
         // "Show C" toggle: visible only when comp data exists
         ShowCompToggle.Visibility = hasComp ? Visibility.Visible   : Visibility.Collapsed;
@@ -2701,8 +2755,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         NcDensityPanel.Visibility     = c ? Visibility.Collapsed : Visibility.Visible;
         // NC ghost toggle: only when in comp mode
         ShowOriginalToggle.Visibility = c ? Visibility.Visible   : Visibility.Collapsed;
-        // Speed slider: visible as long as comp data exists
-        CompSpeedPanel.Visibility     = hasComp ? Visibility.Visible   : Visibility.Collapsed;
+        // Speed slider: visible as long as comp data exists; locked on a compensated snapshot
+        // (same "must not be compensated further" rule as CompensateBtn/NcDensityPanel above)
+        CompSpeedPanel.Visibility  = hasComp ? Visibility.Visible : Visibility.Collapsed;
+        CompSpeedSlider.IsEnabled  = !_isCompensatedDerivative;
         if (hasComp) UpdateCompSpeedSlider();
 
         // Nozzle densities: show comp-quantized values in C mode, shared density in NC mode
@@ -2821,43 +2877,16 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private string ComputeAfftaBadge()
     {
-        const double target30FtCm  = 914.4;   // 30 ft in cm
-        const double gramsToGrains = 15.4324;
+        var (lw, grains) = LineWeightFamilyCalc.ClassifyAffta(ProjectSegments.OrderBy(s => s.StartCm));
+        if (lw == 0) return "AFFTA: —";
 
-        var segs = ProjectSegments.OrderBy(s => s.StartCm).ToList();
-        if (segs.Count == 0 || segs.All(s => s.SpecWeightGCm3 <= 0))
-            return "AFFTA: —";
-
-        double totalMassG = 0;
-        double covered    = 0;
-        foreach (var seg in segs)
-        {
-            if (covered >= target30FtCm || seg.StartCm >= target30FtCm) break;
-            double segLen  = seg.LengthCm;
-            double usedLen = Math.Min(segLen, target30FtCm - covered);
-            if (segLen <= 0 || seg.SpecWeightGCm3 <= 0) { covered += usedLen; continue; }
-            double frac    = usedLen / segLen;
-            double r1Mm     = seg.StartDiameterMm / 2.0;
-            double r2Mm     = seg.EndDiameterMm   / 2.0;
-            double r2pMm    = r1Mm + (r2Mm - r1Mm) * frac;
-            double lenMm    = usedLen * 10.0;
-            double volMm3   = Math.PI * lenMm / 3.0 * (r1Mm*r1Mm + r1Mm*r2pMm + r2pMm*r2pMm);
-            totalMassG     += volMm3 / 1000.0 * seg.SpecWeightGCm3;
-            covered        += usedLen;
-        }
-
-        if (totalMassG <= 0) return "AFFTA: —";
-
-        double grains = totalMassG * gramsToGrains;
-        (int lw, double gr)[] targets =
-        {
-            (1,60),(2,80),(3,100),(4,120),(5,140),(6,160),(7,185),
-            (8,210),(9,240),(10,280),(11,330),(12,380),(13,450),(14,500)
-        };
-        var best  = targets.OrderBy(t => Math.Abs(t.gr - grains)).First();
-        bool ok   = Math.Abs(best.gr - grains) <= 6.0;
-        return $"AFFTA  LW {best.lw}   {grains:0.0} gr   {(ok ? "✓" : "✗ (target " + best.gr + " gr)")}";
+        double targetGr = LineWeightFamilyCalc.Targets.First(t => t.Lw == lw).Gr;
+        bool ok = Math.Abs(targetGr - grains) <= 6.0;
+        return $"AFFTA  LW {lw}   {grains:0.0} gr   {(ok ? "✓" : "✗ (target " + targetGr + " gr)")}";
     }
+
+    /// <summary>Current AFFTA line-weight class number, or 0 if it can't be computed (no density set).</summary>
+    private int ComputeCurrentAfftaLw() => LineWeightFamilyCalc.ClassifyAffta(ProjectSegments.OrderBy(s => s.StartCm)).Lw;
 
     private void ReverseNodes_Click(object sender, RoutedEventArgs e)
     {
@@ -3643,6 +3672,211 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             try { if (System.IO.File.Exists(dlg.FileName)) System.IO.File.Delete(dlg.FileName); } catch { }
             MessageBox.Show($"PDF export failed:\n{ex.Message}", "Export PDF", MessageBoxButton.OK, MessageBoxImage.Error);
         }
+    }
+
+    private void GenerateLineFamily_Click(object sender, RoutedEventArgs e)
+    {
+        if (ProjectSegments.Count == 0 || ProjectSegments.All(s => s.SpecWeightGCm3 <= 0))
+        {
+            MessageBox.Show("Set material density first — the AFFTA class can't be computed without it.",
+                            "Generate Family", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        if (_currentProjectPath == null)
+        {
+            MessageBox.Show("Save the project first — generated files are named after it.",
+                            "Generate Family", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        int currentLw = ComputeCurrentAfftaLw();
+        var dlg = new GenerateLineFamilyDialog(currentLw) { Owner = this };
+        if (dlg.ShowDialog() != true || dlg.SelectedWeights.Count == 0) return;
+
+        var (sorted, sourceGrams) = LineWeightFamilyCalc.PrepareSource(ProjectSegments);
+        var variants = dlg.SelectedWeights.Select(lw =>
+        {
+            double targetGr = LineWeightFamilyCalc.Targets.First(t => t.Lw == lw).Gr;
+            var result = LineWeightFamilyCalc.GenerateFamilyMember(sorted, sourceGrams, targetGr);
+            return ($"#{lw}", result, "target not reachable by scaling this profile", (string?)null);
+        }).ToList();
+
+        SaveFamilyVariants("Generate Family", variants);
+    }
+
+    private void GenerateSinkSpeedFamily_Click(object sender, RoutedEventArgs e)
+    {
+        if (ProjectSegments.Count == 0)
+        {
+            MessageBox.Show("No segments yet — add design nodes first.",
+                            "Generate Family by Sink Speed", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        if (_currentProjectPath == null)
+        {
+            MessageBox.Show("Save the project first — generated files are named after it.",
+                            "Generate Family by Sink Speed", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        if (ProjectSegments.All(s => s.SpecWeightGCm3 <= 0))
+        {
+            MessageBox.Show("Set material density first — the source line's mass can't be computed without it.",
+                            "Generate Family by Sink Speed", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        var dlg = new GenerateSinkSpeedFamilyDialog { Owner = this };
+        if (dlg.ShowDialog() != true || dlg.SelectedSpeedsIns.Count == 0) return;
+
+        var (sorted, sourceGrams) = LineWeightFamilyCalc.PrepareSource(ProjectSegments);
+        double sourceGrains = sourceGrams * LineWeightFamilyCalc.GramsToGrains;
+
+        var variants = dlg.SelectedSpeedsIns.Select(ips =>
+        {
+            double targetMs = ips / 39.3701;
+            string label = ips <= 0 ? "Floating" : $"{ips:0.00}ips";
+            var result = LineWeightFamilyCalc.GenerateSinkSpeedFamilyMember(
+                sorted, _waterIsSalt, _waterTempC, targetMs, sourceGrains);
+
+            string? warning = null;
+            if (result.Achieved && !result.SpeedAchievable)
+            {
+                double density = result.Segments.Count > 0 ? result.Segments[0].SpecWeightGCm3 : 0;
+                warning = density <= 1.05
+                    ? "target speed too slow to reach even at the practical minimum density — speed is approximate"
+                    : "required density hit the practical 2.5 g/cm³ ceiling — speed is approximate";
+            }
+            return (label, result, "target not reachable while conserving the line's mass", warning);
+        }).ToList();
+
+        SaveFamilyVariants("Generate Family by Sink Speed", variants, postProcess: (project, result, label) =>
+        {
+            project.IsSinking = label != "Floating";
+            // The source's M1-M4 nozzle densities describe its OWN material — a sink-speed
+            // variant gets a newly-solved uniform density, so the material panel must follow it
+            // rather than keep showing the source's now-stale values.
+            double newDensity = result.Segments.Count > 0 ? result.Segments[0].SpecWeightGCm3 : 0;
+            foreach (var n in project.NozzleDefinitions) n.DensityGCm3 = newDensity;
+        });
+    }
+
+    /// <summary>
+    /// Shared save/report flow for both family generators: warns once about any files that
+    /// would be overwritten, then saves each achieved variant and summarizes what happened.
+    /// </summary>
+    private void SaveFamilyVariants(
+        string dialogTitle,
+        List<(string Label, LineWeightFamilyCalc.FamilyGenerationResult Result, string SkipReason, string? Warning)> variants,
+        Action<FlyLineProject, LineWeightFamilyCalc.FamilyGenerationResult, string>? postProcess = null)
+    {
+        string folder   = Path.GetDirectoryName(_currentProjectPath)!;
+        string baseName = Path.GetFileNameWithoutExtension(_currentProjectPath)!;
+
+        var wouldOverwrite = variants
+            .Select(v => Path.Combine(folder, SanitizeFileName($"{baseName} {v.Label}") + ProjectService.FileExtension))
+            .Where(File.Exists)
+            .Select(Path.GetFileName)
+            .ToList();
+        if (wouldOverwrite.Count > 0)
+        {
+            var answer = MessageBox.Show(
+                $"{wouldOverwrite.Count} file(s) already exist and will be overwritten:\n\n" +
+                string.Join("\n", wouldOverwrite) + "\n\nContinue?",
+                dialogTitle, MessageBoxButton.YesNo, MessageBoxImage.Warning);
+            if (answer != MessageBoxResult.Yes) return;
+        }
+
+        var generated = new List<string>();
+        var notes     = new List<string>();
+
+        foreach (var (label, result, skipReason, warning) in variants)
+        {
+            if (!result.Achieved)
+            {
+                notes.Add($"{label} — {skipReason}");
+                continue;
+            }
+
+            var project = BuildFamilyMemberProject(result, $"{_projectName} {label}");
+            postProcess?.Invoke(project, result, label);
+            string filePath = Path.Combine(folder, SanitizeFileName($"{baseName} {label}") + ProjectService.FileExtension);
+            ProjectService.Save(project, filePath);
+            generated.Add(Path.GetFileName(filePath));
+            if (warning != null) notes.Add($"{label} — {warning}");
+        }
+
+        string summary = generated.Count > 0
+            ? $"Generated {generated.Count} file(s):\n" + string.Join("\n", generated)
+            : "No files generated.";
+        if (notes.Count > 0)
+            summary += "\n\nNotes:\n" + string.Join("\n", notes);
+        UiStatus = $"{dialogTitle}: {generated.Count} generated";
+        MessageBox.Show(summary, dialogTitle, MessageBoxButton.OK,
+                         notes.Count > 0 ? MessageBoxImage.Warning : MessageBoxImage.Information);
+    }
+
+    /// <summary>Builds a standalone NC project for one generated family member.</summary>
+    private FlyLineProject BuildFamilyMemberProject(LineWeightFamilyCalc.FamilyGenerationResult result, string name)
+    {
+        var segs   = result.Segments;
+        var remap  = result.RemapCm;
+
+        // Laser-mark-from-tip is a free-text mm value; remap it only if it parses as a number.
+        string remappedFromTip = _laserMarkFromTip;
+        if (double.TryParse(_laserMarkFromTip, NumberStyles.Float, CultureInfo.InvariantCulture, out double tipMm))
+        {
+            double newTipMm = remap(tipMm / 10.0) * 10.0;
+            remappedFromTip = newTipMm.ToString("0.#", CultureInfo.InvariantCulture);
+        }
+
+        return new FlyLineProject
+        {
+            Version            = 1,
+            Name               = name,
+            CreatedAt          = DateTime.UtcNow,
+            UseSharedDensity   = _useSharedDensity,
+            SharedDensityGCm3  = segs.Count > 0 ? segs[0].SpecWeightGCm3 : _sharedDensity,
+            IsSinking          = _isSinking,
+            IsFullLine         = _isFullLine,
+            WaterType          = _waterIsSalt ? "salt" : "fresh",
+            WaterTempC         = _waterTempC,
+            DesignNodes        = BuildDesignNodesFromSegments(segs),
+            DesignLineColorHex = Nozzles.Count > 0 ? Nozzles[0].ColorHex : "DC3232",
+            ColorNote          = _colorNote,
+            CoreType           = _coreType,
+            LaserMark          = _laserMark,
+            LaserMarkFromTipMm = remappedFromTip,
+            LaserMarkFromEndMm = _laserMarkFromEnd,
+            NozzleDefinitions  = Nozzles.Select(n => new NozzleDefinition
+                                 { ColorHex = n.ColorHex, DensityGCm3 = n.DensityGCm3,
+                                   Label = n.Label == "N/A" ? string.Empty : n.Label })
+                                 .ToList(),
+            NozzleZones = NozzleZones.Select(z => new NozzleZone
+                          { StartCm = remap(z.StartCm), EndCm = remap(z.EndCm), NozzleIndex = z.NozzleIndex })
+                          .ToList(),
+            SegmentMetadata = segs.Select(s => new ProjectSegmentMeta
+                              {
+                                  StartCm    = s.StartCm,
+                                  EndCm      = s.EndCm,
+                                  Name       = s.Name,
+                                  SpecWeight = s.SpecWeightGCm3,
+                                  IsHead     = s.IsHead
+                              }).ToList(),
+            CompTargetSpeedMs       = 0.0,
+            ShowCompProfile         = false,
+            IsCompensatedDerivative = false,
+        };
+    }
+
+    private static List<ProjectDesignNode> BuildDesignNodesFromSegments(List<ProjectSegment> segs)
+    {
+        var nodes = new List<ProjectDesignNode>();
+        if (segs.Count == 0) return nodes;
+        var sorted = segs.OrderBy(s => s.StartCm).ToList();
+        nodes.Add(new ProjectDesignNode { X = sorted[0].StartCm, Y = sorted[0].StartDiameterMm });
+        foreach (var s in sorted)
+            nodes.Add(new ProjectDesignNode { X = s.EndCm, Y = s.EndDiameterMm });
+        return nodes;
     }
 
     // Export segments: full segment table with geometry
