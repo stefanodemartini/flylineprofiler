@@ -60,6 +60,12 @@ public class FlyLineProject
     public bool   ShowCompProfile    { get; set; } = false;
     /// <summary>True if this file is a forked compensated snapshot — it must not be compensated further.</summary>
     public bool   IsCompensatedDerivative { get; set; } = false;
+    /// <summary>
+    /// When a zone was given its own density (rather than a whole-line target-speed compensation),
+    /// whether its diameters were mass-adjusted (true, the default) or left as drawn (false).
+    /// Re-applied silently on load so a zone-derived C profile doesn't need re-confirming every time.
+    /// </summary>
+    public bool   ZoneDensityAdaptDiameters { get; set; } = true;
 }
 
 /// <summary>One nozzle = one material: a fixed (colour, density) compound.</summary>

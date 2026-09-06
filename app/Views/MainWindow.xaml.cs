@@ -39,6 +39,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private bool _inCompMode          = false;
     private bool _isCompensatedDerivative = false; // true when the loaded file is itself a forked C snapshot
     private bool _showOriginalProfile = false;
+    // True when the current C profile came from a manually-assigned zone density (this file's
+    // Nozzles/Zones already state the materials) rather than the whole-line target-speed Compensate
+    // button (which needs SyncNozzleDensitiesFromComp to invent the materials from the gradient).
+    private bool _zoneDerivedComp     = false;
+    private bool _lastZoneAdaptChoice = true; // "adjust diameters to preserve mass" — sticky across edits
 
     // Segment drawing — node.Y stores FULL DIAMETER in mm (not radius)
     private readonly List<(double X, double Y)> _segmentNodes = new();
@@ -57,7 +62,13 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     // Nozzle materials (fixed 4) + zone assignments
     public ObservableCollection<NozzleDefinitionVm> Nozzles    { get; } = new();
     public ObservableCollection<NozzleZoneVm>       NozzleZones { get; } = new();
+    // Subset of Nozzles actually shown in the grid: only the materials the flyline really needs
+    // (M1 alone for a single-material line; more only when distinct colours/densities are in use).
+    public ObservableCollection<NozzleDefinitionVm> VisibleNozzles { get; } = new();
     private int _activeNozzleIndex = 0;
+    // Two densities closer than this are treated as the same material (same nozzle) —
+    // below the practical resolution of blending/extrusion in production.
+    private const double DensityMergeThreshold = 0.02;
 
     private string _colorNote = string.Empty;
     public string ColorNote
@@ -341,12 +352,13 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             Nozzles.Add(noz);
         }
         Nozzles[0].IsActive = true;
+        RefreshVisibleNozzles();
         NozzleZones.CollectionChanged += (_, e) =>
         {
             if (e.NewItems != null)
                 foreach (NozzleZoneVm z in e.NewItems)
                     z.PropertyChanged += (_, _) => UpdateNozzleUsageLabels();
-            RefreshPlot(); MarkDirty(); UpdateNozzleUsageLabels();
+            RefreshPlot(); MarkDirty(); UpdateNozzleUsageLabels(); RefreshVisibleNozzles();
         };
 
         PlotControl.Refresh();
@@ -829,6 +841,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             Nozzles[ni].Label       = string.Empty;
         }
         NozzleZones.Clear();
+        SetActiveNozzle(0);
+        _zoneDerivedComp     = false;
+        _lastZoneAdaptChoice = true;
         UpdateNozzleBadge();
         _colorNote = string.Empty;
         OnPropertyChanged(nameof(ColorNote));
@@ -850,6 +865,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _sharedDensity    = 0.0;
         _waterIsSalt      = false;
         _isCompensatedDerivative = false;
+        _inCompMode       = false;
 
         // Clear analysis chart
         if (_plotInitialized)
@@ -873,7 +889,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private FlyLineProject BuildProjectObject(
         List<ImportedSeries> seriesToSave,
         double compTargetSpeedMs, bool showCompProfile, bool isCompensatedDerivative,
-        string? nameOverride = null)
+        string? nameOverride = null, bool zoneDensityAdaptDiameters = true)
     {
         return new FlyLineProject
         {
@@ -932,7 +948,63 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             CompTargetSpeedMs       = compTargetSpeedMs,
             ShowCompProfile         = showCompProfile,
             IsCompensatedDerivative = isCompensatedDerivative,
+            ZoneDensityAdaptDiameters = zoneDensityAdaptDiameters,
         };
+    }
+
+    /// <summary>
+    /// Builds the forked compensated-snapshot project with its OWN independent geometry — one
+    /// node roughly every 1cm (a slice boundary), each carrying that slice's own density in
+    /// SegmentMetadata — instead of the NC source's nodes plus a recipe to regenerate C on load.
+    /// "C e NC sono due file distinti, completamente": reopening this file needs no recomputation
+    /// and no dependency on the source file at all.
+    /// </summary>
+    private FlyLineProject BuildCompensatedSnapshotProject(List<ImportedSeries> seriesToSave, string name)
+    {
+        var nodes = new List<ProjectDesignNode>();
+        var meta  = new List<ProjectSegmentMeta>();
+
+        foreach (var seg in ProjectSegments.OrderBy(s => s.StartCm).Where(s => s.HasCompensation))
+        {
+            int ns = seg.CompSliceDiamsMm.Length;
+            if (ns == 0) continue;
+
+            // Contiguous with the previous segment (the normal case): continue the same polyline —
+            // share its last node as this segment's start instead of adding a second point at the
+            // same position, which would otherwise leave one orphan node with no density behind it
+            // and shift every following segment's restored density by one index.
+            bool continuous = nodes.Count > 0 && Math.Abs(seg.StartCm - nodes[^1].X) < 1e-6;
+            if (!continuous)
+                nodes.Add(new ProjectDesignNode { X = seg.StartCm, Y = seg.CompSliceDiamsMm[0] });
+
+            for (int i = 0; i < ns; i++)
+            {
+                double xEnd = i < ns - 1
+                    ? seg.StartCm + (seg.CompSliceXsCm[i] + seg.CompSliceXsCm[i + 1]) / 2.0
+                    : seg.EndCm;
+                double dEnd = i < ns - 1
+                    ? (seg.CompSliceDiamsMm[i] + seg.CompSliceDiamsMm[i + 1]) / 2.0
+                    : seg.CompSliceDiamsMm[i];
+                double xBeforeThisPiece = nodes[^1].X;
+                if (xEnd <= xBeforeThisPiece) xEnd = xBeforeThisPiece + 1e-4; // keep X strictly increasing
+                nodes.Add(new ProjectDesignNode { X = xEnd, Y = dEnd });
+
+                meta.Add(new ProjectSegmentMeta
+                {
+                    StartCm = xBeforeThisPiece, EndCm = xEnd,
+                    Name = seg.Name, SpecWeight = seg.CompSliceDensities[i], IsHead = seg.IsHead
+                });
+            }
+        }
+
+        var project = BuildProjectObject(seriesToSave, compTargetSpeedMs: 0.0,
+            showCompProfile: true, isCompensatedDerivative: true, nameOverride: name,
+            zoneDensityAdaptDiameters: _lastZoneAdaptChoice);
+        project.DesignNodes       = nodes;
+        project.SegmentMetadata   = meta;
+        project.UseSharedDensity  = false;
+        project.SharedDensityGCm3 = 0;
+        return project;
     }
 
     private static string SanitizeFileName(string name)
@@ -967,19 +1039,25 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         string? compSavedFileName = null;
         if (hasComp && !_isCompensatedDerivative)
         {
-            string compName = $"{_projectName} C {_compTargetSpeedIns:0.00}ins";
-            var compProject = BuildProjectObject(seriesToSave, _compTargetSpeedMs,
-                showCompProfile: true, isCompensatedDerivative: true, nameOverride: compName);
+            string compName = _zoneDerivedComp
+                ? $"{_projectName} C zones"
+                : $"{_projectName} C {_compTargetSpeedIns:0.00}ins";
+            var compProject = BuildCompensatedSnapshotProject(seriesToSave, compName);
             string compPath = Path.Combine(Path.GetDirectoryName(path)!,
                 SanitizeFileName(compName) + ProjectService.FileExtension);
             ProjectService.Save(compProject, compPath);
+            RecentFilesService.Add(compPath);
             compSavedFileName = Path.GetFileName(compPath);
         }
 
+        // Re-saving an already-baked snapshot just persists its current (already independent)
+        // state as-is — its own DesignNodes/SegmentMetadata are the compensated geometry, not a
+        // recipe, so there is nothing left to recompute on the next load.
         var project = BuildProjectObject(seriesToSave,
-            compTargetSpeedMs: _isCompensatedDerivative ? _compTargetSpeedMs : 0.0,
-            showCompProfile:   _isCompensatedDerivative ? _inCompMode : false,
-            isCompensatedDerivative: _isCompensatedDerivative);
+            compTargetSpeedMs: 0.0,
+            showCompProfile:   _isCompensatedDerivative && _inCompMode,
+            isCompensatedDerivative: _isCompensatedDerivative,
+            zoneDensityAdaptDiameters: _lastZoneAdaptChoice);
 
         ProjectService.Save(project, path);
         _currentProjectPath = path;
@@ -1067,6 +1145,18 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     { StartCm = cs.StartCm, EndCm = cs.EndCm, NozzleIndex = nozzleIdx });
             }
         }
+
+        // Migration: files saved before nozzle density was correctly scoped to M1-plus-real-zones
+        // may have M2-M4 stuck at a stale copied-over density with no zone actually using them.
+        // A compensated-derivative snapshot's densities are its own real data — leave those alone.
+        if (!project.IsCompensatedDerivative)
+        {
+            var usedByZone = new HashSet<int>(NozzleZones.Select(z => z.NozzleIndex));
+            for (int i = 1; i < Nozzles.Count; i++)
+                if (!usedByZone.Contains(i)) Nozzles[i].DensityGCm3 = 0;
+        }
+
+        SetActiveNozzle(0);
         UpdateNozzleBadge();
         _colorNote = project.ColorNote ?? string.Empty;
         OnPropertyChanged(nameof(ColorNote));
@@ -1085,7 +1175,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         for (int mi = 0; mi < sortedMeta.Count; mi++)
             _segmentMetadata[mi] = (sortedMeta[mi].Name, sortedMeta[mi].SpecWeight, sortedMeta[mi].IsHead);
 
-        _useSharedDensity = true; // always uniform
+        // Normal designs always use one shared material; a compensated snapshot instead carries
+        // each segment's own baked density (restored above into _segmentMetadata) — see
+        // BuildCompensatedSnapshotProject / the compensated-profile restore block below.
+        _useSharedDensity = !project.IsCompensatedDerivative;
         _sharedDensity    = project.SharedDensityGCm3;
         // Old projects may have had per-segment densities with SharedDensityGCm3 = 0 — infer from meta
         if (_sharedDensity <= 0 && project.SegmentMetadata.Any(m => m.SpecWeight > 0))
@@ -1114,14 +1207,32 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         RefreshPlot();
         FitAfterRefresh();
         RefreshSegmentTable();
-        SpWeightColumn.IsReadOnly = _useSharedDensity;
+        // A baked compensated snapshot is locked (IsCompensatedDerivative) even though it now has
+        // real per-segment density — you edit material by going back to the source, not by
+        // hand-editing slice densities here.
+        SpWeightColumn.IsReadOnly = _useSharedDensity || _isCompensatedDerivative;
 
-        // Restore compensated profile if one was saved
+        // Restore compensated profile if one was saved.
+        _lastZoneAdaptChoice = project.ZoneDensityAdaptDiameters;
         if (project.CompTargetSpeedMs > 0 && _isSinking && ProjectSegments.Any(s => s.SpecWeightGCm3 > 0))
         {
+            // Legacy recipe-based fork (files saved before compensated snapshots became
+            // self-contained): recompute C from the NC source geometry + the saved target speed.
             _compTargetSpeedMs = project.CompTargetSpeedMs;
             ComputeCompensation();
             _inCompMode = project.ShowCompProfile;
+            UpdateCompModeUI();
+        }
+        else if (project.IsCompensatedDerivative && !_useSharedDensity)
+        {
+            // Baked compensated snapshot — "C e NC sono due file distinti, completamente": each
+            // segment already carries its own real density (SegmentMetadata), so there is nothing
+            // to recompute. Wrap each segment as a trivial one-slice compensation purely so the
+            // existing C-mode rendering/UI (colours, Comp. Sink column, badge, fork-on-save) treats
+            // this file's own data as authoritative.
+            BakeLoadedSegmentsAsCompensation();
+            _zoneDerivedComp = true;
+            _inCompMode      = project.ShowCompProfile;
             UpdateCompModeUI();
         }
 
@@ -1815,6 +1926,23 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     }
 
     /// <summary>
+    /// The colour to paint at one slice of a C profile: if a real Nozzle Zone covers this
+    /// position, its own user-chosen colour (or M1's, outside any zone) — otherwise (no zones
+    /// defined at all, e.g. a plain physics target-speed compensation) the auto density gradient.
+    /// Used for both the live preview and a loaded baked snapshot alike.
+    /// </summary>
+    private ScottColor GetSliceColor(double xAbsCm, double density, double minDens, double densRng)
+    {
+        if (NozzleZones.Count > 0)
+        {
+            var zone = NozzleZones.FirstOrDefault(z => xAbsCm >= z.StartCm && xAbsCm < z.EndCm);
+            string hex = zone != null ? zone.ColorHex : (Nozzles.Count > 0 ? Nozzles[0].ColorHex : "DC3232");
+            if (TryParseHexColor(hex, out var col)) return col;
+        }
+        return DensityColor(densRng > 0 ? Math.Clamp((density - minDens) / densRng, 0, 1) : 0.5);
+    }
+
+    /// <summary>
     /// Builds a node list from compensated segment start/end diameters so the
     /// compensated profile can be rendered in the same style as the design profile.
     /// A tiny epsilon is added when two consecutive nodes share the same X to avoid
@@ -1922,12 +2050,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                             double x0   = xAbs - half - eps, x1 = xAbs + half + eps;
                             double d0   = i > 0    ? (seg.CompSliceDiamsMm[i-1] + seg.CompSliceDiamsMm[i])   / 2.0 : seg.CompSliceDiamsMm[i];
                             double d1   = i < ns-1 ? (seg.CompSliceDiamsMm[i]   + seg.CompSliceDiamsMm[i+1]) / 2.0 : seg.CompSliceDiamsMm[i];
-                            double t    = Math.Clamp((seg.CompSliceDensities[i] - minDens) / densRng, 0, 1);
+                            var sliceColor = GetSliceColor(xAbs, seg.CompSliceDensities[i], minDens, densRng);
                             DrawLineFill(plot,
                                 new[] { x0, x1 },
                                 new[] { d0 / 2.0, d1 / 2.0 },
                                 new[] { -d0 / 2.0, -d1 / 2.0 },
-                                DensityColor(t), solid: true);
+                                sliceColor, solid: true);
                         }
                     }
 
@@ -2103,6 +2231,27 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         return c.OrderBy(v => v).ToArray();
     }
 
+    /// <summary>
+    /// Like <see cref="Quantize1D"/> but picks the smallest cluster count (1..maxK) such that no
+    /// two adjacent density levels are closer than <paramref name="mergeThreshold"/> — i.e. it never
+    /// invents distinct nozzles for a difference too small to matter in production.
+    /// </summary>
+    private static double[] QuantizeAdaptive(IEnumerable<double> values, double mergeThreshold, int maxK = 4)
+    {
+        var arr = values.Where(v => v > 0).ToArray();
+        if (arr.Length == 0) return Array.Empty<double>();
+        double[] c = Quantize1D(arr, Math.Min(maxK, arr.Length));
+        while (c.Length > 1)
+        {
+            double minGap = double.MaxValue;
+            for (int i = 0; i < c.Length - 1; i++)
+                minGap = Math.Min(minGap, c[i + 1] - c[i]);
+            if (minGap >= mergeThreshold) break;
+            c = Quantize1D(arr, c.Length - 1);
+        }
+        return c;
+    }
+
     /// <summary>Density color ramp: blue (low) → cyan → green → yellow → red (high).</summary>
     private static ScottColor DensityColor(double t)
     {
@@ -2253,9 +2402,34 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private void UpdateNozzleBadge()
     {
-        if (!IsLoaded || NozzleCountBadge == null) return;
         int active = Nozzles.Count(n => n.DensityGCm3 > 0 || NozzleZones.Any(z => z.NozzleIndex == n.Number - 1));
-        NozzleCountBadge.Text = $"{Math.Min(active, 4)}/4";
+        if (IsLoaded && NozzleCountBadge != null)
+            NozzleCountBadge.Text = $"{Math.Min(active, 4)}/4";
+        RefreshVisibleNozzles();
+    }
+
+    /// <summary>
+    /// Shows only the nozzles the flyline actually needs: M1 always, plus any higher slot that
+    /// carries a real density, is assigned to a zone, or is the one currently selected for a new
+    /// zone (via the active-nozzle radio or "+ Add material"). A mono-material line therefore
+    /// shows a single row instead of 4 mostly-empty ones.
+    /// </summary>
+    private void RefreshVisibleNozzles()
+    {
+        int used = 1;
+        for (int i = 1; i < Nozzles.Count; i++)
+        {
+            bool inUse = Nozzles[i].DensityGCm3 > 0
+                         || NozzleZones.Any(z => z.NozzleIndex == i)
+                         || i == _activeNozzleIndex;
+            if (inUse) used = i + 1;
+        }
+        if (VisibleNozzles.Count != used || !VisibleNozzles.SequenceEqual(Nozzles.Take(used)))
+        {
+            VisibleNozzles.Clear();
+            for (int i = 0; i < used; i++)
+                VisibleNozzles.Add(Nozzles[i]);
+        }
     }
 
     private void UpdateNozzleUsageLabels()
@@ -2263,7 +2437,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         var usedIndices = new HashSet<int>(NozzleZones.Select(z => z.NozzleIndex));
         for (int i = 0; i < Nozzles.Count; i++)
         {
-            bool inUse = usedIndices.Contains(i);
+            bool inUse = usedIndices.Contains(i) || Nozzles[i].DensityGCm3 > 0;
             if (!inUse && Nozzles[i].Label != "N/A")
                 Nozzles[i].Label = "N/A";
             else if (inUse && Nozzles[i].Label == "N/A")
@@ -2271,10 +2445,26 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
     }
 
+    private void SetActiveNozzle(int index)
+    {
+        _activeNozzleIndex = index;
+        for (int i = 0; i < Nozzles.Count; i++)
+            Nozzles[i].IsActive = (i == index);
+        RefreshVisibleNozzles();
+    }
+
     private void NozzleRadio_Checked(object sender, RoutedEventArgs e)
     {
         if (sender is System.Windows.Controls.RadioButton rb && rb.Tag is int num)
-            _activeNozzleIndex = num - 1;
+            SetActiveNozzle(num - 1);
+    }
+
+    /// <summary>Reveals the next hidden nozzle slot so it can be configured and used for a new zone.</summary>
+    private void AddNozzleMaterial_Click(object sender, RoutedEventArgs e)
+    {
+        if (VisibleNozzles.Count >= Nozzles.Count) return;
+        SetActiveNozzle(VisibleNozzles.Count);
+        MarkDirty();
     }
 
     private void NozzleColorBtn_Click(object sender, RoutedEventArgs e)
@@ -2344,26 +2534,49 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             ? _segmentNodes.Max(n => n.X) - _segmentNodes.Min(n => n.X)
             : 1000.0;
         double end = Math.Round(start + lineLen / 4.0, 1);
-        NozzleZones.Add(new NozzleZoneVm(Nozzles)
+        var newZone = new NozzleZoneVm(Nozzles)
         {
             StartCm    = Math.Round(start, 1),
             EndCm      = end,
             NozzleIndex = _activeNozzleIndex
-        });
+        };
+        NozzleZones.Add(newZone);
         UpdateNozzleBadge();
         MarkDirty();
+
+        double baseDensity = Nozzles.Count > 0 ? Nozzles[0].DensityGCm3 : 0;
+        bool introducesDensity = baseDensity > 0 && Math.Abs(newZone.DensityGCm3 - baseDensity) > DensityMergeThreshold;
+        MaybeApplyZoneDensityChange(forcePrompt: introducesDensity);
     }
 
     private void NozzleDefsGrid_CellEditEnding(object sender, DataGridCellEditEndingEventArgs e)
     {
-        if (e.EditAction == DataGridEditAction.Commit)
-            Dispatcher.InvokeAsync(() => { NozzleZonesGrid.Items.Refresh(); RefreshPlot(); MarkDirty(); UpdateNozzleBadge(); });
+        if (e.EditAction != DataGridEditAction.Commit) return;
+        bool isDensityColumn = e.Column.Header?.ToString() == "ρ g/cm³";
+        var editedNozzle = e.Row.Item as NozzleDefinitionVm;
+        Dispatcher.InvokeAsync(() =>
+        {
+            NozzleZonesGrid.Items.Refresh(); RefreshPlot(); MarkDirty(); UpdateNozzleBadge();
+            if (isDensityColumn && editedNozzle != null && editedNozzle.Number > 1
+                && NozzleZones.Any(z => z.NozzleIndex == editedNozzle.Number - 1))
+                MaybeApplyZoneDensityChange(forcePrompt: true);
+        });
+    }
+
+    /// <summary>M1's density is the whole-line base material — it's set from the "Material ρ"
+    /// controls (direct entry / from weight / from sink speed), not typed into this grid, so the
+    /// two inputs can't drift out of sync.</summary>
+    private void NozzleDefsGrid_BeginningEdit(object sender, DataGridBeginningEditEventArgs e)
+    {
+        if (e.Column.Header?.ToString() == "ρ g/cm³" &&
+            e.Row.Item is NozzleDefinitionVm nz && nz.Number == 1)
+            e.Cancel = true;
     }
 
     private void NozzleZonesGrid_CellEditEnding(object sender, DataGridCellEditEndingEventArgs e)
     {
         if (e.EditAction == DataGridEditAction.Commit)
-            Dispatcher.InvokeAsync(() => { RefreshPlot(); MarkDirty(); });
+            Dispatcher.InvokeAsync(() => { RefreshPlot(); MarkDirty(); MaybeApplyZoneDensityChange(forcePrompt: false); });
     }
 
     private void NozzleZonesGrid_PreviewKeyDown(object sender, KeyEventArgs e)
@@ -2376,8 +2589,146 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             UpdateNozzleBadge();
             RefreshPlot();
             MarkDirty();
+            MaybeApplyZoneDensityChange(forcePrompt: false);
             e.Handled = true;
         }
+    }
+
+    /// <summary>
+    /// Decides whether the current Nozzle Zones imply a real (non-cosmetic) density difference from
+    /// the base material, and if so (re-)applies it as a C profile — see <see cref="ApplyZoneDensities"/>.
+    /// When <paramref name="forcePrompt"/> is true and a real difference exists, asks once whether to
+    /// mass-adjust the affected diameters; otherwise silently reuses the last answer given.
+    /// </summary>
+    private void MaybeApplyZoneDensityChange(bool forcePrompt)
+    {
+        double baseDensity = Nozzles.Count > 0 ? Nozzles[0].DensityGCm3 : 0;
+        if (baseDensity <= 0 || ProjectSegments.Count == 0) return;
+
+        bool anyRealZone = NozzleZones.Any(z => z.EndCm > z.StartCm
+            && Math.Abs(z.DensityGCm3 - baseDensity) > DensityMergeThreshold);
+
+        if (!anyRealZone)
+        {
+            if (_zoneDerivedComp)
+            {
+                foreach (var seg in ProjectSegments) seg.ClearCompensation();
+                _zoneDerivedComp = false;
+                _inCompMode      = false;
+                UpdateCompModeUI();
+                RefreshPlot();
+                MarkDirty();
+            }
+            return;
+        }
+
+        if (forcePrompt)
+        {
+            var result = MessageBox.Show(
+                "One or more zones now use a material density different from the base line (M1).\n\n" +
+                "Adjust the diameters in those zones to preserve their current mass?\n\n" +
+                "Yes — diameters change so each zone keeps the mass it has now (recommended)\n" +
+                "No — keep the drawn diameters; the zone's weight will change instead",
+                "Zone density change", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.Yes);
+            _lastZoneAdaptChoice = result == MessageBoxResult.Yes;
+        }
+
+        ApplyZoneDensities(_lastZoneAdaptChoice);
+    }
+
+    /// <summary>
+    /// For a just-loaded baked compensated snapshot (segments already have their own real,
+    /// per-segment density restored from SegmentMetadata — see <see cref="BuildCompensatedSnapshotProject"/>),
+    /// wraps each segment as a trivial one-slice "compensation" so the existing C-mode
+    /// rendering/UI (colours, Comp. Sink column, nozzle badge, fork-on-save) treats this file's
+    /// own data as authoritative. No physics or zone recompute — the geometry IS the result.
+    /// </summary>
+    private void BakeLoadedSegmentsAsCompensation()
+    {
+        foreach (var seg in ProjectSegments)
+        {
+            if (seg.SpecWeightGCm3 <= 0 || seg.LengthCm <= 0) continue;
+            double speed = SinkingSpeedCalc.RigidBodySinkSpeed(_waterIsSalt, _waterTempC,
+                new[] { seg.StartDiameterMm, seg.EndDiameterMm },
+                new[] { seg.LengthCm / 2.0, seg.LengthCm / 2.0 },
+                new[] { seg.SpecWeightGCm3, seg.SpecWeightGCm3 });
+            seg.SetCompensation(seg.StartCm,
+                new[] { 0.0, seg.LengthCm },
+                new[] { seg.StartDiameterMm, seg.EndDiameterMm },
+                new[] { seg.SpecWeightGCm3, seg.SpecWeightGCm3 },
+                new[] { false, false },
+                speed);
+        }
+    }
+
+    /// <summary>
+    /// Builds a C profile straight from the manually-assigned zone densities: outside any zone,
+    /// slices keep the base (M1) density and the drawn diameter; inside a zone, slices use that
+    /// zone's density, with the diameter mass-conserved from the original taper
+    /// (ρ_new·d_new² = ρ_orig·d_orig², same convention as the physics Compensate button) unless
+    /// <paramref name="adaptDiameters"/> is false, in which case the drawn diameters are kept as-is.
+    /// Unlike the physics Compensate button, each segment ends up at whatever sink speed its own
+    /// materials produce — there is no single shared target.
+    /// </summary>
+    private void ApplyZoneDensities(bool adaptDiameters)
+    {
+        double baseDensity = Nozzles.Count > 0 ? Nozzles[0].DensityGCm3 : 0;
+        if (baseDensity <= 0) return;
+
+        const double sliceLenCm = 1.0;
+        bool anyClampedSlice = false;
+        foreach (var seg in ProjectSegments)
+        {
+            if (seg.LengthCm <= 0 || seg.StartDiameterMm <= 0 || seg.EndDiameterMm <= 0)
+            {
+                seg.ClearCompensation();
+                continue;
+            }
+
+            int    n  = Math.Max(1, (int)Math.Ceiling(seg.LengthCm / sliceLenCm));
+            double dl = seg.LengthCm / n;
+            var xs      = new double[n];
+            var diams   = new double[n];
+            var dens    = new double[n];
+            var clamped = new bool[n];
+
+            for (int i = 0; i < n; i++)
+            {
+                double t     = (i + 0.5) / n;
+                double xAbs  = seg.StartCm + (i + 0.5) * dl;
+                double dOrig = seg.StartDiameterMm + t * (seg.EndDiameterMm - seg.StartDiameterMm);
+                xs[i] = (i + 0.5) * dl;
+
+                var zone = NozzleZones.FirstOrDefault(z => xAbs >= z.StartCm && xAbs < z.EndCm);
+                double rho = zone != null ? zone.DensityGCm3 : baseDensity;
+                if (Math.Abs(rho - baseDensity) <= DensityMergeThreshold) rho = baseDensity;
+
+                double d = dOrig;
+                bool   wasClamped = false;
+                if (adaptDiameters && rho != baseDensity)
+                {
+                    if (rho < SinkingSpeedCalc.RhoFloor) { rho = SinkingSpeedCalc.RhoFloor; wasClamped = true; }
+                    d = dOrig * Math.Sqrt(baseDensity / rho);
+                }
+                diams[i]   = d;
+                dens[i]    = rho;
+                clamped[i] = wasClamped;
+            }
+
+            double segSpeed = SinkingSpeedCalc.RigidBodySinkSpeed(_waterIsSalt, _waterTempC,
+                diams, Enumerable.Repeat(dl, n).ToArray(), dens);
+            seg.SetCompensation(seg.StartCm, xs, diams, dens, clamped, segSpeed);
+            if (seg.HasClampedSlices) anyClampedSlice = true;
+        }
+
+        _zoneDerivedComp     = true;
+        _inCompMode          = true;
+        _showOriginalProfile = ShowOriginalToggle.IsChecked ?? true;
+        UpdateCompModeUI();
+        RefreshPlot();
+        MarkDirty();
+        UiStatus = "Zone densities applied — each zone's own sink speed is shown in the segments table."
+            + (anyClampedSlice ? " ⚠ A zone's density was below the practical floor (0.94 g/cm³) and was clamped." : string.Empty);
     }
 
     private void AddNode_Click(object sender, RoutedEventArgs e)
@@ -2447,7 +2798,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         set { _taperDescription = value; OnPropertyChanged(nameof(TaperDescription)); }
     }
 
-    public bool UseSharedDensity => true; // always uniform — no per-segment override
+    // True for a normal design (one shared material); false only for a loaded compensated
+    // snapshot, whose segments each carry their own baked density (see BuildCompensatedSnapshotProject).
+    public bool UseSharedDensity => _useSharedDensity;
 
     public double SharedDensity
     {
@@ -2468,6 +2821,13 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             seg.SpecWeightGCm3 = _sharedDensity;
         RefreshTotals();
         UpdateSinkingSpeeds();
+        // Mirror the desired/measured density onto M1 immediately, even before compensation
+        // is run — a mono-material line has nothing to compute, M1 IS the material.
+        if (!_inCompMode && Nozzles.Count > 0)
+        {
+            Nozzles[0].DensityGCm3 = _sharedDensity;
+            UpdateNozzleBadge();
+        }
     }
 
     private void FromWeight_Click(object sender, RoutedEventArgs e)
@@ -2668,7 +3028,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         int compCount = ProjectSegments.Count(s => s.HasCompensation);
         if (compCount > 0)
         {
-            _inCompMode = true;
+            _inCompMode      = true;
+            _zoneDerivedComp = false; // the physics target-speed pass always supersedes a zone-based one
             _showOriginalProfile = ShowOriginalToggle.IsChecked ?? true;
             SyncNozzleDensitiesFromComp();
             UpdateCompModeUI();
@@ -2692,7 +3053,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         var compSegs = ProjectSegments.Where(s => s.HasCompensation).ToList();
         if (compSegs.Count == 0) return;
 
-        double[] qDens = Quantize1D(compSegs.SelectMany(s => s.CompSliceDensities), 4);
+        double[] qDens = QuantizeAdaptive(compSegs.SelectMany(s => s.CompSliceDensities), DensityMergeThreshold);
         if (qDens.Length == 0) return;
 
         // Save current NC state before overwriting with comp-derived values.
@@ -2743,7 +3104,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         CompensateBtn.IsEnabled = !_isCompensatedDerivative;
         CompensateBtn.ToolTip = _isCompensatedDerivative
             ? "This file is already a compensated snapshot — edit the original design instead"
-            : "Compute compensated (C) profile — mass-preserving per-slice bisection for uniform sink speed";
+            : _zoneDerivedComp
+                ? "Compute a whole-line target-speed compensation — this replaces the zone-based one"
+                : "Compute compensated (C) profile — mass-preserving per-slice bisection for uniform sink speed";
         NcDensityPanel.IsEnabled = !_isCompensatedDerivative;
 
         // "Show C" toggle: visible only when comp data exists
@@ -2755,27 +3118,39 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         NcDensityPanel.Visibility     = c ? Visibility.Collapsed : Visibility.Visible;
         // NC ghost toggle: only when in comp mode
         ShowOriginalToggle.Visibility = c ? Visibility.Visible   : Visibility.Collapsed;
-        // Speed slider: visible as long as comp data exists; locked on a compensated snapshot
-        // (same "must not be compensated further" rule as CompensateBtn/NcDensityPanel above)
-        CompSpeedPanel.Visibility  = hasComp ? Visibility.Visible : Visibility.Collapsed;
+        // Speed slider: a zone-derived C profile has no single shared target — each zone reaches
+        // whatever speed its own material produces — so the slider only applies to the physics path.
+        CompSpeedPanel.Visibility  = (hasComp && !_zoneDerivedComp) ? Visibility.Visible : Visibility.Collapsed;
         CompSpeedSlider.IsEnabled  = !_isCompensatedDerivative;
-        if (hasComp) UpdateCompSpeedSlider();
+        if (hasComp && !_zoneDerivedComp) UpdateCompSpeedSlider();
 
-        // Nozzle densities: show comp-quantized values in C mode, shared density in NC mode
-        if (c)
-            SyncNozzleDensitiesFromComp();
-        else
+        // Nozzle densities: a zone-derived C profile already has real, user-authored materials in
+        // Nozzles/NozzleZones — leave them untouched. Only the physics (target-speed) path invents
+        // materials from the density gradient and needs to sync/restore them here.
+        if (!_zoneDerivedComp)
         {
-            // Restore NC nozzle colors and labels saved before the last comp sync
-            double ncDens = _sharedDensity > 0 ? _sharedDensity : 0;
-            for (int i = 0; i < 4; i++)
+            if (c)
+                SyncNozzleDensitiesFromComp();
+            else
             {
-                Nozzles[i].ColorHex    = _ncNozzleColors[i];
-                Nozzles[i].Label       = _ncNozzleLabels[i];
-                Nozzles[i].DensityGCm3 = ncDens;
+                // Restore NC nozzle colors and labels saved before the last comp sync.
+                // M1 always carries the single shared density. A slot a real zone points to holds
+                // its own genuine material (colour + density, already correctly loaded/edited) and
+                // must never be touched here — this snapshot only ever captured a *physics-comp*
+                // overwrite, never a real zone's data, so restoring it into a zone slot would
+                // silently clobber the user's own material with the base density/default colour.
+                double ncDens = _sharedDensity > 0 ? _sharedDensity : 0;
+                var usedByZone = new HashSet<int>(NozzleZones.Select(z => z.NozzleIndex));
+                for (int i = 0; i < 4; i++)
+                {
+                    if (i > 0 && usedByZone.Contains(i)) continue;
+                    Nozzles[i].ColorHex    = _ncNozzleColors[i];
+                    Nozzles[i].Label       = _ncNozzleLabels[i];
+                    Nozzles[i].DensityGCm3 = (i == 0) ? ncDens : 0;
+                }
+                NozzleDefsGrid?.Items.Refresh();
+                UpdateNozzleBadge();
             }
-            NozzleDefsGrid?.Items.Refresh();
-            UpdateNozzleBadge();
         }
 
         // NodesDataGrid: in comp mode show compensated boundary diameters, read-only
@@ -2877,7 +3252,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private string ComputeAfftaBadge()
     {
-        var (lw, grains) = LineWeightFamilyCalc.ClassifyAffta(ProjectSegments.OrderBy(s => s.StartCm));
+        var (lw, grains) = LineWeightFamilyCalc.ClassifyAffta(BuildEffectiveSegmentsForFamilySource());
         if (lw == 0) return "AFFTA: —";
 
         double targetGr = LineWeightFamilyCalc.Targets.First(t => t.Lw == lw).Gr;
@@ -2886,7 +3261,56 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     }
 
     /// <summary>Current AFFTA line-weight class number, or 0 if it can't be computed (no density set).</summary>
-    private int ComputeCurrentAfftaLw() => LineWeightFamilyCalc.ClassifyAffta(ProjectSegments.OrderBy(s => s.StartCm)).Lw;
+    private int ComputeCurrentAfftaLw() => LineWeightFamilyCalc.ClassifyAffta(BuildEffectiveSegmentsForFamilySource()).Lw;
+
+    /// <summary>
+    /// Segments for mass-based calculations (AFFTA class, family generation) that correctly
+    /// account for a zone with its own density instead of assuming one uniform material: any
+    /// segment a zone boundary falls inside is split there, each piece taking the density of the
+    /// zone it actually sits in (or M1's density outside any zone). Positions/diameters are
+    /// otherwise identical to <see cref="ProjectSegments"/> — only used as a calculation input,
+    /// never rendered.
+    /// </summary>
+    private List<ProjectSegment> BuildEffectiveSegmentsForFamilySource()
+    {
+        double baseDensity = Nozzles.Count > 0 ? Nozzles[0].DensityGCm3 : 0;
+        var zones = NozzleZones.Where(z => z.EndCm > z.StartCm).OrderBy(z => z.StartCm).ToList();
+        var result = new List<ProjectSegment>();
+
+        foreach (var seg in ProjectSegments.OrderBy(s => s.StartCm))
+        {
+            if (seg.LengthCm <= 0 || zones.Count == 0) { result.Add(seg); continue; }
+
+            var cuts = new SortedSet<double> { seg.StartCm, seg.EndCm };
+            foreach (var z in zones)
+            {
+                if (z.StartCm > seg.StartCm && z.StartCm < seg.EndCm) cuts.Add(z.StartCm);
+                if (z.EndCm   > seg.StartCm && z.EndCm   < seg.EndCm) cuts.Add(z.EndCm);
+            }
+            if (cuts.Count <= 2) { result.Add(seg); continue; } // no zone boundary inside — unchanged
+
+            var xs = cuts.ToList();
+            for (int i = 0; i < xs.Count - 1; i++)
+            {
+                double x0 = xs[i], x1 = xs[i + 1];
+                double t0 = (x0 - seg.StartCm) / seg.LengthCm;
+                double t1 = (x1 - seg.StartCm) / seg.LengthCm;
+                double d0 = seg.StartDiameterMm + t0 * (seg.EndDiameterMm - seg.StartDiameterMm);
+                double d1 = seg.StartDiameterMm + t1 * (seg.EndDiameterMm - seg.StartDiameterMm);
+                double xMid = (x0 + x1) / 2.0;
+                var zone = zones.FirstOrDefault(z => xMid >= z.StartCm && xMid < z.EndCm);
+                double density = zone != null ? zone.DensityGCm3 : baseDensity;
+
+                result.Add(new ProjectSegment
+                {
+                    Index = seg.Index, StartCm = x0, EndCm = x1,
+                    StartDiameterMm = d0, EndDiameterMm = d1,
+                    Name = seg.Name, SpecWeightGCm3 = density, IsHead = seg.IsHead
+                });
+            }
+        }
+        return result;
+    }
 
     private void ReverseNodes_Click(object sender, RoutedEventArgs e)
     {
@@ -3378,7 +3802,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 // Densità quantizzate a max 4 materiali per uso produttivo
                 var compSegs = ProjectSegments.OrderBy(s => s.StartCm)
                     .Where(s => s.HasCompensation).ToList();
-                double[] qDens  = Quantize1D(compSegs.SelectMany(s => s.CompSliceDensities), 4);
+                double[] qDens  = QuantizeAdaptive(compSegs.SelectMany(s => s.CompSliceDensities), DensityMergeThreshold);
                 double   minDens = qDens.Length > 0 ? qDens[0] : 0;
                 double   maxDens = qDens.Length > 0 ? qDens[^1] : 1;
                 double   densRng = Math.Max(maxDens - minDens, 1e-9);
@@ -3396,14 +3820,15 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                         double x0   = xAbs - half, x1 = xAbs + half;
                         double d0   = i > 0    ? (seg.CompSliceDiamsMm[i-1] + seg.CompSliceDiamsMm[i])   / 2.0 : seg.CompSliceDiamsMm[i];
                         double d1   = i < ns-1 ? (seg.CompSliceDiamsMm[i]   + seg.CompSliceDiamsMm[i+1]) / 2.0 : seg.CompSliceDiamsMm[i];
-                        // Assegna alla densità quantizzata più vicina → 4 colori discreti
+                        // Zona reale: colore scelto dall'utente. Nessuna zona: gradiente densità
+                        // quantizzato a max 4 livelli per uso produttivo.
                         double qd = NearestQ(seg.CompSliceDensities[i]);
-                        double t  = Math.Clamp((qd - minDens) / densRng, 0, 1);
+                        var sliceColor = GetSliceColor(xAbs, qd, minDens, densRng);
                         DrawLineFill(plot,
                             new[] { x0, x1 },
                             new[] { d0 / 2.0, d1 / 2.0 },
                             new[] { -d0 / 2.0, -d1 / 2.0 },
-                            DensityColor(t), solid: true);
+                            sliceColor, solid: true);
                     }
                 }
             }
@@ -3693,7 +4118,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         var dlg = new GenerateLineFamilyDialog(currentLw) { Owner = this };
         if (dlg.ShowDialog() != true || dlg.SelectedWeights.Count == 0) return;
 
-        var (sorted, sourceGrams) = LineWeightFamilyCalc.PrepareSource(ProjectSegments);
+        var (sorted, sourceGrams) = LineWeightFamilyCalc.PrepareSource(BuildEffectiveSegmentsForFamilySource());
         var variants = dlg.SelectedWeights.Select(lw =>
         {
             double targetGr = LineWeightFamilyCalc.Targets.First(t => t.Lw == lw).Gr;
@@ -3728,7 +4153,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         var dlg = new GenerateSinkSpeedFamilyDialog { Owner = this };
         if (dlg.ShowDialog() != true || dlg.SelectedSpeedsIns.Count == 0) return;
 
-        var (sorted, sourceGrams) = LineWeightFamilyCalc.PrepareSource(ProjectSegments);
+        var (sorted, sourceGrams) = LineWeightFamilyCalc.PrepareSource(BuildEffectiveSegmentsForFamilySource());
         double sourceGrains = sourceGrams * LineWeightFamilyCalc.GramsToGrains;
 
         var variants = dlg.SelectedSpeedsIns.Select(ips =>

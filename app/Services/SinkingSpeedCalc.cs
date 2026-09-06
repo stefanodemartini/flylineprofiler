@@ -305,6 +305,64 @@ public static class SinkingSpeedCalc
     }
 
     /// <summary>
+    /// Rigid-body sink speed for a set of slices that may each carry a different diameter
+    /// AND density — e.g. a line with a manually assigned denser/lighter zone. All slices move
+    /// at one equilibrium speed V, exactly like <see cref="TaperedSegmentSinkSpeed"/> but without
+    /// its single-uniform-density restriction.
+    /// </summary>
+    public static double RigidBodySinkSpeed(
+        bool isSalt, double tempC,
+        IReadOnlyList<double> sliceDiamsMm, IReadOnlyList<double> sliceLengthsCm, IReadOnlyList<double> sliceDensitiesGcm3)
+    {
+        int n = sliceDiamsMm.Count;
+        if (n == 0 || n != sliceLengthsCm.Count || n != sliceDensitiesGcm3.Count) return double.NaN;
+
+        (double rhoW, double nu) = WaterProps(isSalt, tempC);
+
+        double[] dm  = new double[n];
+        double[] dl  = new double[n];
+        double totalGrav = 0.0;
+        for (int i = 0; i < n; i++)
+        {
+            dm[i] = sliceDiamsMm[i] / 1000.0;
+            dl[i] = sliceLengthsCm[i] / 100.0;
+            double rho = sliceDensitiesGcm3[i] * 1000.0;
+            totalGrav += (Math.PI / 4.0) * dm[i] * dm[i] * dl[i] * G * (rho - rhoW);
+        }
+
+        double lo, hi;
+        if (totalGrav >= 0.0) { lo = 0.0; hi = 3.0; }
+        else                   { lo = -3.0; hi = 0.0; }
+
+        double Residual(double v)
+        {
+            double drag = 0.0;
+            for (int i = 0; i < n; i++)
+            {
+                double re = Math.Abs(v) * dm[i] / nu;
+                if (re < Tol) re = Tol;
+                double cd = 1.0 + 10.0 / Math.Pow(re, 2.0 / 3.0);
+                drag += 0.5 * cd * Math.Abs(v) * v * dm[i] * dl[i] * rhoW;
+            }
+            return totalGrav - drag;
+        }
+
+        double flo = Residual(lo), fhi = Residual(hi);
+        if (flo * fhi > 0.0) return double.NaN;
+
+        double mid = 0.0;
+        for (int i = 0; i < MaxIter; i++)
+        {
+            mid = (lo + hi) / 2.0;
+            double fmid = Residual(mid);
+            if (Math.Abs(fmid) < Tol) break;
+            if (flo * fmid <= 0.0) { hi = mid; }
+            else                    { lo = mid; flo = Residual(lo); }
+        }
+        return mid;
+    }
+
+    /// <summary>
     /// Sink speed of a single uniform cylinder (used for per-cylinder checks).
     /// </summary>
     public static double CylinderSinkSpeed(

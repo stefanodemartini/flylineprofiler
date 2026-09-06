@@ -189,9 +189,10 @@ Sotto la tabella appare la riga **Totals**:
 ## 5. Ugelli e Colori (Nozzle System)
 
 ### Definizione degli Ugelli (M1–M4)
-- **M1**: definisce il colore del profilo di design
+- **M1**: materiale di base — definisce il colore del profilo di design e la sua densità è sempre quella impostata in "Material ρ" (sezione 6). La cella densità di M1 nella griglia è di sola lettura: si modifica solo da "Material ρ" / From Weight / From Sink Speed, per evitare disallineamenti
 - Ogni ugello ha: **colore** + **densità** (g/cm³) + **etichetta**
-- Gli ugelli non usati in zone mostrano il label "N/A"
+- **La griglia mostra solo gli ugelli realmente in uso**: con un solo materiale si vede solo M1; M2–M4 compaiono automaticamente solo quando servono davvero (densità propria, zona colore assegnata, o attivati manualmente)
+- Pulsante **＋ Material** → attiva deliberatamente il prossimo ugello nascosto, per poterlo configurare prima di usarlo in una zona
 - Il badge "x/4" indica quanti ugelli sono attivi
 
 ### Cambiare Colore
@@ -205,6 +206,18 @@ Sotto la tabella appare la riga **Totals**:
 - **Add Zone** → aggiunge una zona al profilo (start cm, end cm, ugello assegnato)
 - La zona viene colorata con Lambert cylindrical shading (aspetto 3D solido)
 - **Delete** su riga selezionata → elimina la zona
+
+### Zona con Densità Propria (materiale diverso da M1)
+Se la zona appena aggiunta (o un ugello già assegnato a una zona) ha una densità che differisce da quella di M1 di più di 0.02 g/cm³, l'app considera la zona un materiale realmente diverso — non solo un colore — e chiede:
+
+> *"Adjust the diameters in those zones to preserve their current mass?"*
+> **Yes** (default) — i diametri della zona vengono ricalcolati per mantenere la massa attuale (formula a massa costante ρ·d² = cost.)
+> **No** — i diametri restano quelli disegnati; il peso della zona cambia di conseguenza
+
+Dopo la conferma:
+- La tabella segmenti mostra la velocità di affondamento reale di ogni segmento (non un target unico — ogni zona affonda alla propria velocità fisica)
+- In **Show C** il profilo mostra i colori reali scelti per ciascun ugello/zona (non il gradiente automatico usato dalla compensazione fisica)
+- Vedi sezione 7 per come questa variante viene salvata
 
 ---
 
@@ -271,15 +284,18 @@ La compensazione risolve il problema fisico: sezioni di diametri diversi affonda
 - Legenda densità automatica in legenda grafico
 
 ### Ugelli in Modalità C
-- M1–M4 vengono auto-popolati con le 4 densità quantizzate (K-means)
+- M1–M4 vengono auto-popolati con le densità quantizzate — **solo quante ne servono davvero** (1 a 4: i livelli più vicini di 0.02 g/cm³ vengono uniti in un solo ugello, così una linea quasi mono-densità non mostra 4 materiali finti)
 - Colore corrispondente al gradiente densità; label `ρ X.XX`
 - Al ritorno alla modalità NC i colori/label originali vengono ripristinati
+- Questo vale solo per la compensazione fisica (Compensate/target speed). Se la modalità C proviene invece da una **zona con densità propria** (sezione 5), gli ugelli restano esattamente quelli configurati a mano — non vengono ricalcolati — e lo slider "Target" resta nascosto perché non esiste un'unica velocità target
 
-### Salvataggio del Profilo Compensato
-Il profilo C non viene mai salvato nello stesso file del progetto NC originale. Se si salva (`Ctrl+S` o Save As) mentre si sta visualizzando "Show C":
-- Viene creato automaticamente un file separato `NomeProgetto C X.XXins.flp` (X.XX = velocità target in in/s) con lo snapshot compensato
-- Il file NC originale salva solo il proprio profilo NC — resta sempre "puro" e ricompensabile
-- Il file compensato, una volta riaperto, si apre già in modalità C e **non può essere compensato ulteriormente**: il pulsante "⚖ Compensate" e i controlli densità sono disabilitati. Per cambiare la compensazione occorre tornare al file NC originale e ricompensare da lì
+### Salvataggio del Profilo Compensato — C e NC sono due file distinti
+Il profilo C non viene mai salvato nello stesso file del progetto NC originale, e non è una "vista" ricostruita al volo: **è un file a sé, con la propria geometria indipendente**. Se si salva (`Ctrl+S` o Save As) mentre esiste una compensazione (fisica o da zona):
+- Viene creato automaticamente un file separato con lo snapshot compensato: `NomeProgetto C X.XXins.flp` per la compensazione fisica (X.XX = velocità target in in/s), oppure `NomeProgetto C zones.flp` per una compensazione derivata da zone a densità propria
+- Quel file salva un nodo ogni ~1cm (uno per ogni tratto fisico calcolato), ciascuno con la propria densità reale — non la geometria NC originale con una "ricetta" da rieseguire. Riaprirlo non richiede il file NC di origine né alcun ricalcolo: i dati sono già lì, definitivi
+- Di conseguenza la tabella Segments di un file C ha molte più righe (una ogni ~1cm) di quella di un file NC — è il prezzo della fedeltà esatta al calcolo fisico
+- Il file NC originale salva solo il proprio profilo NC, a densità unica — resta sempre "puro" e ricompensabile
+- Il file compensato è **bloccato** (`IsCompensatedDerivative`): il pulsante "⚖ Compensate", i controlli densità e la cella densità di M1 sono disabilitati. Per cambiare la compensazione occorre tornare al file NC originale e ricompensare/riassegnare le zone da lì
 
 ---
 
@@ -309,6 +325,7 @@ AFFTA  LW 5   142.3 gr   ✓
 - **LW**: Line Weight AFFTA (1–14)
 - **X.X gr**: peso dei primi 30 ft (914.4 cm) in grains
 - **✓/✗**: entro ±6 gr dalla classe nominale
+- Se è attiva una zona con densità propria (sezione 5), il peso tiene conto della vera densità di quella zona invece di assumere materiale uniforme su tutta la linea — stesso calcolo usato dalla generazione famiglia (sezioni 10-11)
 
 ---
 
@@ -321,7 +338,7 @@ Dato un profilo disegnato (o ricostruito da scan), è possibile generare automat
 - Per ogni classe selezionata, **tutti** i diametri della linea (testa, transizione e running line) vengono scalati con lo stesso fattore, a parità di lunghezza — è quello che preserva la "forma" del profilo, running line inclusa
 - Il fattore di scala si ricava in forma chiusa (la massa nei primi 30 ft scala esattamente come il quadrato del fattore, a parità di lunghezze), quindi **ogni classe è sempre raggiungibile**, per costruzione
 - Nessuna posizione cambia (le lunghezze dei segmenti restano identiche), quindi zone ugello e laser mark non hanno bisogno di essere riposizionati
-- La densità (materiale) non viene mai toccata — resta identica in ogni classe generata
+- La densità (materiale) non viene mai toccata — resta identica in ogni classe generata, zona a densità propria compresa (se presente, viene correttamente pesata invece di essere ignorata)
 
 ### File generati
 Ogni classe selezionata produce un nuovo file `NomeProgetto #N.flp` accanto al progetto originale (che deve essere già stato salvato in precedenza). Il progetto originale non viene mai modificato.

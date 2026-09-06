@@ -1088,16 +1088,21 @@
                                    FontSize="10" FontWeight="SemiBold"
                                    Foreground="{StaticResource Accent}"
                                    VerticalAlignment="Center"/>
+                        <Button Content="＋ Material"
+                                Click="AddNozzleMaterial_Click"
+                                Padding="6,1" FontSize="10" Margin="10,0,0,0"
+                                ToolTip="Reveal another nozzle slot to define a new colour/density for a manual zone"/>
                     </StackPanel>
                     <Border BorderBrush="{StaticResource BorderBrush2}" BorderThickness="1">
                         <DataGrid x:Name="NozzleDefsGrid"
                                   Style="{StaticResource DarkGrid}"
-                                  ItemsSource="{Binding ElementName=MainWin, Path=Nozzles}"
+                                  ItemsSource="{Binding ElementName=MainWin, Path=VisibleNozzles}"
                                   AutoGenerateColumns="False"
                                   CanUserAddRows="False"
                                   CanUserDeleteRows="False"
                                   CanUserReorderColumns="False"
                                   CellEditEnding="NozzleDefsGrid_CellEditEnding"
+                                  BeginningEdit="NozzleDefsGrid_BeginningEdit"
                                   RowHeight="26">
                             <DataGrid.Columns>
                                 <!-- Active nozzle selector -->
