@@ -3810,15 +3810,14 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     /// <summary>
     /// Segments for mass-based calculations (AFFTA class, family generation) that correctly
-    /// account for a zone with its own density instead of assuming one uniform material: any
-    /// segment a zone boundary falls inside is split there, each piece taking the density of the
-    /// zone it actually sits in (or M1's density outside any zone). Positions/diameters are
+    /// account for a zone with its own density instead of assuming one uniform material: every
+    /// segment takes the density of the zone it actually sits in — split first where a zone
+    /// boundary falls inside it — and keeps its own outside any zone. Positions/diameters are
     /// otherwise identical to <see cref="ProjectSegments"/> — only used as a calculation input,
     /// never rendered.
     /// </summary>
     private List<ProjectSegment> BuildEffectiveSegmentsForFamilySource()
     {
-        double baseDensity = Nozzles.Count > 0 ? Nozzles[0].DensityGCm3 : 0;
         var zones = NozzleZones.Where(z => z.EndCm > z.StartCm).OrderBy(z => z.StartCm).ToList();
         var result = new List<ProjectSegment>();
 
@@ -3832,8 +3831,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 if (z.StartCm > seg.StartCm && z.StartCm < seg.EndCm) cuts.Add(z.StartCm);
                 if (z.EndCm   > seg.StartCm && z.EndCm   < seg.EndCm) cuts.Add(z.EndCm);
             }
-            if (cuts.Count <= 2) { result.Add(seg); continue; } // no zone boundary inside — unchanged
 
+            // No boundary inside is NOT the same as "no zone applies": a segment can sit entirely
+            // within one. Returning it unchanged here kept SpecWeightGCm3 — the design's base
+            // density, which a zone never writes to — so a zone covering whole segments was left
+            // out of the mass entirely, and the AFFTA class was computed as if the line were made
+            // of one material. Always let the loop below assign the density, splitting or not.
             var xs = cuts.ToList();
             for (int i = 0; i < xs.Count - 1; i++)
             {
@@ -3844,7 +3847,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 double d1 = seg.StartDiameterMm + t1 * (seg.EndDiameterMm - seg.StartDiameterMm);
                 double xMid = (x0 + x1) / 2.0;
                 var zone = zones.FirstOrDefault(z => xMid >= z.StartCm && xMid < z.EndCm);
-                double density = zone != null ? zone.DensityGCm3 : baseDensity;
+                // Outside every zone a segment keeps its own density rather than M1's — identical
+                // for a shared-density design, and correct for one carrying per-segment materials.
+                double density = zone != null ? zone.DensityGCm3 : seg.SpecWeightGCm3;
 
                 result.Add(new ProjectSegment
                 {
