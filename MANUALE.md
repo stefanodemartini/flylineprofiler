@@ -215,9 +215,29 @@ Se la zona appena aggiunta (o un ugello già assegnato a una zona) ha una densit
 > **No** — i diametri restano quelli disegnati; il peso della zona cambia di conseguenza
 
 Dopo la conferma:
-- La tabella segmenti mostra la velocità di affondamento reale di ogni segmento (non un target unico — ogni zona affonda alla propria velocità fisica)
-- In **Show C** il profilo mostra i colori reali scelti per ciascun ugello/zona (non il gradiente automatico usato dalla compensazione fisica)
-- Vedi sezione 7 per come questa variante viene salvata
+- **Una zona con materiale proprio è parte del design, non una compensazione**: la finestra resta in NC (griglie editabili, pannello "Material ρ" visibile) e il file resta uno solo — non viene forkato nessun file C
+- Il grafico disegna direttamente il profilo reale, con i colori scelti per ciascun ugello/zona (non il gradiente automatico della compensazione fisica)
+- La colonna **Sink** della tabella segmenti mostra la velocità di affondamento reale di ogni segmento (non un target unico — ogni zona affonda alla propria velocità fisica)
+- Accanto alle colonne di disegno compaiono anche **Comp. Start / Comp. End / ρ Start / ρ End**: con l'adattamento di massa i diametri da produrre non sono quelli disegnati, e servono al produttore
+- Le colonne **Sp.W.** e **Mass** mostrano la densità e la massa **realmente applicate** in quel tratto: dentro una zona è quella della zona, non la densità base del design (che resta invariata nel campo sottostante ed è ciò che si modifica digitando nella cella)
+- Il profilo viene ricostruito automaticamente anche riaprendo il file e a ogni modifica della geometria, riusando in silenzio la scelta sulla massa salvata nel progetto
+
+### Il bordo della zona e il gradino di diametro
+Con l'adattamento di massa attivo (**Yes**), un cambio netto di densità impone matematicamente un
+salto di diametro sul bordo: la massa è proporzionale a ρ·d², quindi se ρ salta e la massa deve
+restare quella, d salta con lei. Non è un difetto di calcolo — non esiste modo di avere insieme
+densità esatta, massa esatta e diametro continuo attraverso un confine netto. Le vie d'uscita:
+
+- **Far coincidere il bordo della zona con un nodo del disegno** e portare i diametri già scalati
+  nei nodi stessi *(soluzione consigliata)*: un nodo ha un solo diametro, condiviso dai due segmenti
+  che vi si incontrano, quindi la continuità è garantita dalla struttura del disegno e la massa
+  resta esatta. In questo caso la zona va poi impostata con **No** all'adattamento, perché la
+  geometria è già corretta e adattarla di nuovo la restringerebbe due volte
+- **Rampa di transizione**: con l'adattamento attivo la densità non commuta di colpo sul bordo ma
+  sfuma su ~10 cm a cavallo di esso, così anche il diametro resta continuo. In cambio, gli ultimi
+  centimetri prima del bordo non sono più esattamente alla densità nominale
+- **Rinunciare alla massa costante** (**No**): il diametro resta quello disegnato — continuo per
+  definizione — e a cambiare è il peso della zona
 
 ---
 
@@ -265,37 +285,67 @@ Dopo la conferma:
 
 La compensazione risolve il problema fisico: sezioni di diametri diversi affondano a velocità diverse. Il profilo Compensato (C) modifica i diametri affinché ogni sezione affondi alla stessa velocità target.
 
+**Non esiste una "vista C" nella finestra di lavoro.** Compensare non trasforma il progetto aperto: calcola il profilo e lo **scrive subito in un file separato**, esattamente come fanno i generatori di famiglia. Il design NC aperto resta identico a prima (nemmeno il flag di modifica cambia). I toggle "Show C" / "Show NC" e lo slider Target in toolbar non esistono più.
+
 ### Workflow
 1. Impostare la densità del materiale (sezione 6)
 2. Verificare che la linea sia classificata come "Sinking"
-3. Cliccare **⚖ Compensate**
-4. Il profilo C viene calcolato con gradiente di densità
-5. Lo **Speed Slider** appare con range min/max della linea NC
+3. **Salvare il progetto** — il file C prende il nome da quello del progetto
+4. Cliccare **⚖ Compensate…**
+5. Nel dialogo, scegliere la velocità target con lo slider (min/max mostrati come numeri ai lati) e premere **Create C file**
+6. Conferma con il nome del file scritto; per vedere o stampare il profilo compensato si apre quel file
 
-### Speed Slider
-- Trascina per scegliere la velocità target (in/s)
-- La compensazione si ricalcola automaticamente
-- Min/Max mostrati ai lati dello slider
+### Dialogo Compensate
+- Il range dello slider è la velocità di affondamento più lenta e più veloce già raggiunta dalle sezioni attuali: qualsiasi target al suo interno è ottenibile cambiando solo la densità
+- Il nome del file che verrà scritto è mostrato dal vivo mentre si muove lo slider: `NomeProgetto C X.XXins.flp`
+- Se il file esiste già viene chiesta conferma di sovrascrittura
+- Se il design ha **zone con materiale proprio** (sezione 5), il dialogo avvisa prima: la compensazione fisica risolve tutta la linea a partire dal materiale base M1 e dai diametri disegnati, quindi i materiali di zona **non** finiscono nel file C
 
-### Visualizzazioni
-- **Show C** toggle → alterna tra profilo NC e profilo C
-- **Show NC ghost** → sovrappone il profilo originale in grigio trasparente
-- Gradiente colori sul profilo C = densità del materiale (blu=leggero, rosso=pesante)
-- Legenda densità automatica in legenda grafico
+### Compensazione vincolata a 4 materiali reali (non un continuo teorico)
+La soluzione fisica pura vorrebbe una densità diversa a ogni centimetro — impossibile da
+realizzare (nessun produttore ha un numero illimitato di ugelli). Il calcolo procede in due passi:
+1. **Soluzione ideale continua**: densità e diametro risolti insieme, slice per slice (~1cm),
+   per centrare esattamente la velocità target ovunque — è solo un passaggio interno, non quello
+   che finisce nel file
+2. **Vincolo ai materiali reali**: le densità ideali vengono raggruppate in **sempre fino a 4
+   materiali reali** (mai meno per "semplicità" — i 4 ugelli sono comunque disponibili, usarne di
+   meno peggiora solo la precisione). Ogni slice prende il materiale più vicino tra i 4, mentre il
+   **diametro resta esattamente quello della soluzione continua ideale**: non viene mai ritoccato
+   in funzione del materiale assegnato
 
-### Ugelli in Modalità C
-- M1–M4 vengono auto-popolati con le densità quantizzate — **solo quante ne servono davvero** (1 a 4: i livelli più vicini di 0.02 g/cm³ vengono uniti in un solo ugello, così una linea quasi mono-densità non mostra 4 materiali finti)
+Il diametro non viene corretto perché qualsiasi correzione legata al materiale (anche quella a
+massa costante ρ·d² = cost. usata per le zone, §5) **salta** dove salta l'assegnazione del
+materiale: la densità ideale è continua, ma il materiale più vicino cambia di colpo, e il diametro
+con lui — producendo un gradino visibile proprio dove due materiali si incontrano. Lasciando il
+diametro intatto il taper resta continuo ovunque, confine tra materiali compreso.
+
+Risultato: **forma del taper perfettamente liscia**, e la velocità di affondamento diventa
+un'**approssimazione** del target invece che un valore esatto ovunque — assorbe interamente
+l'errore di discretizzazione. Lo scostamento peggiore viene mostrato nel messaggio di conferma
+dopo il salvataggio. È il compromesso scelto deliberatamente: si accetta uno scarto di velocità
+maggiore pur di non avere mai un salto di diametro.
+
+### Ugelli nel file C
+- M1–M4 del file C vengono popolati con le densità reali usate — sempre fino a 4, non un
+  sottoinsieme "sufficiente"
 - Colore corrispondente al gradiente densità; label `ρ X.XX`
-- Al ritorno alla modalità NC i colori/label originali vengono ripristinati
-- Questo vale solo per la compensazione fisica (Compensate/target speed). Se la modalità C proviene invece da una **zona con densità propria** (sezione 5), gli ugelli restano esattamente quelli configurati a mano — non vengono ricalcolati — e lo slider "Target" resta nascosto perché non esiste un'unica velocità target
+- Gli ugelli del progetto NC aperto non vengono toccati: colori, label e densità tornano esattamente com'erano
 
-### Salvataggio del Profilo Compensato — C e NC sono due file distinti
-Il profilo C non viene mai salvato nello stesso file del progetto NC originale, e non è una "vista" ricostruita al volo: **è un file a sé, con la propria geometria indipendente**. Se si salva (`Ctrl+S` o Save As) mentre esiste una compensazione (fisica o da zona):
-- Viene creato automaticamente un file separato con lo snapshot compensato: `NomeProgetto C X.XXins.flp` per la compensazione fisica (X.XX = velocità target in in/s), oppure `NomeProgetto C zones.flp` per una compensazione derivata da zone a densità propria
-- Quel file salva un nodo ogni ~1cm (uno per ogni tratto fisico calcolato), ciascuno con la propria densità reale — non la geometria NC originale con una "ricetta" da rieseguire. Riaprirlo non richiede il file NC di origine né alcun ricalcolo: i dati sono già lì, definitivi
-- Di conseguenza la tabella Segments di un file C ha molte più righe (una ogni ~1cm) di quella di un file NC — è il prezzo della fedeltà esatta al calcolo fisico
-- Il file NC originale salva solo il proprio profilo NC, a densità unica — resta sempre "puro" e ricompensabile
-- Il file compensato è **bloccato** (`IsCompensatedDerivative`): il pulsante "⚖ Compensate", i controlli densità e la cella densità di M1 sono disabilitati. Per cambiare la compensazione occorre tornare al file NC originale e ricompensare/riassegnare le zone da lì
+### C e NC sono due file distinti
+- Il file C ha la **propria geometria indipendente**, salvata alla **piena risoluzione di calcolo**
+  (un nodo ogni ~1cm), ciascun nodo con la propria densità reale in `SegmentMetadata` — non la
+  geometria NC con una "ricetta" da rieseguire. Riaprirlo non richiede il file NC di origine né
+  alcun ricalcolo. La geometria salvata è esattamente quella calcolata: non viene mai semplificata
+  o raggruppata prima di scriverla su disco
+- Il **raggruppamento è solo una questione di visualizzazione**: la tabella Segments e il PDF
+  mostrano una riga per zona di materiale (slice consecutive con la stessa densità reale unite in
+  un'unica riga), quindi restano leggibili come una tabella NC normale invece di elencare centinaia
+  di righe da 1cm. Il grafico, i totali e ogni calcolo continuano a leggere i dati completi
+- Il file NC salva solo il proprio profilo, a densità unica (più le eventuali zone a materiale
+  proprio) — resta sempre "puro" e ricompensabile. Salvare l'NC **non** genera più alcun file C
+- Il file compensato è **bloccato** (`IsCompensatedDerivative`): il pulsante "⚖ Compensate…", i
+  controlli densità e la cella densità di M1 sono disabilitati. Per cambiare la compensazione si
+  torna al file NC originale e si ricompensa da lì
 
 ---
 
@@ -402,7 +452,7 @@ Ogni velocità produce un file `NomeProgetto X.XXips.flp` (o `NomeProgetto Float
 5. **Nozzle swatches**: colori materiali con densità
 6. **Badge AFFTA + CoM/Rg + classificazione taper**
 
-Quando il progetto ha un profilo C salvato, al click Export PDF viene chiesto se esportare NC o C. Il nome del file include automaticamente il suffisso `_NC` o `_C`.
+Non viene più chiesto se esportare NC o C: il PDF documenta **quello che il file aperto è davvero**. Un file C (o un design NC con zone a materiale proprio) esporta il profilo per-slice con densità reali; un design NC a materiale unico esporta il profilo disegnato. Il nome del file include automaticamente il suffisso `_NC` o `_C`.
 
 ---
 
@@ -521,4 +571,4 @@ Position cm,Diameter mm
 | **EMA** | Exponential Moving Average — filtro digitale smoothing |
 | **Frustum** | Tronco di cono — forma geometrica di un segmento conico |
 | **ρ (rho)** | Densità del materiale in g/cm³ |
-| **Snapshot compensato** | File `.flp` forkato al salvataggio da un profilo C — non ricompensabile |
+| **Snapshot compensato** | File `.flp` scritto dal pulsante ⚖ Compensate…, con geometria e densità proprie — non ricompensabile |
