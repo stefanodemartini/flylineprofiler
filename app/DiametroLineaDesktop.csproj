@@ -10,7 +10,10 @@
     <AssemblyName>FlyLineProfiler</AssemblyName>
     <RootNamespace>DiametroLineaDesktop</RootNamespace>
     <Product>FlyLine Profiler</Product>
-    <Version>1.0.0</Version>
+    <Version>1.1.0</Version>
+    <!-- Stamped at compile time and shown in About: the fastest way to tell whether the copy
+         being tested is the one that was just built (the Desktop copy is easy to miss). -->
+    <BuildStamp>$([System.DateTime]::Now.ToString("yyyy-MM-dd HH:mm"))</BuildStamp>
     <Copyright>© 2026 Stefano De Martini</Copyright>
     <Company>RazorBlade Fly Lines</Company>
     <ApplicationIcon>Assets\icon.ico</ApplicationIcon>
@@ -22,6 +25,9 @@
          doesn't collide with WPF types (Application, TextBox, Cursors, …) -->
     <Using Remove="System.Windows.Forms" />
     <Using Remove="System.Drawing" />
+  </ItemGroup>
+  <ItemGroup>
+    <AssemblyMetadata Include="BuildStamp" Value="$(BuildStamp)" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
