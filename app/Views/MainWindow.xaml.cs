@@ -359,7 +359,16 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         {
             string[] defaultColors = { "DC3232", "F5F5F5", "28A428", "3296FF" };
             var noz = new NozzleDefinitionVm { Number = ni, ColorHex = defaultColors[ni - 1] };
-            noz.PropertyChanged += (_, _) => { RefreshPlot(); MarkDirty(); UpdateNozzleBadge(); };
+            // IsActive is only "which nozzle a new zone would use" — pure UI selection, never
+            // written to the file. Letting it mark the document dirty made a brand-new, untouched
+            // project dirty the moment M1 was selected below, so closing the app always asked to
+            // save a project nobody had edited.
+            noz.PropertyChanged += (_, ev) =>
+            {
+                RefreshPlot();
+                if (ev.PropertyName != nameof(NozzleDefinitionVm.IsActive)) MarkDirty();
+                UpdateNozzleBadge();
+            };
             Nozzles.Add(noz);
         }
         Nozzles[0].IsActive = true;
@@ -1309,7 +1318,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
-        if (_isDirty)
+        // Same rule ConfirmDiscardIfDirty already applies everywhere else: an untitled project that
+        // was never saved has nothing worth prompting about. Checking _isDirty alone made closing
+        // an empty session pop a save prompt that can't be answered on a remote machine.
+        bool worthPrompting = _isDirty && !(_currentProjectPath == null && _projectName == "Untitled");
+        if (worthPrompting)
         {
             var r = MessageBox.Show(
                 $"Project \"{_projectName}\" has unsaved changes.\nSave before closing?",
