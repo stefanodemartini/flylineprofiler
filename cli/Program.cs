@@ -1,6 +1,7 @@
 using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using DiametroLineaDesktop.Models;
 using DiametroLineaDesktop.Services;
 
 // Headless front end for the design engine: spec in, .flp out — same builder, same physics and
@@ -25,6 +26,7 @@ try
         "build"   => Build(args),
         "inspect" => Inspect(args),
         "report"  => ReportOnly(args),
+        "pdf"     => Pdf(args),
         _         => Help(),
     };
 }
@@ -47,8 +49,9 @@ int Help()
           flyline build   <spec.json> [-o <out.flp>]   build a design and save it
           flyline inspect <in.flp>    [-o <spec.json>] recover the spec of an existing design
           flyline report  <in.flp>                     mass, AFFTA class and sink speeds
+          flyline pdf     <in.flp>    [-o <out.pdf>]   the spec sheet a producer would receive
 
-        Without -o, build writes next to the spec and inspect prints to stdout.
+        Without -o, build/pdf write next to the input file and inspect prints to stdout.
         """);
     return 0;
 }
@@ -88,6 +91,62 @@ int ReportOnly(string[] a)
 {
     string path = Arg(a, 1) ?? throw new ArgumentException("report needs a project file: flyline report <in.flp>");
     PrintReport(LineDesignBuilder.Report(ProjectService.Load(path)));
+    return 0;
+}
+
+int Pdf(string[] a)
+{
+    string path = Arg(a, 1) ?? throw new ArgumentException("pdf needs a project file: flyline pdf <in.flp>");
+    var project = ProjectService.Load(path);
+    var segments = LineDesignBuilder.ToProjectSegments(project);
+    if (segments.Count == 0)
+        throw new InvalidDataException("This project has no design segments to export.");
+
+    // Same trigger the GUI uses (_inCompMode || _zoneDerivedComp): a live zone-derived design or a
+    // baked C snapshot renders the per-slice coloured profile; a plain single-material design does
+    // not, even though ToProjectSegments bakes trivial per-segment compensation into every segment
+    // either way (RenderPdfChart is gated on this flag, not on HasCompensation alone).
+    bool useComp = project.NozzleZones.Any(z => z.EndCm > z.StartCm) || project.IsCompensatedDerivative;
+
+    var nozzleDefs  = project.NozzleDefinitions;
+    var nozzleZones = project.NozzleZones;
+
+    var chartInput = new ChartRenderInput
+    {
+        ScanPoints         = project.ScanPoints,
+        DesignNodes         = project.DesignNodes.Select(n => (n.X, n.Y)).ToList(),
+        Segments            = segments,
+        NozzleZones         = nozzleZones,
+        Nozzles             = nozzleDefs,
+        UseCompensatedView  = useComp,
+    };
+    byte[] chartBytes = ChartRenderer.RenderPdfChart(chartInput);
+
+    var (lw, grains) = LineWeightFamilyCalc.ClassifyAffta(segments);
+    string afftaBadge = lw == 0 ? "AFFTA: —"
+        : $"AFFTA  LW {lw}   {grains:0.0} gr   " +
+          (Math.Abs(LineWeightFamilyCalc.Targets.First(t => t.Lw == lw).Gr - grains) <= 6.0 ? "✓" : "✗");
+
+    var segSpeedsIns = segments.Where(s => s.HasCompensation)
+        .Select(s => s.CompensatedTargetSpeedMs * 39.3701).Where(v => v > 0).ToList();
+    bool uniformSegSpeed = segSpeedsIns.Count > 0 && (segSpeedsIns.Max() - segSpeedsIns.Min()) < 0.001;
+    string compNote = !useComp ? ""
+        : uniformSegSpeed
+            ? $"Compensated profile — target sink {segSpeedsIns[0]:0.00} in/s. " +
+              "Diameters are mass-preserving compensated values. Manufacture each section at the exact density shown."
+            : "Multi-material design — each zone uses its own material. " +
+              "Diameters are mass-preserving values. Manufacture each section at the exact density shown.";
+
+    string outPath = Opt(a, "-o")
+        ?? Path.Combine(Path.GetDirectoryName(Path.GetFullPath(path)) ?? ".",
+                        Sanitize(project.Name) + (useComp ? "_C" : "_NC") + ".pdf");
+
+    FlyLinePdfExporter.Export(outPath, project.Name, chartBytes, segments,
+        project.IsSinking, project.IsFullLine, project.WaterType == "salt", project.WaterTempC,
+        afftaBadge, project.ColorNote, nozzleDefs, nozzleZones, project.DesignLineColorHex,
+        project.CoreType, project.LaserMark, useComp, compNote);
+
+    Console.WriteLine($"Saved: {outPath}");
     return 0;
 }
 

@@ -19,6 +19,7 @@ using DiametroLineaDesktop.Models;
 using DiametroLineaDesktop.Services;
 using DiametroLineaDesktop.ViewModels;
 using ScottPlot;
+using static DiametroLineaDesktop.Services.ChartGeometry;
 
 namespace DiametroLineaDesktop.Views;
 
@@ -127,8 +128,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private const double           LabelHitRadiusPx = 26.0;
     // Per-node label positions in DATA coordinates (keyed by node X); persisted in project file
     private readonly Dictionary<double, (double LX, double LY)> _nodeLabelOffsets = new();
-    // Extremes of PDF node-label anchors, used to size the chart's Y axis
-    private double _pdfLabelYMin, _pdfLabelYMax;
 
     // Project state
     private string? _currentProjectPath = null;
@@ -1597,84 +1596,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
     }
 
-    /// <summary>
-    /// Draws a filled band between topYs and botYs.
-    /// When <paramref name="solid"/> is true (design profile) renders N concentric bands
-    /// outer-to-inner with Lambert cylindrical shading: dark edges → rich body → specular
-    /// centre, creating a convincing solid round cross-section.
-    /// When false (scan / imported series) uses a lightweight 3-layer transparent blend.
-    /// </summary>
-    private static void DrawLineFill(ScottPlot.Plot plot,
-                                     double[] xs, double[] topYs, double[] botYs,
-                                     ScottPlot.Color bodyColor,
-                                     bool solid = false)
-    {
-        if (xs.Length < 2) return;
-
-        ScottPlot.Coordinates[] Band(double fraction)
-        {
-            var top = xs.Select((x, i) => new ScottPlot.Coordinates(x,  topYs[i] * fraction));
-            var bot = xs.Select((x, i) => new ScottPlot.Coordinates(x,  botYs[i] * fraction))
-                        .Reverse();
-            return top.Concat(bot).ToArray();
-        }
-
-        if (solid)
-        {
-            // ── Lambert cylindrical shading ───────────────────────────────
-            // Draw 20 concentric bands, outermost (darkest) first.
-            // Each inner band is brighter and, at high alpha, nearly replaces
-            // the region covered by the previous darker band.
-            // v=1 (edge) → b=0 → darkest; v=0 (centre) → b=1 → brightest.
-            const int N = 20;
-            const float layerAlpha = 0.91f;
-
-            for (int i = 0; i <= N; i++)
-            {
-                double frac = 1.0 - (double)i / N;        // 1.0 → ~0
-                double v    = frac;
-                double b    = Math.Sqrt(1.0 - v * v);     // 0 at edge, 1 at centre
-
-                // Shade factor: 0.25 (very dark edge) → 1.0 (full body at centre)
-                float shade = (float)(0.25 + 0.75 * b);
-                byte  r     = (byte)Math.Min(255, (int)(bodyColor.Red   * shade));
-                byte  g     = (byte)Math.Min(255, (int)(bodyColor.Green * shade));
-                byte  bl    = (byte)Math.Min(255, (int)(bodyColor.Blue  * shade));
-
-                // Specular glint in the inner 15% of the radius
-                if (b > 0.85)
-                {
-                    float spec = (float)((b - 0.85) / 0.15) * 0.55f;
-                    r  = (byte)Math.Min(255, r  + (int)((255 - r)  * spec));
-                    g  = (byte)Math.Min(255, g  + (int)((255 - g)  * spec));
-                    bl = (byte)Math.Min(255, bl + (int)((255 - bl) * spec));
-                }
-
-                var band = plot.Add.Polygon(Band(frac));
-                band.FillColor = new ScottColor(r, g, bl).WithAlpha(layerAlpha);
-                band.LineWidth = 0;
-                band.LineColor = Colors.Transparent;
-            }
-        }
-        else
-        {
-            // ── Lightweight 3-layer blend for scan / imported series ──────
-            var body = plot.Add.Polygon(Band(1.0));
-            body.FillColor = bodyColor.WithAlpha(0.55f);
-            body.LineWidth = 0;
-            body.LineColor = Colors.Transparent;
-
-            var mid = plot.Add.Polygon(Band(0.60));
-            mid.FillColor = Colors.White.WithAlpha(0.14f);
-            mid.LineWidth = 0;
-            mid.LineColor = Colors.Transparent;
-
-            var hi = plot.Add.Polygon(Band(0.25));
-            hi.FillColor = Colors.White.WithAlpha(0.22f);
-            hi.LineWidth = 0;
-            hi.LineColor = Colors.Transparent;
-        }
-    }
+    // DrawLineFill moved to Services/ChartGeometry (see the note further down where the other
+    // pure chart helpers used to live) — the `using static` import keeps every call site here
+    // resolving to it unqualified.
 
     private double[] GetDisplayedSeries(IReadOnlyList<MeasurementPoint> points)
     {
@@ -2005,21 +1929,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         return new ScottColor(r, g, b);
     }
 
-    /// <summary>Linear interpolation of the design profile diameter at an arbitrary X position.</summary>
-    private static double InterpolateProfileY(List<(double X, double Y)> sorted, double x)
-    {
-        if (x <= sorted[0].X)  return sorted[0].Y;
-        if (x >= sorted[^1].X) return sorted[^1].Y;
-        for (int i = 0; i < sorted.Count - 1; i++)
-        {
-            if (x >= sorted[i].X && x <= sorted[i + 1].X)
-            {
-                double t = (x - sorted[i].X) / (sorted[i + 1].X - sorted[i].X);
-                return sorted[i].Y + t * (sorted[i + 1].Y - sorted[i].Y);
-            }
-        }
-        return sorted[^1].Y;
-    }
+    // InterpolateProfileY, TryParseHexColor, DensityColor and DrawLineFill used to live here as
+    // private static methods — moved verbatim to Services/ChartGeometry so the headless PDF path
+    // (ChartRenderer, used by the CLI) can call the exact same code instead of a second copy. The
+    // `using static` import above brings the names back into scope unqualified, so every call site
+    // below is unchanged.
 
     private void RenderNozzleZones(Plot plot, List<(double X, double Y)> sorted)
     {
@@ -2045,191 +1959,35 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
     }
 
-    private static bool TryParseHexColor(string hex6, out ScottColor color)
-    {
-        color = new ScottColor(200, 200, 200);
-        if (string.IsNullOrWhiteSpace(hex6)) return false;
-        hex6 = hex6.TrimStart('#');
-        if (hex6.Length < 6) return false;
-        try
-        {
-            byte r = Convert.ToByte(hex6[0..2], 16);
-            byte g = Convert.ToByte(hex6[2..4], 16);
-            byte b = Convert.ToByte(hex6[4..6], 16);
-            color = new ScottColor(r, g, b);
-            return true;
-        }
-        catch { return false; }
-    }
+    // TryParseHexColor and DensityColor moved to Services/ChartGeometry (see the note above
+    // RenderNozzleZones) — `using static` keeps every call site here unqualified.
 
-    /// <summary>
-    /// The colour to paint at one slice of a C profile: if a real Nozzle Zone covers this
-    /// position, its own user-chosen colour (or M1's, outside any zone) — otherwise (no zones
-    /// defined at all, e.g. a plain physics target-speed compensation) the auto density gradient.
-    /// Used for both the live preview and a loaded baked snapshot alike.
-    /// </summary>
-    private ScottColor GetSliceColor(double xAbsCm, double density, double minDens, double densRng)
-    {
-        if (NozzleZones.Count > 0)
-        {
-            var zone = NozzleZones.FirstOrDefault(z => xAbsCm >= z.StartCm && xAbsCm < z.EndCm);
-            string hex = zone != null ? zone.ColorHex : (Nozzles.Count > 0 ? Nozzles[0].ColorHex : "DC3232");
-            if (TryParseHexColor(hex, out var col)) return col;
-        }
-        return DensityColor(densRng > 0 ? Math.Clamp((density - minDens) / densRng, 0, 1) : 0.5);
-    }
+    /// <summary>Zones and nozzles as the plain, UI-free models <see cref="ChartGeometry"/> takes — built
+    /// once per render call, not per slice, even though several of its callers loop per-slice.</summary>
+    private List<NozzleZone> CurrentZonesForChart() =>
+        NozzleZones.Select(z => new NozzleZone { StartCm = z.StartCm, EndCm = z.EndCm, NozzleIndex = z.NozzleIndex }).ToList();
+    private List<NozzleDefinition> CurrentNozzlesForChart() =>
+        Nozzles.Select(n => new NozzleDefinition { ColorHex = n.ColorHex, DensityGCm3 = n.DensityGCm3, Label = n.Label }).ToList();
 
-    /// <summary>
-    /// Which real nozzle (M1-M4) a material zone is, for the "M{n}" tag at its boundary — never
-    /// "S{n}", which is reserved for taper shape (see the mandatory principle above
-    /// GetTaperShapeBoundaries). A live zone design's NozzleZones is the authored ground truth for
-    /// "what material is physically here"; a loaded/baked C snapshot has no NozzleZones any more
-    /// (baking only carries density), so it falls back to matching this span's density against the
-    /// file's own NozzleDefinitions (populated to the real baked values — see
-    /// QuantizeCompensationToRealMaterials/SyncNozzleDensitiesFromComp).
-    /// </summary>
-    private (string Label, ScottColor Color) GetMaterialTag(double xAbsCm, double density)
-    {
-        int idx = NozzleZones.FirstOrDefault(z => xAbsCm >= z.StartCm && xAbsCm < z.EndCm)?.NozzleIndex ?? -1;
-        if (idx < 0)
-        {
-            double bestDiff = double.MaxValue;
-            for (int i = 0; i < Nozzles.Count; i++)
-            {
-                if (Nozzles[i].DensityGCm3 <= 0) continue;
-                double diff = Math.Abs(Nozzles[i].DensityGCm3 - density);
-                if (diff < bestDiff) { bestDiff = diff; idx = i; }
-            }
-        }
-        if (idx < 0 || idx >= Nozzles.Count)
-            return ($"ρ {density:0.00}", DensityColor(0.5));
+    private ScottColor GetSliceColor(double xAbsCm, double density, double minDens, double densRng) =>
+        ChartGeometry.GetSliceColor(xAbsCm, density, minDens, densRng, CurrentZonesForChart(), CurrentNozzlesForChart());
 
-        var n = Nozzles[idx];
-        TryParseHexColor(n.ColorHex, out var col);
-        return ($"M{idx + 1}", col);
-    }
+    private (string Label, ScottColor Color) GetMaterialTag(double xAbsCm, double density) =>
+        ChartGeometry.GetMaterialTag(xAbsCm, density, CurrentZonesForChart(), CurrentNozzlesForChart());
 
-    /// <summary>
-    /// Builds a node list from compensated segment start/end diameters so the
-    /// compensated profile can be rendered in the same style as the design profile.
-    /// A tiny epsilon is added when two consecutive nodes share the same X to avoid
-    /// division-by-zero in piecewise interpolation.
-    /// </summary>
-    /// <summary>
-    /// The real material-zone boundaries, found from each segment's own compensated slices — not
-    /// from ProjectSegments' top-level SpecWeightGCm3, which for a LIVE (not-yet-baked) zone design
-    /// stays at the shared base density on every segment regardless of its zones (ApplyZoneDensities
-    /// only ever writes the real per-slice material into CompSliceDensities). A material can also
-    /// start or end mid-segment — "il cambio di colore può avvenire in un punto qualsiasi dei
-    /// tapers senza che coincida con il cambio di pendenza" — so this flattens every HasCompensation
-    /// segment's own slices into one continuous sequence and walks that, which finds a transition
-    /// wherever it really is, whether that's at a segment boundary (a loaded/baked snapshot,
-    /// effectively one slice per segment) or partway through one (a live zone design). A chart that
-    /// used to thin its geometry down to an arbitrary evenly-spaced sample for ticks/labels — with
-    /// no relationship to where the material actually changes — could just as easily land (and
-    /// label "S…") on the plain running line; this instead returns exactly the positions that mean
-    /// something: the two ends plus every point the material genuinely changes.
-    /// </summary>
-    private List<(double X, double Y)> GetMaterialZoneBoundaries(List<(double X, double Y)> sorted)
-    {
-        var spans = GetMaterialZoneSpans(sorted);
-        if (spans.Count == 0) return sorted;
-        var result = new List<(double X, double Y)> { (spans[0].StartX, InterpolateProfileY(sorted, spans[0].StartX)) };
-        foreach (var s in spans)
-            result.Add((s.EndX, InterpolateProfileY(sorted, s.EndX)));
-        return result;
-    }
+    private List<(double X, double Y)> GetMaterialZoneBoundaries(List<(double X, double Y)> sorted) =>
+        ChartGeometry.GetMaterialZoneBoundaries(ProjectSegments, sorted);
 
-    /// <summary>
-    /// The real material zones as (start, end, density) spans — same slice-flattening as
-    /// GetMaterialZoneBoundaries (see its own comment for why), kept here as the one place that
-    /// computes them so GetMaterialZoneBoundaries and the "M{n}" material tag rendering can't drift
-    /// apart into two different ideas of where a zone starts and ends.
-    /// </summary>
-    private List<(double StartX, double EndX, double Density)> GetMaterialZoneSpans(List<(double X, double Y)> sorted)
-    {
-        var flat = new List<(double X, double Density)>();
-        foreach (var seg in ProjectSegments.OrderBy(s => s.StartCm).Where(s => s.HasCompensation))
-        {
-            int ns = seg.CompSliceXsCm.Length;
-            for (int i = 0; i < ns; i++)
-                flat.Add((seg.StartCm + seg.CompSliceXsCm[i], seg.CompSliceDensities[i]));
-        }
-        if (flat.Count == 0) return new();
-        flat = flat.OrderBy(f => f.X).ToList();
+    private List<(double StartX, double EndX, double Density)> GetMaterialZoneSpans(List<(double X, double Y)> sorted) =>
+        ChartGeometry.GetMaterialZoneSpans(ProjectSegments, sorted);
 
-        var spans = new List<(double StartX, double EndX, double Density)>();
-        double spanStart = sorted[0].X;
-        for (int i = 0; i < flat.Count; i++)
-        {
-            bool last = i == flat.Count - 1;
-            if (!last && Math.Abs(flat[i + 1].Density - flat[i].Density) <= 1e-6) continue;
-            double x = last ? sorted[^1].X : (flat[i].X + flat[i + 1].X) / 2.0;
-            spans.Add((spanStart, x, flat[i].Density));
-            spanStart = x;
-        }
-        return spans;
-    }
+    private List<(double X, double Y)> GetTaperShapeBoundaries(List<(double X, double Y)> sorted) =>
+        ChartGeometry.GetTaperShapeBoundaries(ProjectSegments, sorted);
 
-    /// <summary>
-    /// Where the ORIGINAL taper's own shape changes — every fine slice inherits the Name of the
-    /// real NC segment it was cut from (see BuildCompensatedSnapshotProject), so a Name change here
-    /// marks a true taper transition (e.g. a straight taper ending into a level run), independent
-    /// of whether the material also changes there. A manufacturer needs the diameter and position
-    /// at these points just as much as at a material change — the two are different things and
-    /// don't always land on the same X (see GetManufacturingCheckpoints, which unions both).
-    /// Walks ProjectSegments by its own StartCm/EndCm and interpolates Y from whichever `sorted`
-    /// node list the caller passed — never by indexing into `sorted` itself. An earlier version
-    /// required segs.Count == sorted.Count-1 and fell back to returning every node in `sorted`
-    /// (i.e. every fine ~1cm slice as a "boundary") whenever that didn't hold — which it never did
-    /// for the PDF chart, since RenderPdfChart's `sorted` is GetCompNodes() (2 nodes per segment),
-    /// not the 1-per-boundary _segmentNodes the on-screen chart uses — silently producing an S-label
-    /// and divider at nearly every slice in every compensated PDF export.
-    /// </summary>
-    private List<(double X, double Y)> GetTaperShapeBoundaries(List<(double X, double Y)> sorted)
-    {
-        var segs = ProjectSegments.OrderBy(s => s.StartCm).ToList();
-        if (segs.Count == 0) return sorted;
+    private List<(double X, double Y)> GetManufacturingCheckpoints(List<(double X, double Y)> sorted) =>
+        ChartGeometry.GetManufacturingCheckpoints(ProjectSegments, sorted);
 
-        var result = new List<(double X, double Y)> { (segs[0].StartCm, InterpolateProfileY(sorted, segs[0].StartCm)) };
-        for (int i = 0; i < segs.Count; i++)
-        {
-            bool lastSeg = i == segs.Count - 1;
-            if (lastSeg || segs[i + 1].Name != segs[i].Name)
-                result.Add((segs[i].EndCm, InterpolateProfileY(sorted, segs[i].EndCm)));
-        }
-        return result;
-    }
-
-    /// <summary>
-    /// Every position a producer actually needs the diameter called out for: where the material
-    /// changes (GetMaterialZoneBoundaries) UNION where the taper shape changes
-    /// (GetTaperShapeBoundaries) — the two don't necessarily coincide, so neither list alone is
-    /// enough.
-    /// </summary>
-    private List<(double X, double Y)> GetManufacturingCheckpoints(List<(double X, double Y)> sorted)
-    {
-        return GetMaterialZoneBoundaries(sorted)
-            .Concat(GetTaperShapeBoundaries(sorted))
-            .GroupBy(n => Math.Round(n.X, 3))
-            .Select(g => g.First())
-            .OrderBy(n => n.X)
-            .ToList();
-    }
-
-    private List<(double X, double Y)> GetCompNodes()
-    {
-        var nodes = new List<(double X, double Y)>();
-        foreach (var seg in ProjectSegments.OrderBy(s => s.StartCm).Where(s => s.HasCompensation))
-        {
-            double xs = seg.StartCm;
-            if (nodes.Count > 0 && Math.Abs(nodes[^1].X - xs) < 1e-6)
-                xs += 1e-4;
-            nodes.Add((xs, seg.CompSliceDiamsMm[0]));
-            nodes.Add((seg.EndCm, seg.CompSliceDiamsMm[^1]));
-        }
-        return nodes;
-    }
+    private List<(double X, double Y)> GetCompNodes() => ChartGeometry.GetCompNodes(ProjectSegments);
 
     // Segment overlay rendering
     // node.Y stores full diameter in mm; chart Y axis is radius (diameter/2)
@@ -2588,18 +2346,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             c = Quantize1D(arr, c.Length - 1);
         }
         return c;
-    }
-
-    /// <summary>Density color ramp: blue (low) → cyan → green → yellow → red (high).</summary>
-    private static ScottColor DensityColor(double t)
-    {
-        t = Math.Clamp(t, 0, 1);
-        double r, g, b;
-        if (t < 0.25)      { double s = t / 0.25;       r = 0;         g = s;         b = 1; }
-        else if (t < 0.5)  { double s = (t-0.25)/0.25;  r = 0;         g = 1;         b = 1-s; }
-        else if (t < 0.75) { double s = (t-0.5)/0.25;   r = s;         g = 1;         b = 0; }
-        else               { double s = (t-0.75)/0.25;  r = 1;         g = 1-s;       b = 0; }
-        return new ScottColor((byte)(r*255), (byte)(g*255), (byte)(b*255));
     }
 
     /// <summary>
@@ -4361,293 +4107,29 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     /// <summary>
     /// Renders a clean chart image for PDF: thinner profile lines, no legend box.
     /// </summary>
+    /// <summary>
+    /// Renders the same chart image whether it's the GUI or the headless CLI asking — this is a
+    /// thin wrapper gathering the window's own state into a <see cref="ChartRenderInput"/> and
+    /// handing it to <see cref="ChartRenderer.RenderPdfChart"/>, which is the entire implementation
+    /// (also used directly by the CLI's `flyline pdf` command). Kept as one shared implementation
+    /// on purpose: the on-screen chart and the PDF chart used to be independently-maintained copies
+    /// of the same logic, and the same bug had to be found and fixed twice more than once because
+    /// of it.
+    /// </summary>
     private byte[] RenderPdfChart()
     {
-        var plot = new ScottPlot.Plot();
-        plot.FigureBackground.Color = ScottPlot.Colors.White;
-        plot.DataBackground.Color   = ScottPlot.Colors.White;
-        plot.Axes.Color(new ScottColor(80, 80, 80));
-
-        var pts = _vm.Points.OrderBy(p => p.X).ToList();
-
-        // Scan data (if present)
-        if (pts.Count > 0)
-        {
-            double[] xs     = pts.Select(p => p.X).ToArray();
-            double[] topYs  = pts.Select(p =>  p.FilteredY / 2.0).ToArray();
-            double[] botYs  = pts.Select(p => -p.FilteredY / 2.0).ToArray();
-            var scanCol = new ScottColor(255, 220, 0).WithAlpha(0.80f);
-            var top = plot.Add.Scatter(xs, topYs); top.Color = scanCol; top.LineWidth = 1; top.MarkerSize = 0;
-            var bot = plot.Add.Scatter(xs, botYs); bot.Color = scanCol; bot.LineWidth = 1; bot.MarkerSize = 0;
-        }
-
-        // Design overlay — thinner lines for print
-        // In modalità compensato il PDF mostra il profilo compensato con gradiente densità.
         bool pdfUseComp = (_inCompMode || _zoneDerivedComp) && ProjectSegments.Any(s => s.HasCompensation);
-        var baseNodes   = pdfUseComp ? GetCompNodes() : _segmentNodes.OrderBy(n => n.X).ToList();
-
-        if (baseNodes.Count >= 2)
+        var input = new ChartRenderInput
         {
-            var sorted     = baseNodes;
-            double[] xs    = sorted.Select(n => n.X).ToArray();
-            double[] topYs = sorted.Select(n =>  n.Y / 2.0).ToArray();
-            double[] botYs = sorted.Select(n => -n.Y / 2.0).ToArray();
-            var dc = DesignColor;
-
-            if (pdfUseComp)
-            {
-                // Materiali reali già baked nei segmenti (vedi QuantizeCompensationToRealMaterials)
-                // — mai ri-quantizzati qui, altrimenti il grafico potrebbe mostrare meno materiali
-                // di quelli realmente usati nella geometria/tabella dello stesso PDF.
-                var compSegs = ProjectSegments.OrderBy(s => s.StartCm)
-                    .Where(s => s.HasCompensation).ToList();
-                double[] qDens  = compSegs.SelectMany(s => s.CompSliceDensities)
-                    .Where(d => d > 0).Distinct().OrderBy(d => d).ToArray();
-                double   minDens = qDens.Length > 0 ? qDens[0] : 0;
-                double   maxDens = qDens.Length > 0 ? qDens[^1] : 1;
-                double   densRng = Math.Max(maxDens - minDens, 1e-9);
-                double NearestQ(double d) => qDens.Length == 0 ? d : qDens.MinBy(c => Math.Abs(c - d));
-
-                foreach (var seg in compSegs)
-                {
-                    int    ns   = seg.CompSliceXsCm.Length;
-                    if (ns == 0) continue;
-                    double half = ns > 1 ? (seg.CompSliceXsCm[1] - seg.CompSliceXsCm[0]) / 2.0
-                                         : seg.LengthCm / 2.0;
-                    for (int i = 0; i < ns; i++)
-                    {
-                        double xAbs = seg.StartCm + seg.CompSliceXsCm[i];
-                        double x0   = xAbs - half, x1 = xAbs + half;
-                        double d0   = i > 0    ? (seg.CompSliceDiamsMm[i-1] + seg.CompSliceDiamsMm[i])   / 2.0 : seg.CompSliceDiamsMm[i];
-                        double d1   = i < ns-1 ? (seg.CompSliceDiamsMm[i]   + seg.CompSliceDiamsMm[i+1]) / 2.0 : seg.CompSliceDiamsMm[i];
-                        // Zona reale: colore scelto dall'utente. Nessuna zona: gradiente densità
-                        // quantizzato a max 4 livelli per uso produttivo.
-                        double qd = NearestQ(seg.CompSliceDensities[i]);
-                        var sliceColor = GetSliceColor(xAbs, qd, minDens, densRng);
-                        DrawLineFill(plot,
-                            new[] { x0, x1 },
-                            new[] { d0 / 2.0, d1 / 2.0 },
-                            new[] { -d0 / 2.0, -d1 / 2.0 },
-                            sliceColor, solid: true);
-                    }
-                }
-            }
-            else if (NozzleZones.Count == 0)
-            {
-                DrawLineFill(plot, xs, topYs, botYs, dc, solid: true);
-            }
-            else
-            {
-                DrawLineFill(plot, xs, topYs, botYs, dc, solid: true);
-                foreach (var zone in NozzleZones)
-                {
-                    if (zone.EndCm <= zone.StartCm) continue;
-                    if (!TryParseHexColor(zone.ColorHex, out var zoneColor)) continue;
-                    var pts2 = new List<(double X, double Y)>
-                        { (zone.StartCm, InterpolateProfileY(sorted, zone.StartCm)) };
-                    foreach (var n in sorted.Where(n => n.X > zone.StartCm && n.X < zone.EndCm))
-                        pts2.Add(n);
-                    pts2.Add((zone.EndCm, InterpolateProfileY(sorted, zone.EndCm)));
-                    double[] sxs  = pts2.Select(p => p.X).ToArray();
-                    double[] stop = pts2.Select(p =>  p.Y / 2.0).ToArray();
-                    double[] sbot = pts2.Select(p => -p.Y / 2.0).ToArray();
-                    DrawLineFill(plot, sxs, stop, sbot, zoneColor, solid: true);
-                }
-            }
-
-            var tl = plot.Add.Scatter(xs, topYs); tl.Color = dc; tl.LineWidth = 1.2f; tl.MarkerSize = 0;
-            var bl = plot.Add.Scatter(xs, botYs); bl.Color = dc; bl.LineWidth = 1.2f; bl.MarkerSize = 0;
-
-            // Node labels + leaders.  True collision avoidance: each label's
-            // bounding box (estimated from its text) is tested against every box
-            // already placed; slots are tried below, above, then further out
-            // until a free spot is found.
-            var leaderColor = new ScottColor(100, 100, 100);
-            double xSpan    = sorted[^1].X - sorted[0].X;
-            double maxDiam  = sorted.Max(n => n.Y);
-            double rowGap   = maxDiam * 0.40;   // uniform row height regardless of local diameter
-            // Approximate label box size in data units (chart rendered ~3200×600 px)
-            const int pdfLblSize = 17;
-            double dataPerPxX = (xSpan * 1.15) / 3000.0;
-            double yEstSpan   = maxDiam + 2 * rowGap * (1.6 + 3 * 1.2);
-            double dataPerPxY = yEstSpan / 480.0;
-            // Comp mode: every manufacturing checkpoint (material AND taper-shape changes — see
-            // GetManufacturingCheckpoints), not every fine ~1cm node — a loaded C snapshot has
-            // hundreds of those, which would turn this into hundreds of Ø/position callouts.
-            var labelNodes = (pdfUseComp && sorted.Count > 1)
-                ? GetManufacturingCheckpoints(sorted)
-                : sorted;
-
-            var placedBoxes = new List<(double X1, double Y1, double X2, double Y2)>();
-            _pdfLabelYMin   = 0; _pdfLabelYMax = 0;
-            for (int ni = 0; ni < labelNodes.Count; ni++)
-            {
-                var node         = labelNodes[ni];
-                double chartYTop =  node.Y / 2.0;
-                double chartYBot = -node.Y / 2.0;
-                string text      = $"Ø {node.Y:0.00}  {node.X:0.0} cm";
-                double boxW      = text.Length * pdfLblSize * 0.62 * dataPerPxX;
-                double boxH      = (pdfLblSize * 1.5 + 8) * dataPerPxY;
-                double defaultLX = node.X;
-                double defaultLY = chartYBot - rowGap;
-                // Try slots: below row0, above row0, below row1, above row1, …
-                for (int slot = 0; slot < 8; slot++)
-                {
-                    bool above = slot % 2 == 1;
-                    int  row   = slot / 2;
-                    // Above-labels start further out so they clear the S1/S2 segment labels
-                    double tryY = above
-                        ? chartYTop + rowGap * (1.6 + row * 1.2)
-                        : chartYBot - rowGap * (1.0 + row * 1.2);
-                    // Anchor is LowerCenter when above, UpperCenter when below
-                    double y1 = above ? tryY : tryY - boxH;
-                    double y2 = above ? tryY + boxH : tryY;
-                    bool collides = placedBoxes.Any(b =>
-                        node.X - boxW / 2 < b.X2 && node.X + boxW / 2 > b.X1 &&
-                        y1 < b.Y2 && y2 > b.Y1);
-                    defaultLY = tryY;
-                    if (!collides) break;
-                }
-                double lx = defaultLX, ly = defaultLY;
-                // Manually dragged positions win, but only while they stay clear
-                // of labels already placed — stale offsets fall back to auto.
-                if (_nodeLabelOffsets.TryGetValue(node.X, out var saved))
-                {
-                    double sy1 = saved.LY > 0 ? saved.LY : saved.LY - boxH;
-                    double sy2 = saved.LY > 0 ? saved.LY + boxH : saved.LY;
-                    bool savedCollides = placedBoxes.Any(b =>
-                        saved.LX - boxW / 2 < b.X2 && saved.LX + boxW / 2 > b.X1 &&
-                        sy1 < b.Y2 && sy2 > b.Y1);
-                    if (!savedCollides) (lx, ly) = saved;
-                }
-                placedBoxes.Add((lx - boxW / 2, ly > 0 ? ly : ly - boxH,
-                                 lx + boxW / 2, ly > 0 ? ly + boxH : ly));
-                _pdfLabelYMin = Math.Min(_pdfLabelYMin, ly > 0 ? ly : ly - boxH);
-                _pdfLabelYMax = Math.Max(_pdfLabelYMax, ly > 0 ? ly + boxH : ly);
-
-                var leader = plot.Add.Scatter(
-                    new double[] { node.X, lx },
-                    new double[] { (ly > 0 ? chartYTop : chartYBot) * 0.85, ly });
-                leader.Color      = leaderColor;
-                leader.LineWidth  = 1.0f;
-                leader.MarkerSize = 0;
-
-                var lbl = plot.Add.Text($"Ø {node.Y:0.00}  {node.X:0.0} cm", lx, ly);
-                lbl.LabelFontSize        = pdfLblSize;
-                lbl.LabelBold            = true;
-                lbl.LabelFontColor       = new ScottColor(50, 50, 50);
-                lbl.LabelAlignment       = ly > 0 ? Alignment.LowerCenter : Alignment.UpperCenter;
-                lbl.LabelBackgroundColor = ScottPlot.Colors.White.WithAlpha(0.95f);
-                lbl.LabelBorderColor     = leaderColor;
-                lbl.LabelBorderWidth     = 1f;
-                lbl.LabelPadding         = 5;
-                lbl.OffsetX              = 0;
-                lbl.OffsetY              = 0;
-            }
-
-            // Vertical divider lines at each node for PDF
-            var dividerColor = new ScottColor(80, 80, 80);
-            foreach (var node in labelNodes)
-            {
-                double topY =  node.Y / 2.0;
-                double botY = -node.Y / 2.0;
-                var div = plot.Add.Scatter(
-                    new double[] { node.X, node.X },
-                    new double[] { topY, botY });
-                div.Color      = dividerColor;
-                div.LineWidth  = 1.0f;
-                div.MarkerSize = 0;
-            }
-
-            // Segment labels S1, S2… for PDF — SEMPRE e SOLO i tapers fisici reali, mai i cambi di
-            // materiale (stesso principio mandatorio del grafico a schermo). Per un file C caricato
-            // ProjectSegments ha un "segmento" trivial per ogni ~1cm slice — molti consecutivi
-            // condividono lo stesso Name (vengono dallo stesso taper originale) — quindi si
-            // raggruppano con GetTaperShapeBoundaries invece di iterarli uno a uno, altrimenti la
-            // stessa etichetta "S1" verrebbe disegnata decine di volte, leggermente sfalsata.
-            var segLabelColor = new ScottColor(40, 40, 40);
-            if (pdfUseComp)
-            {
-                var taperBounds = GetTaperShapeBoundaries(sorted);
-                for (int si = 0; si < taperBounds.Count - 1; si++)
-                {
-                    double cx      = (taperBounds[si].X + taperBounds[si + 1].X) / 2.0;
-                    double topAtCx = InterpolateProfileY(sorted, cx) / 2.0;
-                    double gap     = InterpolateProfileY(sorted, cx) * 0.08;
-                    var atCx = ProjectSegments.OrderBy(s => s.StartCm)
-                        .FirstOrDefault(s => cx >= s.StartCm && cx <= s.EndCm);
-                    string lname = !string.IsNullOrWhiteSpace(atCx?.Name) ? atCx!.Name : $"S{si + 1}";
-                    var sl = plot.Add.Text(lname, cx, topAtCx + gap);
-                    sl.LabelFontSize        = pdfLblSize;
-                    sl.LabelBold            = false;
-                    sl.LabelFontColor       = segLabelColor;
-                    sl.LabelAlignment       = Alignment.LowerCenter;
-                    sl.LabelBackgroundColor = ScottPlot.Colors.Transparent;
-                    sl.LabelBorderWidth     = 0;
-                    sl.LabelPadding         = 2;
-                    sl.OffsetX              = 0;
-                    sl.OffsetY              = 0;
-                }
-
-                // Etichette "M{n}" per ogni zona di materiale — mai "S", stesso standard del
-                // grafico a schermo: un badge col colore reale dell'ugello, sul bordo del profilo.
-                foreach (var span in GetMaterialZoneSpans(sorted))
-                {
-                    double midX     = (span.StartX + span.EndX) / 2.0;
-                    double topAtMid = InterpolateProfileY(sorted, midX) / 2.0;
-                    var (matLabel, matColor) = GetMaterialTag(midX, span.Density);
-                    double luminance = (0.299 * matColor.R + 0.587 * matColor.G + 0.114 * matColor.B) / 255.0;
-                    var textColor = luminance > 0.6 ? new ScottColor(20, 20, 20) : ScottPlot.Colors.White;
-
-                    var ml = plot.Add.Text(matLabel, midX, topAtMid);
-                    ml.LabelFontSize        = pdfLblSize - 3;
-                    ml.LabelBold            = true;
-                    ml.LabelFontColor       = textColor;
-                    ml.LabelBackgroundColor = matColor;
-                    ml.LabelBorderColor     = new ScottColor(30, 30, 30);
-                    ml.LabelBorderWidth     = 0.8f;
-                    ml.LabelAlignment       = Alignment.LowerCenter;
-                    ml.LabelPadding         = 3;
-                    ml.OffsetX = 0; ml.OffsetY = 4;
-                }
-            }
-            else
-            {
-                for (int si = 0; si < sorted.Count - 1; si++)
-                {
-                    double cx      = (sorted[si].X + sorted[si + 1].X) / 2.0;
-                    double topAtCx = InterpolateProfileY(sorted, cx) / 2.0;
-                    double gap     = InterpolateProfileY(sorted, cx) * 0.08;
-                    var sl = plot.Add.Text($"S{si + 1}", cx, topAtCx + gap);
-                    sl.LabelFontSize        = pdfLblSize;
-                    sl.LabelBold            = false;
-                    sl.LabelFontColor       = segLabelColor;
-                    sl.LabelAlignment       = Alignment.LowerCenter;
-                    sl.LabelBackgroundColor = ScottPlot.Colors.Transparent;
-                    sl.LabelBorderWidth     = 0;
-                    sl.LabelPadding         = 2;
-                    sl.OffsetX              = 0;
-                    sl.OffsetY              = 0;
-                }
-            }
-        }
-
-        plot.XLabel("Length (cm)");
-        plot.YLabel("Diameter (mm)");
-        plot.Axes.Bottom.TickLabelStyle.FontSize = 15;
-        plot.Axes.Left.TickLabelStyle.FontSize   = 15;
-        plot.Axes.Bottom.Label.FontSize           = 16;
-        plot.Axes.Left.Label.FontSize             = 16;
-        plot.Axes.AutoScale();
-        var yRange = plot.Axes.GetLimits().Rect.Height;
-        var lim    = plot.Axes.GetLimits();
-        // Make room for the staggered node labels above and below the profile
-        // (label anchors tracked while placing them; extra margin for text height)
-        double yBot = Math.Min(lim.Bottom, _pdfLabelYMin - yRange * 0.10);
-        double yTop = Math.Max(lim.Top,    _pdfLabelYMax + yRange * 0.10);
-        plot.Axes.SetLimitsY(yBot - yRange * 0.05, yTop + yRange * 0.05);
-
-        return plot.GetImage(3200, 600).GetImageBytes(ScottPlot.ImageFormat.Png);
+            ScanPoints          = _vm.Points.ToList(),
+            DesignNodes         = _segmentNodes.OrderBy(n => n.X).ToList(),
+            Segments            = ProjectSegments.ToList(),
+            NozzleZones         = CurrentZonesForChart(),
+            Nozzles             = CurrentNozzlesForChart(),
+            UseCompensatedView  = pdfUseComp,
+            NodeLabelOffsets    = new Dictionary<double, (double LX, double LY)>(_nodeLabelOffsets),
+        };
+        return ChartRenderer.RenderPdfChart(input);
     }
 
     private void ExportPdf_Click(object sender, RoutedEventArgs e)

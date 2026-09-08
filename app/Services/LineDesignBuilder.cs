@@ -405,35 +405,71 @@ public static class LineDesignBuilder
     }
 
     /// <summary>
-    /// Rebuilds the segment list the way the app does on load, but with each section carrying the
+    /// Rebuilds the segment list the way the app does on load, but with each piece carrying the
     /// density really applied there (its zone's, where one covers it) rather than the design's base
-    /// — so mass and AFFTA come out right for a multi-material line.
+    /// — so mass and AFFTA come out right for a multi-material line. A segment a zone boundary falls
+    /// inside is split there first; a segment lying entirely within one zone is not exempt from
+    /// this, it simply produces one piece — the mistake that once made a zone covering whole
+    /// segments contribute nothing to the app's own AFFTA class (see MainWindow's
+    /// BuildEffectiveSegmentsForFamilySource, the GUI's equivalent of this method, fixed the same
+    /// way for the same reason).
+    /// Each piece also gets a trivial one-slice "compensation" baked in (<see cref="ProjectSegment.HasCompensation"/>
+    /// true, <see cref="ProjectSegment.SetCompensation"/>), exactly as <c>BakeLoadedSegmentsAsCompensation</c>
+    /// does for a freshly loaded C snapshot — the chart renderer colours a segment by its real
+    /// material only when this is set, the same rule the GUI itself follows.
     /// </summary>
     public static List<ProjectSegment> ToProjectSegments(FlyLineProject p)
     {
         var nodes = p.DesignNodes.OrderBy(n => n.X).ToList();
-        var segs  = new List<ProjectSegment>();
+        var zones = p.NozzleZones.Where(z => z.EndCm > z.StartCm).OrderBy(z => z.StartCm).ToList();
+        bool isSalt = p.WaterType == "salt";
+        var segs = new List<ProjectSegment>();
+
         for (int i = 0; i < nodes.Count - 1; i++)
         {
-            var m = p.SegmentMetadata.FirstOrDefault(mm => Math.Abs(mm.StartCm - nodes[i].X) < Eps);
-            double mid = (nodes[i].X + nodes[i + 1].X) / 2.0;
-            var zone = p.NozzleZones.FirstOrDefault(z => mid >= z.StartCm && mid < z.EndCm);
-            double rho = zone != null && zone.NozzleIndex < p.NozzleDefinitions.Count
-                         && p.NozzleDefinitions[zone.NozzleIndex].DensityGCm3 > 0
-                ? p.NozzleDefinitions[zone.NozzleIndex].DensityGCm3
-                : (p.UseSharedDensity ? p.SharedDensityGCm3 : m?.SpecWeight ?? 0);
+            double segStart = nodes[i].X, segEnd = nodes[i + 1].X;
+            double segLen   = segEnd - segStart;
+            if (segLen <= 0) continue;
+            var m = p.SegmentMetadata.FirstOrDefault(mm => Math.Abs(mm.StartCm - segStart) < Eps);
+            string name   = m?.Name   ?? $"S{i + 1}";
+            bool   isHead = m?.IsHead ?? !p.IsFullLine;
 
-            segs.Add(new ProjectSegment
+            var cuts = new SortedSet<double> { segStart, segEnd };
+            foreach (var z in zones)
             {
-                Index           = i + 1,
-                StartCm         = nodes[i].X,
-                EndCm           = nodes[i + 1].X,
-                StartDiameterMm = nodes[i].Y,
-                EndDiameterMm   = nodes[i + 1].Y,
-                Name            = m?.Name   ?? $"S{i + 1}",
-                IsHead          = m?.IsHead ?? !p.IsFullLine,
-                SpecWeightGCm3  = rho,
-            });
+                if (z.StartCm > segStart && z.StartCm < segEnd) cuts.Add(z.StartCm);
+                if (z.EndCm   > segStart && z.EndCm   < segEnd) cuts.Add(z.EndCm);
+            }
+            var xs = cuts.ToList();
+
+            for (int c = 0; c < xs.Count - 1; c++)
+            {
+                double x0 = xs[c], x1 = xs[c + 1];
+                double t0 = (x0 - segStart) / segLen, t1 = (x1 - segStart) / segLen;
+                double d0 = nodes[i].Y + t0 * (nodes[i + 1].Y - nodes[i].Y);
+                double d1 = nodes[i].Y + t1 * (nodes[i + 1].Y - nodes[i].Y);
+                double mid = (x0 + x1) / 2.0;
+                var zone = zones.FirstOrDefault(z => mid >= z.StartCm && mid < z.EndCm);
+                double rho = zone != null && zone.NozzleIndex < p.NozzleDefinitions.Count
+                             && p.NozzleDefinitions[zone.NozzleIndex].DensityGCm3 > 0
+                    ? p.NozzleDefinitions[zone.NozzleIndex].DensityGCm3
+                    : (p.UseSharedDensity ? p.SharedDensityGCm3 : m?.SpecWeight ?? 0);
+
+                var seg = new ProjectSegment
+                {
+                    Index = segs.Count + 1, StartCm = x0, EndCm = x1,
+                    StartDiameterMm = d0, EndDiameterMm = d1,
+                    Name = name, IsHead = isHead, SpecWeightGCm3 = rho,
+                };
+                if (rho > 0 && d0 > 0 && d1 > 0)
+                {
+                    double speed = SinkingSpeedCalc.RigidBodySinkSpeed(isSalt, p.WaterTempC,
+                        new[] { d0, d1 }, new[] { (x1 - x0) / 2.0, (x1 - x0) / 2.0 }, new[] { rho, rho });
+                    seg.SetCompensation(x0, new[] { 0.0, x1 - x0 }, new[] { d0, d1 },
+                        new[] { rho, rho }, new[] { false, false }, speed);
+                }
+                segs.Add(seg);
+            }
         }
         return segs;
     }
