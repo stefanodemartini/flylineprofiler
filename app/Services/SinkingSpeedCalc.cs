@@ -394,6 +394,43 @@ public static class SinkingSpeedCalc
         return mid;
     }
 
+    /// <summary>
+    /// Inverse of <see cref="CylinderSinkSpeed"/>: given a FIXED material density, finds the
+    /// diameter of an isolated cylinder that sinks at exactly targetSpeedMs. NaN if no diameter
+    /// in a generous realistic range (up to 30mm) reaches it — e.g. the density itself doesn't
+    /// sink at all, or the target is unreachable at any practical size.
+    ///
+    /// Used to constrain physical compensation to a small number of real, manufacturable materials:
+    /// quantize the ideal continuous per-slice density (from <see cref="CompensateProfile"/>) down
+    /// to at most a handful of real nozzles, then solve each slice's diameter for its assigned
+    /// nozzle's fixed density instead of solving density freely per slice — the diameter absorbs
+    /// all the variation needed to still hit the target speed, since it (unlike density/material)
+    /// can vary continuously along a real extruded line.
+    /// </summary>
+    public static double DiameterForTargetSinkSpeedMm(
+        bool isSalt, double tempC, double densityGcm3, double targetSpeedMs)
+    {
+        if (densityGcm3 <= 0 || targetSpeedMs <= 0) return double.NaN;
+        double rhoL = densityGcm3 * 1000.0;
+        (double rhoW, double nu) = WaterProps(isSalt, tempC);
+
+        double lo = 1e-6, hi = 0.030; // m — 1 micron to 30mm, comfortably beyond any real fly line
+        double flo = Residual(targetSpeedMs, lo, rhoL, rhoW, nu);
+        double fhi = Residual(targetSpeedMs, hi, rhoL, rhoW, nu);
+        if (flo * fhi > 0.0) return double.NaN;
+
+        double mid = 0.0;
+        for (int i = 0; i < MaxIter; i++)
+        {
+            mid = (lo + hi) / 2.0;
+            double fmid = Residual(targetSpeedMs, mid, rhoL, rhoW, nu);
+            if (Math.Abs(fmid) < Tol) break;
+            if (flo * fmid <= 0.0) { hi = mid; }
+            else                    { lo = mid; flo = Residual(targetSpeedMs, lo, rhoL, rhoW, nu); }
+        }
+        return mid * 1000.0; // mm
+    }
+
     // ── Private physics helpers ──────────────────────────────────────────────
 
     /// <summary>

@@ -477,41 +477,7 @@
                                     Content="⚖ Compensate"
                                     Style="{StaticResource BtnSecondary}"
                                     Click="Compensate_Click"
-                                    ToolTip="Compute compensated (C) profile — mass-preserving per-slice bisection for uniform sink speed"/>
-                            <ToggleButton x:Name="ShowCompToggle"
-                                          Content="Show C"
-                                          Style="{StaticResource ToggleBase}"
-                                          Visibility="Collapsed"
-                                          Click="ShowCompToggle_Click"
-                                          ToolTip="Toggle between compensated (C) and original NC profile view"/>
-                            <!-- Target speed slider — visible after first compensation -->
-                            <StackPanel x:Name="CompSpeedPanel" Orientation="Horizontal"
-                                        VerticalAlignment="Center" Visibility="Collapsed">
-                                <Separator Style="{StaticResource ToolSep}"/>
-                                <TextBlock Text="Target:" FontSize="11"
-                                           Foreground="{StaticResource TextMuted}"
-                                           VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                <TextBlock x:Name="CompSpeedMinLabel" Text="—" FontSize="10"
-                                           Foreground="{StaticResource TextMuted}"
-                                           VerticalAlignment="Center" Margin="0,0,2,0"/>
-                                <Slider x:Name="CompSpeedSlider" Width="110"
-                                        VerticalAlignment="Center"
-                                        Minimum="0" Maximum="5" Value="0"
-                                        IsMoveToPointEnabled="True"
-                                        SmallChange="0.005" LargeChange="0.05"
-                                        ValueChanged="CompSpeedSlider_ValueChanged"
-                                        Margin="4,0"/>
-                                <TextBlock x:Name="CompSpeedMaxLabel" Text="—" FontSize="10"
-                                           Foreground="{StaticResource TextMuted}"
-                                           VerticalAlignment="Center" Margin="2,0,8,0"/>
-                                <TextBlock x:Name="CompSpeedValueLabel" Text="—" FontSize="11"
-                                           FontWeight="SemiBold"
-                                           Foreground="{StaticResource Accent}"
-                                           VerticalAlignment="Center" Margin="0,0,2,0"/>
-                                <TextBlock Text="in/s" FontSize="10"
-                                           Foreground="{StaticResource TextMuted}"
-                                           VerticalAlignment="Center"/>
-                            </StackPanel>
+                                    ToolTip="Solve the compensated (C) profile for a uniform sink speed and write it to its own separate file — this design is left untouched"/>
                             <Separator Style="{StaticResource ToolSep}"/>
                             <ToggleButton x:Name="SinkMapToggle"
                                           Content="Sink Map"
@@ -519,13 +485,6 @@
                                           IsChecked="False"
                                           Click="ShowSinkMap_Click"
                                           ToolTip="Show sinking speed heat-map overlay (blue=slow, red=fast)"/>
-                            <ToggleButton x:Name="ShowOriginalToggle"
-                                          Content="Show NC"
-                                          Style="{StaticResource ToggleBase}"
-                                          IsChecked="True"
-                                          Visibility="Collapsed"
-                                          Click="ShowOriginalProfile_Click"
-                                          ToolTip="Overlay the original non-compensated profile (ghost) on the compensated view"/>
                         </StackPanel>
 
                         <ToggleButton x:Name="ShowDesignToggle"
@@ -963,7 +922,7 @@
                     <DataGrid x:Name="SegmentsDataGrid"
                               Style="{StaticResource DarkGrid}"
                               FontSize="13"
-                              ItemsSource="{Binding ElementName=MainWin, Path=ProjectSegments}"
+                              ItemsSource="{Binding ElementName=MainWin, Path=DisplaySegments}"
                               AutoGenerateColumns="False"
                               IsReadOnly="False"
                               CanUserAddRows="False"
@@ -1025,7 +984,7 @@
                                                IsReadOnly="True"/>
                             <DataGridTextColumn x:Name="SpWeightColumn"
                                                Header="Sp.W. (g/cm³)"
-                                               Binding="{Binding SpecWeightGCm3, StringFormat='0.00', UpdateSourceTrigger=PropertyChanged}"
+                                               Binding="{Binding EffectiveSpecWeightGCm3, StringFormat='0.00', UpdateSourceTrigger=PropertyChanged}"
                                                Width="105"/>
                             <DataGridTextColumn x:Name="OrigSinkColumn"
                                                Header="Sink (in/s)"

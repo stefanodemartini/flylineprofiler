@@ -38,10 +38,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private bool _showSinkSpeedMap = false;
     private bool _inCompMode          = false;
     private bool _isCompensatedDerivative = false; // true when the loaded file is itself a forked C snapshot
-    private bool _showOriginalProfile = false;
-    // True when the current C profile came from a manually-assigned zone density (this file's
-    // Nozzles/Zones already state the materials) rather than the whole-line target-speed Compensate
-    // button (which needs SyncNozzleDensitiesFromComp to invent the materials from the gradient).
+    // True when the segments carry real per-slice materials that are NOT a live target-speed
+    // compensation: a design whose zones have their own density, or a loaded C snapshot whose baked
+    // materials are already stated in its own Nozzles/Zones (so SyncNozzleDensitiesFromComp must
+    // not overwrite them). Either way the coloured per-slice profile is what gets drawn.
     private bool _zoneDerivedComp     = false;
     private bool _lastZoneAdaptChoice = true; // "adjust diameters to preserve mass" — sticky across edits
 
@@ -54,6 +54,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     // Segment table (bound to Project DataGrid in XAML)
     public ObservableCollection<ProjectSegment> ProjectSegments { get; } = new();
+
+    // What the Segments DataGrid (and the PDF table) actually show — identical to ProjectSegments
+    // for a normal design, but grouped into material-zone rows for a loaded compensated snapshot
+    // (see BuildDisplaySegments). ProjectSegments itself stays at full ~1cm precision everywhere
+    // else (totals, sink speed, the chart) — only this reporting view is summarized.
+    public ObservableCollection<ProjectSegment> DisplaySegments { get; } = new();
 
     // Node table — editable DataGrid in Project panel (also bound in XAML)
     public ObservableCollection<DesignNode> DesignNodes { get; } = new();
@@ -152,8 +158,13 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     }
 
     // Persists user-edited segment names and specific weights across RefreshSegmentTable() calls.
-    // Key: 0-based segment order index — stable even when node X positions are edited.
-    private readonly Dictionary<int, (string Name, double SpecWeight, bool IsHead)> _segmentMetadata = new();
+    // Key: the segment's StartCm (its left boundary node's X). NOT the order index — inserting a
+    // node earlier in the line used to shift every downstream segment's index by one, silently
+    // reattaching each name/weight/Head flag to the wrong physical segment. A start-X key only
+    // ever affects the one segment actually split by the new node; every other segment, before or
+    // after it, keeps its own identity untouched. Same key space as _nodeLabelOffsets, which
+    // already uses this pattern (see RemapLabelOffset) — dragging a node must remap both together.
+    private readonly Dictionary<double, (string Name, double SpecWeight, bool IsHead)> _segmentMetadata = new();
 
     private bool   _useSharedDensity = true; // always true — uniform material density
     private double _sharedDensity    = 0.0;
@@ -956,6 +967,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     /// Builds the forked compensated-snapshot project with its OWN independent geometry — one
     /// node roughly every 1cm (a slice boundary), each carrying that slice's own density in
     /// SegmentMetadata — instead of the NC source's nodes plus a recipe to regenerate C on load.
+    /// This is the real, full-precision saved geometry — the diameter for every slice, kept exactly
+    /// as the ideal continuous solve calculated it (see QuantizeCompensationToRealMaterials, which
+    /// only ever snaps density, never diameter). Grouping
+    /// that down to a handful of material-zone rows is a DISPLAY concern only (see
+    /// BuildDisplaySegments, used by the table and the PDF) — it must never feed back into what
+    /// gets saved here, or the taper actually produced silently straightens out inside each zone.
     /// "C e NC sono due file distinti, completamente": reopening this file needs no recomputation
     /// and no dependency on the source file at all.
     /// </summary>
@@ -969,22 +986,49 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             int ns = seg.CompSliceDiamsMm.Length;
             if (ns == 0) continue;
 
+            // A slice's diameter is measured at its own CENTER, not at the segment's true edge —
+            // using the last/first slice's own value as-is for the boundary node leaves the taper's
+            // last half-slice of change unaccounted for, which is exactly what showed up as a small
+            // but real step at every segment boundary. Linearly extrapolate from the two nearest
+            // slice centers instead, so the boundary node reflects where the taper actually is at
+            // that exact X.
+            double ExtrapStart(ProjectSegment s) => s.CompSliceDiamsMm.Length >= 2
+                ? s.CompSliceDiamsMm[0] - (s.CompSliceDiamsMm[1] - s.CompSliceDiamsMm[0]) * 0.5
+                : s.CompSliceDiamsMm[0];
+            double ExtrapEnd(ProjectSegment s) => s.CompSliceDiamsMm.Length >= 2
+                ? s.CompSliceDiamsMm[^1] + (s.CompSliceDiamsMm[^1] - s.CompSliceDiamsMm[^2]) * 0.5
+                : s.CompSliceDiamsMm[^1];
+
             // Contiguous with the previous segment (the normal case): continue the same polyline —
             // share its last node as this segment's start instead of adding a second point at the
             // same position, which would otherwise leave one orphan node with no density behind it
-            // and shift every following segment's restored density by one index.
+            // and shift every following segment's restored density by one index. The two segments
+            // were compensated independently, so their own extrapolated values at this shared X
+            // essentially never match exactly — reconcile by averaging them instead of silently
+            // keeping whichever segment's node happened to be added first (the other half of the
+            // same step bug).
             bool continuous = nodes.Count > 0 && Math.Abs(seg.StartCm - nodes[^1].X) < 1e-6;
             if (!continuous)
-                nodes.Add(new ProjectDesignNode { X = seg.StartCm, Y = seg.CompSliceDiamsMm[0] });
+            {
+                nodes.Add(new ProjectDesignNode { X = seg.StartCm, Y = ExtrapStart(seg) });
+            }
+            else
+            {
+                var prevSeg = ProjectSegments.OrderBy(s => s.StartCm)
+                    .Where(s => s.HasCompensation).LastOrDefault(s => Math.Abs(s.EndCm - seg.StartCm) < 1e-6);
+                double prevEnd = prevSeg != null ? ExtrapEnd(prevSeg) : ExtrapStart(seg);
+                nodes[^1] = new ProjectDesignNode { X = nodes[^1].X, Y = (prevEnd + ExtrapStart(seg)) / 2.0 };
+            }
 
             for (int i = 0; i < ns; i++)
             {
-                double xEnd = i < ns - 1
-                    ? seg.StartCm + (seg.CompSliceXsCm[i] + seg.CompSliceXsCm[i + 1]) / 2.0
-                    : seg.EndCm;
-                double dEnd = i < ns - 1
-                    ? (seg.CompSliceDiamsMm[i] + seg.CompSliceDiamsMm[i + 1]) / 2.0
-                    : seg.CompSliceDiamsMm[i];
+                bool lastSlice = i == ns - 1;
+                double xEnd = lastSlice
+                    ? seg.EndCm
+                    : seg.StartCm + (seg.CompSliceXsCm[i] + seg.CompSliceXsCm[i + 1]) / 2.0;
+                double dEnd = lastSlice
+                    ? ExtrapEnd(seg)
+                    : (seg.CompSliceDiamsMm[i] + seg.CompSliceDiamsMm[i + 1]) / 2.0;
                 double xBeforeThisPiece = nodes[^1].X;
                 if (xEnd <= xBeforeThisPiece) xEnd = xBeforeThisPiece + 1e-4; // keep X strictly increasing
                 nodes.Add(new ProjectDesignNode { X = xEnd, Y = dEnd });
@@ -1030,26 +1074,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 seriesToSave = new List<ImportedSeries>();
         }
 
-        // A compensated profile is never saved into the base NC file — it forks a sibling
-        // file instead, so the original design stays a pure, always-recompensable NC source.
-        // This triggers whenever compensation exists, regardless of whether "Show C" happens
-        // to be toggled on at this exact moment — otherwise saving while looking at NC would
-        // silently drop the compensation work instead of preserving it in the fork.
-        bool hasComp = ProjectSegments.Any(s => s.HasCompensation);
-        string? compSavedFileName = null;
-        if (hasComp && !_isCompensatedDerivative)
-        {
-            string compName = _zoneDerivedComp
-                ? $"{_projectName} C zones"
-                : $"{_projectName} C {_compTargetSpeedIns:0.00}ins";
-            var compProject = BuildCompensatedSnapshotProject(seriesToSave, compName);
-            string compPath = Path.Combine(Path.GetDirectoryName(path)!,
-                SanitizeFileName(compName) + ProjectService.FileExtension);
-            ProjectService.Save(compProject, compPath);
-            RecentFilesService.Add(compPath);
-            compSavedFileName = Path.GetFileName(compPath);
-        }
-
+        // No C fork here any more. A C profile is only ever produced by the Compensate button,
+        // which writes its own file immediately ("C e NC sono due file distinti, completamente"),
+        // and zone materials are part of the design, so they belong in this very file.
+        //
         // Re-saving an already-baked snapshot just persists its current (already independent)
         // state as-is — its own DesignNodes/SegmentMetadata are the compensated geometry, not a
         // recipe, so there is nothing left to recompute on the next load.
@@ -1064,9 +1092,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _isDirty            = false;
         RecentFilesService.Add(path);
         UpdateProjectTitle();
-        UiStatus = compSavedFileName != null
-            ? $"Project saved: {Path.GetFileName(path)}  |  Compensated snapshot: {compSavedFileName}"
-            : $"Project saved: {Path.GetFileName(path)}";
+        UiStatus = $"Project saved: {Path.GetFileName(path)}";
     }
 
     private void LoadProjectFromFile(string path)
@@ -1169,11 +1195,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _laserMarkFromEnd = project.LaserMarkFromEndMm ?? string.Empty;
         OnPropertyChanged(nameof(LaserMarkFromEnd));
 
-        // Restore segment metadata (names, spec weights, head flag) — keyed by order index
+        // Restore segment metadata (names, spec weights, head flag) — keyed by StartCm, exactly as
+        // it was written by BuildProjectObject, so it lines up with the segments RefreshSegmentTable
+        // is about to rebuild from project.DesignNodes below.
         _segmentMetadata.Clear();
-        var sortedMeta = project.SegmentMetadata.OrderBy(m => m.StartCm).ToList();
-        for (int mi = 0; mi < sortedMeta.Count; mi++)
-            _segmentMetadata[mi] = (sortedMeta[mi].Name, sortedMeta[mi].SpecWeight, sortedMeta[mi].IsHead);
+        foreach (var m in project.SegmentMetadata)
+            _segmentMetadata[m.StartCm] = (m.Name, m.SpecWeight, m.IsHead);
 
         // Normal designs always use one shared material; a compensated snapshot instead carries
         // each segment's own baked density (restored above into _segmentMetadata) — see
@@ -1183,6 +1210,14 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         // Old projects may have had per-segment densities with SharedDensityGCm3 = 0 — infer from meta
         if (_sharedDensity <= 0 && project.SegmentMetadata.Any(m => m.SpecWeight > 0))
             _sharedDensity = project.SegmentMetadata.Where(m => m.SpecWeight > 0).Average(m => m.SpecWeight);
+        // M1's density normally only gets mirrored from the shared-density field by
+        // ApplySharedDensity(), which fires off the SharedDensity property setter — a UI-driven
+        // path a plain file load never goes through (this sets the private field directly). Without
+        // this, MaybeApplyZoneDensityChange below reads Nozzles[0].DensityGCm3 as whatever was last
+        // saved in NozzleDefinitions[0] (0 for a design that never used zones before), its
+        // baseDensity <= 0 guard fires, and any zone on this file silently does nothing on load.
+        if (_useSharedDensity && Nozzles.Count > 0)
+            Nozzles[0].DensityGCm3 = _sharedDensity;
         _isSinking        = project.IsSinking;
         _isFullLine       = project.IsFullLine;
         _waterIsSalt      = project.WaterType == "salt";
@@ -1194,7 +1229,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         OnPropertyChanged(nameof(WaterIsSalt));
         OnPropertyChanged(nameof(WaterTempC));
 
-        _projectName        = project.Name;
+        // The file's real name on disk is the ground truth, not whatever "Name" was written inside
+        // it at the last save — "Save As" already keeps the two in sync going forward, but a file
+        // renamed from outside the app (Explorer, etc.) would otherwise keep showing the stale
+        // name, and every family/compensated file generated afterward is named after this field.
+        _projectName        = Path.GetFileNameWithoutExtension(path);
         _projectCreatedAt   = project.CreatedAt;
         _currentProjectPath = path;
         _isDirty            = false;
@@ -1219,7 +1258,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             // Legacy recipe-based fork (files saved before compensated snapshots became
             // self-contained): recompute C from the NC source geometry + the saved target speed.
             _compTargetSpeedMs = project.CompTargetSpeedMs;
-            ComputeCompensation();
+            ComputeCompensationForLegacyFile();
             _inCompMode = project.ShowCompProfile;
             UpdateCompModeUI();
         }
@@ -1235,10 +1274,20 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             _inCompMode      = project.ShowCompProfile;
             UpdateCompModeUI();
         }
+        else
+        {
+            // Plain NC design: zones with their own material are part of it, so rebuild that
+            // profile now — silently, reusing the mass choice saved with the file. Loading is not
+            // an edit, so the dirty flag must survive it.
+            bool wasDirty = _isDirty;
+            MaybeApplyZoneDensityChange(forcePrompt: false);
+            _isDirty = wasDirty;
+        }
+        WarnIfZonesOverlap(); // a hand-edited or older file could carry an invalid overlap
 
         RefreshStatusBar();
         UpdateProjectTitle();
-        UiStatus = $"Project loaded: {project.Name}  ({project.ScanPoints.Count} scan pts, {project.ImportedSeries.Count} series, {project.DesignNodes.Count} nodes)";
+        UiStatus = $"Project loaded: {_projectName}  ({project.ScanPoints.Count} scan pts, {project.ImportedSeries.Count} series, {project.DesignNodes.Count} nodes)";
     }
 
     private static ScottColor ParseColorHex(string hex, int fallbackIndex)
@@ -1502,7 +1551,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         string mode;
         if (_designMode)
             mode = _inCompMode
-                 ? $"Compensated  {_compTargetSpeedIns:0.00} in/s — density gradient{(_showOriginalProfile ? " + NC ghost" : "")}"
+                 ? $"Compensated  {_compTargetSpeedIns:0.00} in/s — density gradient"
+                 : _zoneDerivedComp ? "Design — zone materials"
                  : "Design";
         else
             mode = "Scan";
@@ -1856,6 +1906,80 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
     }
 
+    /// <summary>
+    /// Sink-speed heat-map for a compensated profile — same per-point local-cylinder model as
+    /// RenderOriginalSpeedMap (and the Sink column, see task 05/10), but reading each compensated
+    /// slice's own (diameter, density) directly instead of re-slicing every 12cm, since compensated
+    /// data is already at ~1cm resolution.
+    /// </summary>
+    private void RenderCompSinkSpeedMap(Plot plot, List<ProjectSegment> compSegs)
+    {
+        var slices = new List<(double xStart, double xEnd, double dStart, double dEnd, double speed)>();
+
+        foreach (var seg in compSegs)
+        {
+            int ns = seg.CompSliceXsCm.Length;
+            if (ns == 0) continue;
+            double half = ns > 1 ? (seg.CompSliceXsCm[1] - seg.CompSliceXsCm[0]) / 2.0 : seg.LengthCm / 2.0;
+            double eps = half * 0.18; // overlap neighbours to hide anti-alias seams
+            for (int i = 0; i < ns; i++)
+            {
+                double xAbs = seg.StartCm + seg.CompSliceXsCm[i];
+                double x0   = xAbs - half - eps, x1 = xAbs + half + eps;
+                double d0   = i > 0    ? (seg.CompSliceDiamsMm[i-1] + seg.CompSliceDiamsMm[i])   / 2.0 : seg.CompSliceDiamsMm[i];
+                double d1   = i < ns-1 ? (seg.CompSliceDiamsMm[i]   + seg.CompSliceDiamsMm[i+1]) / 2.0 : seg.CompSliceDiamsMm[i];
+                double v = Math.Max(0, SinkingSpeedCalc.CylinderSinkSpeed(
+                    _waterIsSalt, _waterTempC, seg.CompSliceDiamsMm[i], seg.CompSliceDensities[i]));
+                if (!double.IsNaN(v))
+                    slices.Add((x0, x1, d0, d1, v));
+            }
+        }
+
+        if (slices.Count == 0) return;
+
+        double minV  = slices.Min(s => s.speed);
+        double maxV  = slices.Max(s => s.speed);
+        double range = Math.Max(maxV - minV, 1e-10);
+
+        foreach (var (xs, xe, ds, de, v) in slices)
+        {
+            double t    = (v - minV) / range;
+            var    fill = SpeedColor(t).WithAlpha(0.70f);
+            var    poly = plot.Add.Polygon(new ScottPlot.Coordinates[]
+            {
+                new(xs,  ds / 2.0),
+                new(xe,  de / 2.0),
+                new(xe, -de / 2.0),
+                new(xs, -ds / 2.0),
+            });
+            poly.FillColor = fill;
+            poly.LineWidth = 0;
+            poly.LineColor = Colors.Transparent;
+        }
+
+        double minIns = minV * 39.3701, maxIns = maxV * 39.3701;
+        if (maxIns - minIns < 1e-6)
+        {
+            // The expected, healthy case for a genuine physics compensation: one colour, one speed.
+            var entry = plot.Add.Scatter(Array.Empty<double>(), Array.Empty<double>());
+            entry.Color      = SpeedColor(0);
+            entry.LineWidth  = 8;
+            entry.LegendText = maxIns < 1e-6 ? "Floating" : $"{maxIns:0.000} in/s — uniform";
+        }
+        else
+        {
+            for (int stop = 0; stop < 4; stop++)
+            {
+                double t     = stop / 3.0;
+                double speed = minIns + t * (maxIns - minIns);
+                var entry    = plot.Add.Scatter(Array.Empty<double>(), Array.Empty<double>());
+                entry.Color      = SpeedColor(t);
+                entry.LineWidth  = 8;
+                entry.LegendText = $"{speed:0.000} in/s";
+            }
+        }
+    }
+
     /// <summary>Maps t ∈ [0,1] to a blue→cyan→green→yellow→red colour ramp.</summary>
     private static ScottColor SpeedColor(double t)
     {
@@ -1943,11 +2067,143 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     }
 
     /// <summary>
+    /// Which real nozzle (M1-M4) a material zone is, for the "M{n}" tag at its boundary — never
+    /// "S{n}", which is reserved for taper shape (see the mandatory principle above
+    /// GetTaperShapeBoundaries). A live zone design's NozzleZones is the authored ground truth for
+    /// "what material is physically here"; a loaded/baked C snapshot has no NozzleZones any more
+    /// (baking only carries density), so it falls back to matching this span's density against the
+    /// file's own NozzleDefinitions (populated to the real baked values — see
+    /// QuantizeCompensationToRealMaterials/SyncNozzleDensitiesFromComp).
+    /// </summary>
+    private (string Label, ScottColor Color) GetMaterialTag(double xAbsCm, double density)
+    {
+        int idx = NozzleZones.FirstOrDefault(z => xAbsCm >= z.StartCm && xAbsCm < z.EndCm)?.NozzleIndex ?? -1;
+        if (idx < 0)
+        {
+            double bestDiff = double.MaxValue;
+            for (int i = 0; i < Nozzles.Count; i++)
+            {
+                if (Nozzles[i].DensityGCm3 <= 0) continue;
+                double diff = Math.Abs(Nozzles[i].DensityGCm3 - density);
+                if (diff < bestDiff) { bestDiff = diff; idx = i; }
+            }
+        }
+        if (idx < 0 || idx >= Nozzles.Count)
+            return ($"ρ {density:0.00}", DensityColor(0.5));
+
+        var n = Nozzles[idx];
+        TryParseHexColor(n.ColorHex, out var col);
+        return ($"M{idx + 1}", col);
+    }
+
+    /// <summary>
     /// Builds a node list from compensated segment start/end diameters so the
     /// compensated profile can be rendered in the same style as the design profile.
     /// A tiny epsilon is added when two consecutive nodes share the same X to avoid
     /// division-by-zero in piecewise interpolation.
     /// </summary>
+    /// <summary>
+    /// The real material-zone boundaries, found from each segment's own compensated slices — not
+    /// from ProjectSegments' top-level SpecWeightGCm3, which for a LIVE (not-yet-baked) zone design
+    /// stays at the shared base density on every segment regardless of its zones (ApplyZoneDensities
+    /// only ever writes the real per-slice material into CompSliceDensities). A material can also
+    /// start or end mid-segment — "il cambio di colore può avvenire in un punto qualsiasi dei
+    /// tapers senza che coincida con il cambio di pendenza" — so this flattens every HasCompensation
+    /// segment's own slices into one continuous sequence and walks that, which finds a transition
+    /// wherever it really is, whether that's at a segment boundary (a loaded/baked snapshot,
+    /// effectively one slice per segment) or partway through one (a live zone design). A chart that
+    /// used to thin its geometry down to an arbitrary evenly-spaced sample for ticks/labels — with
+    /// no relationship to where the material actually changes — could just as easily land (and
+    /// label "S…") on the plain running line; this instead returns exactly the positions that mean
+    /// something: the two ends plus every point the material genuinely changes.
+    /// </summary>
+    private List<(double X, double Y)> GetMaterialZoneBoundaries(List<(double X, double Y)> sorted)
+    {
+        var spans = GetMaterialZoneSpans(sorted);
+        if (spans.Count == 0) return sorted;
+        var result = new List<(double X, double Y)> { (spans[0].StartX, InterpolateProfileY(sorted, spans[0].StartX)) };
+        foreach (var s in spans)
+            result.Add((s.EndX, InterpolateProfileY(sorted, s.EndX)));
+        return result;
+    }
+
+    /// <summary>
+    /// The real material zones as (start, end, density) spans — same slice-flattening as
+    /// GetMaterialZoneBoundaries (see its own comment for why), kept here as the one place that
+    /// computes them so GetMaterialZoneBoundaries and the "M{n}" material tag rendering can't drift
+    /// apart into two different ideas of where a zone starts and ends.
+    /// </summary>
+    private List<(double StartX, double EndX, double Density)> GetMaterialZoneSpans(List<(double X, double Y)> sorted)
+    {
+        var flat = new List<(double X, double Density)>();
+        foreach (var seg in ProjectSegments.OrderBy(s => s.StartCm).Where(s => s.HasCompensation))
+        {
+            int ns = seg.CompSliceXsCm.Length;
+            for (int i = 0; i < ns; i++)
+                flat.Add((seg.StartCm + seg.CompSliceXsCm[i], seg.CompSliceDensities[i]));
+        }
+        if (flat.Count == 0) return new();
+        flat = flat.OrderBy(f => f.X).ToList();
+
+        var spans = new List<(double StartX, double EndX, double Density)>();
+        double spanStart = sorted[0].X;
+        for (int i = 0; i < flat.Count; i++)
+        {
+            bool last = i == flat.Count - 1;
+            if (!last && Math.Abs(flat[i + 1].Density - flat[i].Density) <= 1e-6) continue;
+            double x = last ? sorted[^1].X : (flat[i].X + flat[i + 1].X) / 2.0;
+            spans.Add((spanStart, x, flat[i].Density));
+            spanStart = x;
+        }
+        return spans;
+    }
+
+    /// <summary>
+    /// Where the ORIGINAL taper's own shape changes — every fine slice inherits the Name of the
+    /// real NC segment it was cut from (see BuildCompensatedSnapshotProject), so a Name change here
+    /// marks a true taper transition (e.g. a straight taper ending into a level run), independent
+    /// of whether the material also changes there. A manufacturer needs the diameter and position
+    /// at these points just as much as at a material change — the two are different things and
+    /// don't always land on the same X (see GetManufacturingCheckpoints, which unions both).
+    /// Walks ProjectSegments by its own StartCm/EndCm and interpolates Y from whichever `sorted`
+    /// node list the caller passed — never by indexing into `sorted` itself. An earlier version
+    /// required segs.Count == sorted.Count-1 and fell back to returning every node in `sorted`
+    /// (i.e. every fine ~1cm slice as a "boundary") whenever that didn't hold — which it never did
+    /// for the PDF chart, since RenderPdfChart's `sorted` is GetCompNodes() (2 nodes per segment),
+    /// not the 1-per-boundary _segmentNodes the on-screen chart uses — silently producing an S-label
+    /// and divider at nearly every slice in every compensated PDF export.
+    /// </summary>
+    private List<(double X, double Y)> GetTaperShapeBoundaries(List<(double X, double Y)> sorted)
+    {
+        var segs = ProjectSegments.OrderBy(s => s.StartCm).ToList();
+        if (segs.Count == 0) return sorted;
+
+        var result = new List<(double X, double Y)> { (segs[0].StartCm, InterpolateProfileY(sorted, segs[0].StartCm)) };
+        for (int i = 0; i < segs.Count; i++)
+        {
+            bool lastSeg = i == segs.Count - 1;
+            if (lastSeg || segs[i + 1].Name != segs[i].Name)
+                result.Add((segs[i].EndCm, InterpolateProfileY(sorted, segs[i].EndCm)));
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Every position a producer actually needs the diameter called out for: where the material
+    /// changes (GetMaterialZoneBoundaries) UNION where the taper shape changes
+    /// (GetTaperShapeBoundaries) — the two don't necessarily coincide, so neither list alone is
+    /// enough.
+    /// </summary>
+    private List<(double X, double Y)> GetManufacturingCheckpoints(List<(double X, double Y)> sorted)
+    {
+        return GetMaterialZoneBoundaries(sorted)
+            .Concat(GetTaperShapeBoundaries(sorted))
+            .GroupBy(n => Math.Round(n.X, 3))
+            .Select(g => g.First())
+            .OrderBy(n => n.X)
+            .ToList();
+    }
+
     private List<(double X, double Y)> GetCompNodes()
     {
         var nodes = new List<(double X, double Y)>();
@@ -1975,8 +2231,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         var designColor = DesignColor;
         bool hasComp    = ProjectSegments.Any(s => s.HasCompensation);
-        bool inComp     = _inCompMode && hasComp;
-        bool showOrig   = _showOriginalProfile;
+        // Draw the per-slice (coloured) profile whenever real per-slice materials exist: a loaded
+        // compensated snapshot, or an NC design whose zones carry their own material. There is no
+        // C/NC view switch any more — what is drawn is always what this file actually is.
+        bool inComp     = (_inCompMode || _zoneDerivedComp) && hasComp;
 
         if (sorted.Count >= 2)
         {
@@ -2007,22 +2265,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             }
             else
             {
-                // ── Comp mode: NC ghost (optional) + compensated profile ────
-                if (showOrig)
-                {
-                    // NC ghost — translucent, thin
-                    var ghostColor = new ScottColor(160, 160, 160, 70);
-                    DrawLineFill(plot, xs, halfYs, negHalfYs, ghostColor, solid: true);
-                    var ncTop = plot.Add.Scatter(xs, halfYs);
-                    ncTop.LegendText = "NC (original)";
-                    ncTop.Color      = new ScottColor(160, 160, 160, 120);
-                    ncTop.LineWidth  = 1.2f; ncTop.MarkerSize = 0;
-                    var ncBot = plot.Add.Scatter(xs, negHalfYs);
-                    ncBot.Color     = new ScottColor(160, 160, 160, 120);
-                    ncBot.LineWidth = 1.2f; ncBot.MarkerSize = 0;
-                }
-
-                // ── Profilo compensato con gradiente densità ────────────────
+                // ── Profilo per-slice con gradiente densità ─────────────────
                 var cn = GetCompNodes();
                 if (cn.Count >= 2)
                 {
@@ -2030,53 +2273,102 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     double[] cyts = cn.Select(n =>  n.Y / 2.0).ToArray();
                     double[] cybs = cn.Select(n => -n.Y / 2.0).ToArray();
 
-                    // Gradiente densità: ogni slice da 1 cm colorata per densità richiesta
                     var compSegs = ProjectSegments.OrderBy(s => s.StartCm)
                         .Where(s => s.HasCompensation).ToList();
-                    double minDens = compSegs.SelectMany(s => s.CompSliceDensities).DefaultIfEmpty(0).Min();
-                    double maxDens = compSegs.SelectMany(s => s.CompSliceDensities).DefaultIfEmpty(1).Max();
-                    double densRng = Math.Max(maxDens - minDens, 1e-9);
 
-                    foreach (var seg in compSegs)
+                    // Density gradient and Sink Map colour the same area — showing both at once
+                    // would just add the two tints together, and the two legends would clutter each
+                    // other. Mutually exclusive, same toggle as NC mode.
+                    if (_showSinkSpeedMap)
                     {
-                        int ns = seg.CompSliceXsCm.Length;
-                        if (ns == 0) continue;
-                        double half = ns > 1 ? (seg.CompSliceXsCm[1] - seg.CompSliceXsCm[0]) / 2.0
-                                             : seg.LengthCm / 2.0;
-                        double eps = half * 0.18; // overlap neighbours to hide anti-alias seams
-                        for (int i = 0; i < ns; i++)
-                        {
-                            double xAbs = seg.StartCm + seg.CompSliceXsCm[i];
-                            double x0   = xAbs - half - eps, x1 = xAbs + half + eps;
-                            double d0   = i > 0    ? (seg.CompSliceDiamsMm[i-1] + seg.CompSliceDiamsMm[i])   / 2.0 : seg.CompSliceDiamsMm[i];
-                            double d1   = i < ns-1 ? (seg.CompSliceDiamsMm[i]   + seg.CompSliceDiamsMm[i+1]) / 2.0 : seg.CompSliceDiamsMm[i];
-                            var sliceColor = GetSliceColor(xAbs, seg.CompSliceDensities[i], minDens, densRng);
-                            DrawLineFill(plot,
-                                new[] { x0, x1 },
-                                new[] { d0 / 2.0, d1 / 2.0 },
-                                new[] { -d0 / 2.0, -d1 / 2.0 },
-                                sliceColor, solid: true);
-                        }
+                        // A genuine physics compensation should render as one uniform colour
+                        // (CompensateProfile solves every slice for exactly this local model's
+                        // target speed); real colour variation is a sign a slice fell short (e.g.
+                        // clamped at RhoFloor), so this doubles as a sanity check.
+                        RenderCompSinkSpeedMap(plot, compSegs);
                     }
-
-                    // Legenda densità — 4 stop
-                    for (int stop = 0; stop < 4; stop++)
+                    else
                     {
-                        double t    = stop / 3.0;
-                        double dens = minDens + t * densRng;
-                        var entry   = plot.Add.Scatter(Array.Empty<double>(), Array.Empty<double>());
-                        entry.Color = DensityColor(t); entry.LineWidth = 8;
-                        entry.LegendText = $"ρ {dens:0.00} g/cm³";
+                        // Gradiente densità: ogni slice da 1 cm colorata per densità richiesta
+                        double minDens = compSegs.SelectMany(s => s.CompSliceDensities).DefaultIfEmpty(0).Min();
+                        double maxDens = compSegs.SelectMany(s => s.CompSliceDensities).DefaultIfEmpty(1).Max();
+                        double densRng = Math.Max(maxDens - minDens, 1e-9);
+
+                        foreach (var seg in compSegs)
+                        {
+                            int ns = seg.CompSliceXsCm.Length;
+                            if (ns == 0) continue;
+                            double half = ns > 1 ? (seg.CompSliceXsCm[1] - seg.CompSliceXsCm[0]) / 2.0
+                                                 : seg.LengthCm / 2.0;
+                            double eps = half * 0.18; // overlap neighbours to hide anti-alias seams
+                            for (int i = 0; i < ns; i++)
+                            {
+                                double xAbs = seg.StartCm + seg.CompSliceXsCm[i];
+                                double x0   = xAbs - half - eps, x1 = xAbs + half + eps;
+                                double d0   = i > 0    ? (seg.CompSliceDiamsMm[i-1] + seg.CompSliceDiamsMm[i])   / 2.0 : seg.CompSliceDiamsMm[i];
+                                double d1   = i < ns-1 ? (seg.CompSliceDiamsMm[i]   + seg.CompSliceDiamsMm[i+1]) / 2.0 : seg.CompSliceDiamsMm[i];
+                                var sliceColor = GetSliceColor(xAbs, seg.CompSliceDensities[i], minDens, densRng);
+                                DrawLineFill(plot,
+                                    new[] { x0, x1 },
+                                    new[] { d0 / 2.0, d1 / 2.0 },
+                                    new[] { -d0 / 2.0, -d1 / 2.0 },
+                                    sliceColor, solid: true);
+                            }
+                        }
+
+                        // Legenda densità — solo i materiali realmente presenti, mai 4 tappe
+                        // interpolate fittizie (che con solo 2 densità reali mostravano anche due
+                        // valori intermedi inesistenti). Con zone reali, un'etichetta per ugello
+                        // davvero usato nel suo colore vero (quello con cui GetSliceColor dipinge
+                        // il profilo), non il gradiente arcobaleno; senza zone (compensazione
+                        // fisica pura), i soli valori di densità realmente presenti nelle slice.
+                        if (NozzleZones.Count > 0)
+                        {
+                            // M1 is the implicit base material everywhere no zone covers — it never
+                            // appears as a NozzleIndex in NozzleZones itself, so it must be added
+                            // unconditionally or the line's own "default" material goes unlisted.
+                            var usedIdx = NozzleZones.Select(z => z.NozzleIndex)
+                                .Append(0)
+                                .Distinct().OrderBy(i => i).ToList();
+                            foreach (int idx in usedIdx)
+                            {
+                                if (idx < 0 || idx >= Nozzles.Count) continue;
+                                var noz = Nozzles[idx];
+                                if (!TryParseHexColor(noz.ColorHex, out var col)) continue;
+                                var entry = plot.Add.Scatter(Array.Empty<double>(), Array.Empty<double>());
+                                entry.Color = col; entry.LineWidth = 8;
+                                entry.LegendText = noz.DensityGCm3 > 0
+                                    ? $"M{idx + 1}  ρ {noz.DensityGCm3:0.00} g/cm³"
+                                    : $"M{idx + 1}";
+                            }
+                        }
+                        else
+                        {
+                            var distinctDens = new List<double>();
+                            foreach (var d in compSegs.SelectMany(s => s.CompSliceDensities)
+                                         .Where(d => d > 0).OrderBy(d => d))
+                                if (distinctDens.Count == 0 || d - distinctDens[^1] > 0.005) distinctDens.Add(d);
+                            foreach (var dens in distinctDens)
+                            {
+                                double t  = densRng > 1e-9 ? Math.Clamp((dens - minDens) / densRng, 0, 1) : 0.5;
+                                var entry = plot.Add.Scatter(Array.Empty<double>(), Array.Empty<double>());
+                                entry.Color = DensityColor(t); entry.LineWidth = 8;
+                                entry.LegendText = $"ρ {dens:0.00} g/cm³";
+                            }
+                        }
                     }
 
                     // Outline del profilo compensato sopra il gradiente
                     var ctl = plot.Add.Scatter(cxs, cyts);
-                    ctl.LegendText = $"Comp. {_compTargetSpeedIns:0.00} in/s";
+                    // A zone-material design has no single target speed — each zone reaches its own
+                    ctl.LegendText = _inCompMode
+                        ? $"Comp. {_compTargetSpeedIns:0.00} in/s"
+                        : "Zone materials";
                     ctl.Color = designColor; ctl.LineWidth = 2.5f; ctl.MarkerSize = 0;
                     var cbl = plot.Add.Scatter(cxs, cybs);
                     cbl.Color = designColor; cbl.LineWidth = 2.5f; cbl.MarkerSize = 0;
 
-                    foreach (var n in cn)
+                    foreach (var n in GetManufacturingCheckpoints(sorted))
                     {
                         var tick = plot.Add.Scatter(
                             new[] { n.X, n.X }, new[] { n.Y / 2.0, -n.Y / 2.0 });
@@ -2127,14 +2419,14 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
         else
         {
-            // Nodi compensati + divider + etichette segmento
-            var cn = GetCompNodes();
-            // Deduplicazione: GetCompNodes inserisce 2 punti per ogni confine di segmento
-            // (fine del precedente + inizio del successivo con epsilon). Per le label si
-            // usano solo i punti univoci (soglia 0.5 cm).
-            var labelNodes = cn
-                .Where((n, i) => i == 0 || Math.Abs(cn[i - 1].X - n.X) > 0.5)
-                .ToList();
+            // Nodi compensati + divider + etichette Ø/posizione — a EVERY manufacturing checkpoint
+            // (material changes AND taper-shape changes, see GetManufacturingCheckpoints; the two
+            // don't always coincide, so a producer needs the diameter/position at both, not just
+            // where the material changes). Not an arbitrary evenly-spaced sample of the fine ~1cm
+            // geometry — a design with a non-monotonic taper can revisit the same material more
+            // than once (e.g. a belly that thickens then thins again), so this is exactly the real
+            // structure of the taper, never a fixed "top N points" cutoff.
+            var labelNodes = GetManufacturingCheckpoints(sorted);
 
             double[] cnxs = labelNodes.Select(n => n.X).ToArray();
             double[] cnts = labelNodes.Select(n =>  n.Y / 2.0).ToArray();
@@ -2170,9 +2462,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 lbl.LabelPadding = 3; lbl.OffsetX = 0; lbl.OffsetY = 0;
             }
 
-            // Linee divisorie tra i segmenti originali
-            var dividerColor = new ScottColor(80, 80, 80);
-            foreach (var node in sorted)
+            // Linee divisorie — una per confine di zona reale (stesso elenco già calcolato sopra).
+            var dividerColor  = new ScottColor(80, 80, 80);
+            foreach (var node in labelNodes)
             {
                 var div = plot.Add.Scatter(
                     new double[] { node.X, node.X },
@@ -2180,11 +2472,15 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 div.Color = dividerColor; div.LineWidth = 1.2f; div.MarkerSize = 0;
             }
 
-            // Etichette S1, S2… centrate tra i nodi
+            // Etichette S1, S2… — SEMPRE e SOLO i tapers fisici reali (GetTaperShapeBoundaries),
+            // mai i cambi di colore/densità: è un principio mandatorio, non un'approssimazione.
+            // "S" identifica una forma di taper, non un materiale — i due non devono mai mescolarsi
+            // nella stessa etichetta, anche quando corrispondono numericamente sulla stessa linea.
+            var labelSorted   = GetTaperShapeBoundaries(sorted);
             var segLabelColor = new ScottColor(40, 40, 40);
-            for (int si = 0; si < sorted.Count - 1; si++)
+            for (int si = 0; si < labelSorted.Count - 1; si++)
             {
-                double cx      = (sorted[si].X + sorted[si + 1].X) / 2.0;
+                double cx      = (labelSorted[si].X + labelSorted[si + 1].X) / 2.0;
                 double topAtCx = InterpolateProfileY(sorted, cx) / 2.0;
                 double gap     = InterpolateProfileY(sorted, cx) * 0.08;
                 var sl = plot.Add.Text($"S{si + 1}", cx, topAtCx + gap);
@@ -2194,6 +2490,35 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 sl.LabelBackgroundColor = ScottPlot.Colors.Transparent;
                 sl.LabelBorderWidth     = 0; sl.LabelPadding = 2;
                 sl.OffsetX = 0; sl.OffsetY = 0;
+            }
+
+            // Etichette "M{n}" per ogni zona di materiale — MAI "S" (vedi sopra): un badge col
+            // colore reale dell'ugello, centrato sulla zona, sul bordo del profilo. Standard
+            // separato dalle etichette S apposta, così i due concetti — forma del taper e
+            // materiale — non si mescolano mai visivamente. Densità/materiali e Sink Map sono
+            // mutuamente esclusivi anche nella legenda (vedi sopra) — questi badge sono la stessa
+            // informazione "materiale" in un'altra forma, quindi seguono la stessa regola: mai
+            // insieme al profilo colorato per velocità, altrimenti il badge mostra il colore reale
+            // dell'ugello sopra un profilo dipinto con un colore arcobaleno scollegato da esso.
+            if (!_showSinkSpeedMap)
+            {
+                foreach (var span in GetMaterialZoneSpans(sorted))
+                {
+                    double midX     = (span.StartX + span.EndX) / 2.0;
+                    double topAtMid = InterpolateProfileY(sorted, midX) / 2.0;
+                    var (matLabel, matColor) = GetMaterialTag(midX, span.Density);
+                    double luminance = (0.299 * matColor.R + 0.587 * matColor.G + 0.114 * matColor.B) / 255.0;
+                    var textColor = luminance > 0.6 ? new ScottColor(20, 20, 20) : ScottPlot.Colors.White;
+
+                    var ml = plot.Add.Text(matLabel, midX, topAtMid);
+                    ml.LabelFontSize = 10; ml.LabelBold = true;
+                    ml.LabelFontColor       = textColor;
+                    ml.LabelBackgroundColor = matColor;
+                    ml.LabelBorderColor     = new ScottColor(30, 30, 30);
+                    ml.LabelBorderWidth     = 0.8f;
+                    ml.LabelAlignment       = Alignment.LowerCenter;
+                    ml.LabelPadding = 3; ml.OffsetX = 0; ml.OffsetY = 4;
+                }
             }
         }
     }
@@ -2275,14 +2600,16 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private void RefreshSegmentTable()
     {
-        // Save current user edits (name, spec weight, head flag) and compensation data
-        var compSnapshots = new Dictionary<int, CompSnapshot>();
+        // Save current user edits (name, spec weight, head flag) and compensation data, keyed by
+        // each segment's own StartCm — not its index — so a node inserted earlier in the line
+        // can't shift this metadata onto the wrong segment (see _segmentMetadata's own comment).
+        var compSnapshots = new Dictionary<double, CompSnapshot>();
         for (int si = 0; si < ProjectSegments.Count; si++)
         {
             var s = ProjectSegments[si];
-            _segmentMetadata[si] = (s.Name, s.SpecWeightGCm3, s.IsHead);
+            _segmentMetadata[s.StartCm] = (s.Name, s.SpecWeightGCm3, s.IsHead);
             if (s.HasCompensation)
-                compSnapshots[si] = new CompSnapshot(
+                compSnapshots[s.StartCm] = new CompSnapshot(
                     s.CompStartCm, s.CompSliceXsCm, s.CompSliceDiamsMm,
                     s.CompSliceDensities, s.CompSliceClamped, s.CompensatedTargetSpeedMs);
             s.PropertyChanged -= OnSegmentPropertyChanged;
@@ -2293,16 +2620,17 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         var sorted = _segmentNodes.OrderBy(n => n.X).ToList();
         for (int i = 0; i < sorted.Count - 1; i++)
         {
+            double startCm = sorted[i].X;
             var seg = new ProjectSegment
             {
                 Index           = i + 1,
-                StartCm         = sorted[i].X,
+                StartCm         = startCm,
                 EndCm           = sorted[i + 1].X,
                 StartDiameterMm = sorted[i].Y,
                 EndDiameterMm   = sorted[i + 1].Y,
             };
 
-            if (_segmentMetadata.TryGetValue(i, out var meta))
+            if (_segmentMetadata.TryGetValue(startCm, out var meta))
             {
                 seg.Name           = meta.Name;
                 seg.SpecWeightGCm3 = _useSharedDensity ? _sharedDensity : meta.SpecWeight;
@@ -2317,8 +2645,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             // Shooting head: all segments are head by definition
             if (!_isFullLine) seg.IsHead = true;
 
-            // Restore compensation data when the segment count and order didn't change
-            if (compSnapshots.TryGetValue(i, out var cs))
+            // Restore compensation data for the segment that still starts at the same X — a
+            // segment newly split off by an inserted node has no snapshot and simply has none
+            // (correct: it genuinely wasn't compensated before, restoring by index would have
+            // silently attached some other segment's slices to it).
+            if (compSnapshots.TryGetValue(startCm, out var cs))
                 seg.SetCompensation(cs.StartCm, cs.SliceXsCm, cs.SliceDiamsMm, cs.SliceDensities, cs.Clamped, cs.TargetSpeedMs);
 
             seg.PropertyChanged += OnSegmentPropertyChanged;
@@ -2336,9 +2667,64 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         UpdateSinkingSpeeds();
         RefreshAfftaBadge();
         RefreshAnalysisPlot();
+        RefreshDisplaySegments();
 
         // Keep the editable node DataGrid in sync
         SyncDesignNodesToList();
+    }
+
+    /// <summary>
+    /// Populates DisplaySegments — what the Segments table (and the PDF built from it) actually
+    /// show. A normal design mirrors ProjectSegments 1:1. A loaded compensated snapshot has one
+    /// ProjectSegment per ~1cm physical slice (real, full-precision data — see
+    /// BuildCompensatedSnapshotProject); this groups consecutive slices sharing the same real
+    /// material into one row per zone, so the table shows the handful of materials a producer needs
+    /// instead of hundreds of slice rows. ProjectSegments itself is never touched — the chart,
+    /// totals and every calculation keep reading the full-precision data unchanged.
+    /// </summary>
+    private void RefreshDisplaySegments()
+    {
+        DisplaySegments.Clear();
+        if (!_isCompensatedDerivative)
+        {
+            foreach (var s in ProjectSegments) DisplaySegments.Add(s);
+            return;
+        }
+
+        var sorted = ProjectSegments.OrderBy(s => s.StartCm).ToList();
+        int i = 0, zoneIdx = 0;
+        while (i < sorted.Count)
+        {
+            int j = i;
+            while (j + 1 < sorted.Count &&
+                   Math.Abs(sorted[j + 1].SpecWeightGCm3 - sorted[i].SpecWeightGCm3) < 1e-6)
+                j++;
+
+            var first = sorted[i]; var last = sorted[j];
+            var zone = new ProjectSegment
+            {
+                Index           = ++zoneIdx,
+                StartCm         = first.StartCm,
+                EndCm           = last.EndCm,
+                StartDiameterMm = first.StartDiameterMm,
+                EndDiameterMm   = last.EndDiameterMm,
+                Name            = first.Name,
+                SpecWeightGCm3  = first.SpecWeightGCm3,
+                IsHead          = first.IsHead,
+            };
+            double speed = SinkingSpeedCalc.RigidBodySinkSpeed(_waterIsSalt, _waterTempC,
+                new[] { first.StartDiameterMm, last.EndDiameterMm },
+                new[] { (last.EndCm - first.StartCm) / 2.0, (last.EndCm - first.StartCm) / 2.0 },
+                new[] { first.SpecWeightGCm3, first.SpecWeightGCm3 });
+            zone.SetCompensation(first.StartCm,
+                new[] { 0.0, last.EndCm - first.StartCm },
+                new[] { first.StartDiameterMm, last.EndDiameterMm },
+                new[] { first.SpecWeightGCm3, first.SpecWeightGCm3 },
+                new[] { false, false }, speed);
+
+            DisplaySegments.Add(zone);
+            i = j + 1;
+        }
     }
 
     private void OnSegmentPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
@@ -2576,7 +2962,40 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private void NozzleZonesGrid_CellEditEnding(object sender, DataGridCellEditEndingEventArgs e)
     {
         if (e.EditAction == DataGridEditAction.Commit)
-            Dispatcher.InvokeAsync(() => { RefreshPlot(); MarkDirty(); MaybeApplyZoneDensityChange(forcePrompt: false); });
+            Dispatcher.InvokeAsync(() =>
+            {
+                RefreshPlot();
+                MarkDirty();
+                MaybeApplyZoneDensityChange(forcePrompt: false);
+                WarnIfZonesOverlap();
+            });
+    }
+
+    /// <summary>
+    /// A physical stretch of line can only be one material at a time — two zones covering the
+    /// same cm range is never a legitimate design, only a slip while hand-editing Start/End.
+    /// Warns rather than silently picking one (which is what ApplyZoneDensities/RenderNozzleZones
+    /// otherwise do, by list order) — doesn't revert the edit, so the offending numbers stay
+    /// visible in the grid to fix directly.
+    /// </summary>
+    private void WarnIfZonesOverlap()
+    {
+        var zones = NozzleZones.Where(z => z.EndCm > z.StartCm).ToList();
+        for (int i = 0; i < zones.Count; i++)
+            for (int j = i + 1; j < zones.Count; j++)
+            {
+                var a = zones[i]; var b = zones[j];
+                if (a.StartCm < b.EndCm && b.StartCm < a.EndCm)
+                {
+                    MessageBox.Show(
+                        $"Zone {a.StartCm:0.0}–{a.EndCm:0.0} cm and zone {b.StartCm:0.0}–{b.EndCm:0.0} cm overlap.\n\n" +
+                        "A physical stretch of line can only be one material — adjust the boundaries " +
+                        "so they don't overlap. Until then, whichever zone the app picks for the shared " +
+                        "stretch is arbitrary.",
+                        "Overlapping zones", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return; // one warning is enough — fix it and the next edit will re-check
+                }
+            }
     }
 
     private void NozzleZonesGrid_PreviewKeyDown(object sender, KeyEventArgs e)
@@ -2602,6 +3021,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     /// </summary>
     private void MaybeApplyZoneDensityChange(bool forcePrompt)
     {
+        // A loaded C snapshot's segments already carry their own baked materials — they are not
+        // zone-derived and must never be cleared or re-solved from the zone grid.
+        if (_isCompensatedDerivative) return;
+
         double baseDensity = Nozzles.Count > 0 ? Nozzles[0].DensityGCm3 : 0;
         if (baseDensity <= 0 || ProjectSegments.Count == 0) return;
 
@@ -2614,7 +3037,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             {
                 foreach (var seg in ProjectSegments) seg.ClearCompensation();
                 _zoneDerivedComp = false;
-                _inCompMode      = false;
+                UpdateSinkingSpeeds();
                 UpdateCompModeUI();
                 RefreshPlot();
                 MarkDirty();
@@ -2661,19 +3084,64 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
     }
 
+    // Total width of the smooth density ramp straddling each zone edge (half on each side) — see
+    // ApplyZoneDensities. A hard density jump forces a diameter jump too (mass ∝ ρ·d², and d must
+    // stay continuous), so instead of switching density instantly at a zone boundary, it's blended
+    // linearly across this band. Small relative to a real line's length; not user-configurable yet.
+    private const double ZoneTransitionCm = 10.0;
+
     /// <summary>
     /// Builds a C profile straight from the manually-assigned zone densities: outside any zone,
     /// slices keep the base (M1) density and the drawn diameter; inside a zone, slices use that
     /// zone's density, with the diameter mass-conserved from the original taper
     /// (ρ_new·d_new² = ρ_orig·d_orig², same convention as the physics Compensate button) unless
     /// <paramref name="adaptDiameters"/> is false, in which case the drawn diameters are kept as-is.
-    /// Unlike the physics Compensate button, each segment ends up at whatever sink speed its own
-    /// materials produce — there is no single shared target.
+    /// A zone's density doesn't switch on instantly at its edge — see ZoneTransitionCm — so the
+    /// mass-conserved diameter stays continuous there too; only deep inside a zone (or deep outside
+    /// every zone) does density sit flat at its nominal value. Unlike the physics Compensate button,
+    /// each segment ends up at whatever sink speed its own materials produce — there is no single
+    /// shared target.
     /// </summary>
     private void ApplyZoneDensities(bool adaptDiameters)
     {
         double baseDensity = Nozzles.Count > 0 ? Nozzles[0].DensityGCm3 : 0;
         if (baseDensity <= 0) return;
+
+        double lineMinX = _segmentNodes.Count > 0 ? _segmentNodes.Min(n => n.X) : 0.0;
+        double lineMaxX = _segmentNodes.Count > 0 ? _segmentNodes.Max(n => n.X) : 0.0;
+        double halfTransition = ZoneTransitionCm / 2.0;
+
+        // The density at any exact X, ignoring the ramp — "which zone (if any) contains this point".
+        double HardDensity(double x)
+        {
+            var zone = NozzleZones.FirstOrDefault(z => x >= z.StartCm && x < z.EndCm);
+            double r = zone != null ? zone.DensityGCm3 : baseDensity;
+            return Math.Abs(r - baseDensity) <= DensityMergeThreshold ? baseDensity : r;
+        }
+
+        // The real density used for the physics: flat at HardDensity(x) away from every zone edge,
+        // linearly blended across ZoneTransitionCm around whichever edge is nearest. An edge that
+        // coincides with the line's own tip or butt end is a free end, not a splice — nothing to
+        // blend into there, so it's left hard.
+        double DensityAt(double x)
+        {
+            double nearestEdge = double.NaN, bestDist = double.MaxValue;
+            foreach (var z in NozzleZones)
+            {
+                foreach (var edge in new[] { z.StartCm, z.EndCm })
+                {
+                    if (edge <= lineMinX + 1e-6 || edge >= lineMaxX - 1e-6) continue;
+                    double dist = Math.Abs(x - edge);
+                    if (dist < bestDist) { bestDist = dist; nearestEdge = edge; }
+                }
+            }
+            if (double.IsNaN(nearestEdge) || bestDist >= halfTransition) return HardDensity(x);
+
+            double before = HardDensity(nearestEdge - halfTransition - 1e-6);
+            double after  = HardDensity(nearestEdge + halfTransition + 1e-6);
+            double t = Math.Clamp((x - (nearestEdge - halfTransition)) / ZoneTransitionCm, 0.0, 1.0);
+            return before + t * (after - before);
+        }
 
         const double sliceLenCm = 1.0;
         bool anyClampedSlice = false;
@@ -2699,9 +3167,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 double dOrig = seg.StartDiameterMm + t * (seg.EndDiameterMm - seg.StartDiameterMm);
                 xs[i] = (i + 0.5) * dl;
 
-                var zone = NozzleZones.FirstOrDefault(z => xAbs >= z.StartCm && xAbs < z.EndCm);
-                double rho = zone != null ? zone.DensityGCm3 : baseDensity;
-                if (Math.Abs(rho - baseDensity) <= DensityMergeThreshold) rho = baseDensity;
+                // The ramp only exists to keep the mass-conserving diameter continuous across a
+                // zone edge (see DensityAt) — with adaptDiameters off, diameter never depends on
+                // density in the first place, so a smoothed density here would only turn one clean
+                // row into ~10 near-identical ones for no reason. Use the plain hard-edged density.
+                double rho = adaptDiameters ? DensityAt(xAbs) : HardDensity(xAbs);
 
                 double d = dOrig;
                 bool   wasClamped = false;
@@ -2721,9 +3191,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             if (seg.HasClampedSlices) anyClampedSlice = true;
         }
 
-        _zoneDerivedComp     = true;
-        _inCompMode          = true;
-        _showOriginalProfile = ShowOriginalToggle.IsChecked ?? true;
+        // A zone with its own material is part of the DESIGN, not a compensation: the window stays
+        // in NC mode (grids editable, density panel visible) and only the drawn profile shows the
+        // real per-slice materials. Saving keeps it in this same NC file — no C fork.
+        _zoneDerivedComp = true;
+        UpdateSinkingSpeeds();
         UpdateCompModeUI();
         RefreshPlot();
         MarkDirty();
@@ -2761,9 +3233,25 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     {
         if (e.EditAction == DataGridEditAction.Cancel) return;
         PushUndo(); // snapshot taken before the deferred sync applies the edit
+
+        // Editing Position moves a node's X — the key both _nodeLabelOffsets and _segmentMetadata
+        // are stored under (see RemapSegmentMetadata's comment). Capture the pre-edit X now, while
+        // the binding source still holds it (the deferred read below only sees the new value), so
+        // it can be remapped once the edit commits — table edits must reach the chart exactly like
+        // a drag on the chart does, in both directions.
+        double? oldX = NodesDataGrid.Columns.IndexOf(e.Column) == 0 && e.Row.Item is DesignNode edited
+            ? edited.PositionCm
+            : null;
+
         // Defer so DataGrid can commit the edited value before we read it
         Dispatcher.BeginInvoke(new Action(() =>
         {
+            if (oldX.HasValue && e.Row.Item is DesignNode dn)
+            {
+                double newX = Math.Round(dn.PositionCm, 1);
+                RemapLabelOffset(oldX.Value, newX);
+                RemapSegmentMetadata(oldX.Value, newX);
+            }
             SyncListFromDesignNodes();
             RefreshPlot();
             RefreshSegmentTable();
@@ -2894,6 +3382,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             _waterIsSalt = value;
             OnPropertyChanged(nameof(WaterIsSalt));
             UpdateSinkingSpeeds();
+            // The Sink column and the Sink Map now read the very same numbers (see
+            // UpdateSinkingSpeeds) — leaving the map uncoloured with the old water's speeds while
+            // the table already shows the new ones would be a visible, self-contradicting split.
+            if (_showSinkSpeedMap) RefreshPlot();
             MarkDirty();
         }
     }
@@ -2909,6 +3401,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             _waterTempC = clamped;
             OnPropertyChanged(nameof(WaterTempC));
             UpdateSinkingSpeeds();
+            if (_showSinkSpeedMap) RefreshPlot();
             MarkDirty();
         }
     }
@@ -2922,17 +3415,39 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         {
             if (seg.SpecWeightGCm3 <= 0)
             {
-                seg.SinkSpeedMs = double.NaN;
+                seg.SinkSpeedMs      = double.NaN;
+                seg.SinkSpeedStartMs = double.NaN;
+                seg.SinkSpeedEndMs   = double.NaN;
                 continue;
             }
-            seg.SinkSpeedMs = Math.Max(0, SinkingSpeedCalc.TaperedSegmentSinkSpeed(
-                _waterIsSalt, _waterTempC,
-                seg.StartDiameterMm, seg.EndDiameterMm,
-                seg.LengthCm,
-                seg.SpecWeightGCm3));
+
+            // With zone materials active the drawn taper and the shared density no longer describe
+            // this section — it's a real, physically joined piece with its own per-slice materials,
+            // so its true speed is the rigid-body one already solved by ApplyZoneDensities, not the
+            // local per-point model below.
+            if (_zoneDerivedComp && !_isCompensatedDerivative && seg.HasCompensation)
+            {
+                seg.SinkSpeedMs      = Math.Max(0, seg.CompensatedTargetSpeedMs);
+                seg.SinkSpeedStartMs = double.NaN;
+                seg.SinkSpeedEndMs   = double.NaN;
+            }
+            else
+            {
+                // Local (isolated-cylinder) model — the same one the chart's Sink Map colours by —
+                // evaluated at this segment's own Start/End diameter. A whole-segment "rigid body"
+                // average would hide exactly the taper-driven variation the map makes visible.
+                seg.SinkSpeedMs      = double.NaN;
+                seg.SinkSpeedStartMs = Math.Max(0, SinkingSpeedCalc.CylinderSinkSpeed(
+                    _waterIsSalt, _waterTempC, seg.StartDiameterMm, seg.SpecWeightGCm3));
+                seg.SinkSpeedEndMs   = Math.Max(0, SinkingSpeedCalc.CylinderSinkSpeed(
+                    _waterIsSalt, _waterTempC, seg.EndDiameterMm, seg.SpecWeightGCm3));
+            }
 
             anyComputed = true;
-            if (!double.IsNaN(seg.SinkSpeedMs) && seg.SinkSpeedMs > 0)
+            double repSpeed = !double.IsNaN(seg.SinkSpeedStartMs)
+                ? Math.Max(seg.SinkSpeedStartMs, seg.SinkSpeedEndMs)
+                : seg.SinkSpeedMs;
+            if (!double.IsNaN(repSpeed) && repSpeed > 0)
                 anySinking = true;
         }
 
@@ -2946,66 +3461,50 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             MarkDirty();
         }
 
-        // Compute NC min/max sink speeds for the comp target slider
-        var validSpeeds = ProjectSegments
-            .Where(s => s.SpecWeightGCm3 > 0 && !double.IsNaN(s.SinkSpeedMs) && s.SinkSpeedMs > 0)
-            .Select(s => s.SinkSpeedMs)
-            .ToList();
+        // NC min/max sink speeds — the achievable range offered by the Compensate dialog. Pulls
+        // in both local extremes (Start and End) of every uniform-density segment, not just one
+        // number per segment, so a taper's own internal spread is part of the range too.
+        var validSpeeds = new List<double>();
+        foreach (var s in ProjectSegments)
+        {
+            if (s.SpecWeightGCm3 <= 0) continue;
+            if (!double.IsNaN(s.SinkSpeedStartMs))
+            {
+                if (s.SinkSpeedStartMs > 0) validSpeeds.Add(s.SinkSpeedStartMs);
+                if (s.SinkSpeedEndMs   > 0) validSpeeds.Add(s.SinkSpeedEndMs);
+            }
+            else if (!double.IsNaN(s.SinkSpeedMs) && s.SinkSpeedMs > 0)
+            {
+                validSpeeds.Add(s.SinkSpeedMs);
+            }
+        }
         if (validSpeeds.Count > 0)
         {
             _compMinSpeedMs = validSpeeds.Min();
             _compMaxSpeedMs = validSpeeds.Max();
-            if (IsLoaded) UpdateCompSpeedSlider();
         }
     }
 
-    private void UpdateCompSpeedSlider()
-    {
-        double minIns = _compMinSpeedMs * 39.3701;
-        double maxIns = _compMaxSpeedMs * 39.3701;
-        CompSpeedSlider.Minimum = minIns;
-        CompSpeedSlider.Maximum = maxIns;
-        double targetIns = _compTargetSpeedMs > 0
-            ? _compTargetSpeedMs * 39.3701
-            : maxIns;
-        CompSpeedSlider.Value     = Math.Clamp(targetIns, minIns, maxIns);
-        CompSpeedMinLabel.Text    = $"{minIns:0.00}";
-        CompSpeedMaxLabel.Text    = $"{maxIns:0.00}";
-        CompSpeedValueLabel.Text  = $"{CompSpeedSlider.Value:0.000}";
-    }
-
-    private void CompSpeedSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-    {
-        if (_isCompensatedDerivative) return; // frozen snapshot — never recompute, even from a programmatic slider update
-        _compTargetSpeedMs  = e.NewValue / 39.3701;
-        _compTargetSpeedIns = e.NewValue;
-        if (CompSpeedValueLabel != null)
-            CompSpeedValueLabel.Text = $"{e.NewValue:0.000}";
-        if (_isSinking && ProjectSegments.Any(s => s.HasCompensation))
-            ComputeCompensation();
-    }
-
+    /// <summary>
+    /// Re-applies the zone materials after something that changes the underlying geometry or the
+    /// base density. There is no live physics compensation to refresh any more — pressing
+    /// "Compensate" writes a C file and leaves this design in pure NC state — so the only
+    /// derived profile a normal design can carry is the zone-material one.
+    /// </summary>
     private void TriggerCompRecompute()
     {
-        if (_isSinking && ProjectSegments.Any(s => s.HasCompensation))
-            ComputeCompensation();
+        if (_isCompensatedDerivative) return; // a loaded C snapshot is frozen — its geometry IS the result
+        if (_zoneDerivedComp) MaybeApplyZoneDensityChange(forcePrompt: false);
     }
 
-    private void ComputeCompensation()
+    /// <summary>
+    /// Solves the mass-preserving per-slice compensation for <paramref name="targetSpeedMs"/> and
+    /// stores it on the segments. Pure computation: it does not switch the window into any kind of
+    /// "compensated view" — the caller either saves the result to a C file and then clears it, or
+    /// (legacy recipe files) is loading a C file that owns this state permanently.
+    /// </summary>
+    private (int Count, bool AnyClamped) ComputeCompensationSlices(double targetSpeedMs)
     {
-        UpdateSinkingSpeeds(); // also updates _compMinSpeedMs / _compMaxSpeedMs
-
-        if (_compMaxSpeedMs <= 0)
-        {
-            UiStatus = "No segment with valid sink speed — set material density first";
-            return;
-        }
-
-        // Init target to max if not set, clamp to valid range
-        if (_compTargetSpeedMs <= 0) _compTargetSpeedMs = _compMaxSpeedMs;
-        _compTargetSpeedMs  = Math.Clamp(_compTargetSpeedMs, _compMinSpeedMs, _compMaxSpeedMs);
-        _compTargetSpeedIns = _compTargetSpeedMs * 39.3701;
-
         bool anyClampedSlice = false;
         foreach (var seg in ProjectSegments)
         {
@@ -3020,32 +3519,103 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 seg.StartDiameterMm, seg.EndDiameterMm,
                 seg.LengthCm,
                 seg.SpecWeightGCm3,
-                _compTargetSpeedMs);
+                targetSpeedMs);
 
-            seg.SetCompensation(seg.StartCm, sliceXs, sliceDiams, sliceDens, clamped, _compTargetSpeedMs);
+            seg.SetCompensation(seg.StartCm, sliceXs, sliceDiams, sliceDens, clamped, targetSpeedMs);
             if (seg.HasClampedSlices) anyClampedSlice = true;
         }
-        int compCount = ProjectSegments.Count(s => s.HasCompensation);
-        if (compCount > 0)
-        {
-            _inCompMode      = true;
-            _zoneDerivedComp = false; // the physics target-speed pass always supersedes a zone-based one
-            _showOriginalProfile = ShowOriginalToggle.IsChecked ?? true;
-            SyncNozzleDensitiesFromComp();
-            UpdateCompModeUI();
-        }
-        RefreshPlot();
-        string clampWarn = anyClampedSlice
-            ? " ⚠ Some sections clamped to ρ = 0.94 g/cm³ (will float at target speed)."
-            : string.Empty;
-        UiStatus = compCount > 0
-            ? $"Compensated at {_compTargetSpeedIns:0.000} in/s ({compCount}/{ProjectSegments.Count} segments).{clampWarn}"
-            : "Compensation skipped — set material density first";
+        return (ProjectSegments.Count(s => s.HasCompensation), anyClampedSlice);
     }
 
     /// <summary>
-    /// After computing a compensated profile, auto-populate nozzle M1–M4 with the
-    /// 4 quantized density levels so the manufacturer sees the required materials immediately.
+    /// The continuous solve above is the theoretically ideal profile — a different density on
+    /// every ~1cm slice — but a real line can only be extruded from a handful of actual materials
+    /// (the same ≤4 nozzles already shown in the Materials legend). This constrains it to that
+    /// reality WITHOUT ever touching the diameter: quantizes the continuous density curve down to
+    /// at most 4 real values and assigns each slice its nearest one, leaving that slice's diameter
+    /// exactly as the ideal continuous solve produced it. An earlier version instead corrected
+    /// diameter per slice by mass-conservation (ρ_new·d_new² = ρ_ideal·d_ideal², as still used for
+    /// hand-assigned zones in <see cref="ApplyZoneDensities"/>) — but because the *assignment* jumps
+    /// discretely at a material boundary while idealDens is continuous, that correction produced a
+    /// visible diameter step exactly where two materials meet. Leaving diameter untouched removes
+    /// that step everywhere, at the cost of a larger, uncorrected achieved-speed error per slice —
+    /// an explicit tradeoff: a real, deliverable taper with imperfect sink speed beats a
+    /// theoretically ideal speed with a manufacturing-breaking diameter discontinuity.
+    /// </summary>
+    private (bool anyAtFloor, double worstSpeedErrIns) QuantizeCompensationToRealMaterials(double targetSpeedMs)
+    {
+        var compSegs = ProjectSegments.Where(s => s.HasCompensation).ToList();
+        if (compSegs.Count == 0) return (false, 0.0);
+
+        // Always spend all 4 real nozzles here, not the fewest-necessary QuantizeAdaptive picks
+        // for the on-screen legend elsewhere — those materials are available at no extra cost
+        // regardless, and every one actually used tightens the mass-conserving approximation above.
+        double[] qDens = Quantize1D(compSegs.SelectMany(s => s.CompSliceDensities), 4);
+        if (qDens.Length == 0) return (false, 0.0);
+
+        bool   anyAtFloor      = false;
+        double worstSpeedErrMs = 0.0;
+        foreach (var seg in compSegs)
+        {
+            var diams   = seg.CompSliceDiamsMm.ToArray();
+            var dens    = seg.CompSliceDensities.ToArray();
+            var clamped = seg.CompSliceClamped.ToArray();
+            double achievedSum = 0.0; int achievedCount = 0;
+
+            for (int i = 0; i < dens.Length; i++)
+            {
+                double idealDens = dens[i], idealDiam = diams[i];
+                double assigned  = qDens.MinBy(c => Math.Abs(c - idealDens));
+
+                // Diameter is left exactly as the ideal continuous solve gave it — no mass-
+                // conserving correction for the assigned material. That correction is what caused a
+                // real, measured diameter jump wherever the assigned material changes (idealDens is
+                // continuous, but the nearest-cluster assignment isn't, so ρ_new·d_new²=ρ_ideal·d_ideal²
+                // applied slice-by-slice snaps to a different value on each side of the boundary).
+                // Leaving diameter untouched keeps it perfectly smooth everywhere — the tradeoff,
+                // confirmed acceptable, is that a slice's achieved speed only approximates the
+                // target when its assigned material isn't exactly the one the physics wanted there.
+                dens[i]  = assigned;
+                clamped[i] = assigned <= SinkingSpeedCalc.RhoFloor + 1e-6;
+                if (clamped[i]) anyAtFloor = true;
+
+                double achieved = SinkingSpeedCalc.CylinderSinkSpeed(_waterIsSalt, _waterTempC, idealDiam, assigned);
+                if (!double.IsNaN(achieved))
+                {
+                    worstSpeedErrMs = Math.Max(worstSpeedErrMs, Math.Abs(achieved - targetSpeedMs));
+                    achievedSum += achieved; achievedCount++;
+                }
+            }
+            // Store this segment's own average ACHIEVED speed (not the nominal target) — the Sink
+            // column and PDF read this per segment, and it's now an approximation, not exact.
+            double segAchieved = achievedCount > 0 ? achievedSum / achievedCount : targetSpeedMs;
+            seg.SetCompensation(seg.CompStartCm, seg.CompSliceXsCm, diams, dens, clamped, segAchieved);
+        }
+        return (anyAtFloor, worstSpeedErrMs * 39.3701);
+    }
+
+    /// <summary>
+    /// Legacy path only: a pre-snapshot C file stored a target speed instead of its own geometry,
+    /// so opening it has to re-run the solve and then stay in compensated view.
+    /// </summary>
+    private void ComputeCompensationForLegacyFile()
+    {
+        UpdateSinkingSpeeds(); // also updates _compMinSpeedMs / _compMaxSpeedMs
+        if (_compMaxSpeedMs <= 0) return;
+
+        if (_compTargetSpeedMs <= 0) _compTargetSpeedMs = _compMaxSpeedMs;
+        _compTargetSpeedMs  = Math.Clamp(_compTargetSpeedMs, _compMinSpeedMs, _compMaxSpeedMs);
+        _compTargetSpeedIns = _compTargetSpeedMs * 39.3701;
+        ComputeCompensationSlices(_compTargetSpeedMs);
+    }
+
+    /// <summary>
+    /// After computing a compensated profile, auto-populate nozzle M1–M4 with the real materials
+    /// actually baked into the segments, so the manufacturer sees exactly what's used — never a
+    /// re-quantized approximation of it, which could legitimately show fewer materials in the
+    /// legend than the geometry really uses (see QuantizeCompensationToRealMaterials, the only
+    /// place that decides how many/which materials exist; called right before this by
+    /// WriteCompensatedFile, so CompSliceDensities is already the final, real, ≤4-value set here).
     /// Colors and labels are auto-generated from the same density-to-hue map used in the chart.
     /// </summary>
     private void SyncNozzleDensitiesFromComp()
@@ -3053,7 +3623,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         var compSegs = ProjectSegments.Where(s => s.HasCompensation).ToList();
         if (compSegs.Count == 0) return;
 
-        double[] qDens = QuantizeAdaptive(compSegs.SelectMany(s => s.CompSliceDensities), DensityMergeThreshold);
+        double[] qDens = compSegs.SelectMany(s => s.CompSliceDensities)
+            .Where(d => d > 0).Distinct().OrderBy(d => d).ToArray();
         if (qDens.Length == 0) return;
 
         // Save current NC state before overwriting with comp-derived values.
@@ -3098,31 +3669,19 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         bool hasComp = ProjectSegments.Any(s => s.HasCompensation);
         bool c       = _inCompMode && hasComp;
 
-        // "Compensate" button label reflects whether C profile exists
-        CompensateBtn.Content = hasComp ? "⚖ Recompute C" : "⚖ Compensate";
+        // "Compensate" always writes a fresh C file — there is no in-window C state to recompute
+        CompensateBtn.Content = "⚖ Compensate…";
         // A compensated snapshot file can't be compensated again — edit the original design instead
         CompensateBtn.IsEnabled = !_isCompensatedDerivative;
         CompensateBtn.ToolTip = _isCompensatedDerivative
             ? "This file is already a compensated snapshot — edit the original design instead"
-            : _zoneDerivedComp
-                ? "Compute a whole-line target-speed compensation — this replaces the zone-based one"
-                : "Compute compensated (C) profile — mass-preserving per-slice bisection for uniform sink speed";
+            : "Solve the compensated (C) profile for a uniform sink speed and write it to its own separate file — this design is left untouched";
         NcDensityPanel.IsEnabled = !_isCompensatedDerivative;
 
-        // "Show C" toggle: visible only when comp data exists
-        ShowCompToggle.Visibility = hasComp ? Visibility.Visible   : Visibility.Collapsed;
-        ShowCompToggle.IsChecked  = c;
-
-        // NC-only controls: hide when viewing C
-        SinkMapToggle.Visibility      = c ? Visibility.Collapsed : Visibility.Visible;
+        // Sink Map applies to both NC and C — a compensated profile should show as one uniform
+        // colour (see RenderCompSinkSpeedMap); any variation is a real sign a slice fell short of
+        // the target (e.g. clamped at RhoFloor), so it stays available as a sanity check.
         NcDensityPanel.Visibility     = c ? Visibility.Collapsed : Visibility.Visible;
-        // NC ghost toggle: only when in comp mode
-        ShowOriginalToggle.Visibility = c ? Visibility.Visible   : Visibility.Collapsed;
-        // Speed slider: a zone-derived C profile has no single shared target — each zone reaches
-        // whatever speed its own material produces — so the slider only applies to the physics path.
-        CompSpeedPanel.Visibility  = (hasComp && !_zoneDerivedComp) ? Visibility.Visible : Visibility.Collapsed;
-        CompSpeedSlider.IsEnabled  = !_isCompensatedDerivative;
-        if (hasComp && !_zoneDerivedComp) UpdateCompSpeedSlider();
 
         // Nozzle densities: a zone-derived C profile already has real, user-authored materials in
         // Nozzles/NozzleZones — leave them untouched. Only the physics (target-speed) path invents
@@ -3161,16 +3720,22 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         // SegmentsDataGrid: Sink e Comp. Sink entrambe ultime a destra nei rispettivi modi.
         // NC: Start/End/Shape/Taper/SpW/Sink   C: CompStart/CompEnd/ρStart/ρFine/CompSink
+        //
+        // Un design con zone a materiale proprio resta in NC (colonne di disegno, editabili) ma
+        // mostra ANCHE diametri e densità reali: con l'adattamento di massa i diametri prodotti non
+        // sono quelli disegnati, e il produttore ha bisogno di vederli. La colonna Comp. Sink resta
+        // nascosta perché in quel caso Sink riporta già la velocità reale per zona.
+        bool zonesInNc = !c && hasComp && _zoneDerivedComp;
         OrigStartDiamColumn.Visibility = c ? Visibility.Collapsed : Visibility.Visible;
         OrigEndDiamColumn.Visibility   = c ? Visibility.Collapsed : Visibility.Visible;
         ShapeColumn.Visibility         = c ? Visibility.Collapsed : Visibility.Visible;
         TaperColumn.Visibility         = c ? Visibility.Collapsed : Visibility.Visible;
         SpWeightColumn.Visibility      = c ? Visibility.Collapsed : Visibility.Visible;
         OrigSinkColumn.Visibility      = c ? Visibility.Collapsed : Visibility.Visible;
-        CompStartDiamColumn.Visibility = c ? Visibility.Visible   : Visibility.Collapsed;
-        CompEndDiamColumn.Visibility   = c ? Visibility.Visible   : Visibility.Collapsed;
-        CompStartDensColumn.Visibility = c ? Visibility.Visible   : Visibility.Collapsed;
-        CompEndDensColumn.Visibility   = c ? Visibility.Visible   : Visibility.Collapsed;
+        CompStartDiamColumn.Visibility = (c || zonesInNc) ? Visibility.Visible : Visibility.Collapsed;
+        CompEndDiamColumn.Visibility   = (c || zonesInNc) ? Visibility.Visible : Visibility.Collapsed;
+        CompStartDensColumn.Visibility = (c || zonesInNc) ? Visibility.Visible : Visibility.Collapsed;
+        CompEndDensColumn.Visibility   = (c || zonesInNc) ? Visibility.Visible : Visibility.Collapsed;
         CompSinkColumn.Visibility      = c ? Visibility.Visible   : Visibility.Collapsed;
         RestoreSegmentsColumnOrder();
     }
@@ -3207,25 +3772,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
     }
 
-    private void ShowOriginalProfile_Click(object sender, RoutedEventArgs e)
-    {
-        _showOriginalProfile = ShowOriginalToggle.IsChecked ?? true;
-        RefreshPlot();
-        UiStatus = _showOriginalProfile
-            ? "Overlay: compensated profile + NC ghost"
-            : "Compensated profile — density gradient only";
-    }
-
-    private void ShowCompToggle_Click(object sender, RoutedEventArgs e)
-    {
-        _inCompMode = ShowCompToggle.IsChecked ?? false;
-        RefreshPlot();
-        UpdateCompModeUI();
-        UiStatus = _inCompMode
-            ? $"Showing compensated profile — {_compTargetSpeedIns:0.000} in/s"
-            : "Showing NC profile";
-    }
-
     // ── Line type / format ────────────────────────────────────────────────────
 
 
@@ -3242,7 +3788,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         if (!_isSinking && _inCompMode)
         {
             _inCompMode = false;
-            _showOriginalProfile = true;
             foreach (var seg in ProjectSegments) seg.ClearCompensation();
             UpdateCompModeUI();
         }
@@ -3329,12 +3874,27 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _segmentNodes.Clear();
         foreach (var n in mirrored) _segmentNodes.Add(n);
 
-        // Remap metadata: after reversal segment i (ascending) holds the metadata of old segment (count-1-i)
+        // Remap metadata: after reversal, new (ascending) segment ri — starting at mirrored[ri] —
+        // holds the metadata of old segment (count-1-ri). Key by the new StartCm so it lines up
+        // with what RefreshSegmentTable is about to read back out of the mirrored node list.
         _segmentMetadata.Clear();
         for (int ri = 0; ri < segData.Count; ri++)
-            _segmentMetadata[ri] = (segData[segData.Count - 1 - ri].Name,
+            _segmentMetadata[mirrored[ri].Item1] = (segData[segData.Count - 1 - ri].Name,
                                     segData[segData.Count - 1 - ri].SpecWeightGCm3,
                                     segData[segData.Count - 1 - ri].IsHead);
+
+        // Nozzle zones are a material assigned to a physical stretch of the line — that material
+        // must travel with the geometry when it's mirrored, exactly like every node did above.
+        // [StartCm, EndCm) mirrors to [totalLen-EndCm, totalLen-StartCm); left unmapped, a zone's
+        // absolute cm range would silently keep pointing at whatever now sits at those same
+        // numbers — a completely different, wrong stretch of the reversed line.
+        foreach (var zone in NozzleZones)
+        {
+            double newStart = Math.Round(totalLen - zone.EndCm,   1);
+            double newEnd   = Math.Round(totalLen - zone.StartCm, 1);
+            zone.StartCm = newStart;
+            zone.EndCm   = newEnd;
+        }
 
         RefreshSegmentTable();
         RefreshPlot();
@@ -3638,6 +4198,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         if (_draggingNodeX == null) return;
         PlotControl.ReleaseMouseCapture();
         RemapLabelOffset(_dragStartNodeX!.Value, _draggingNodeX.Value);
+        RemapSegmentMetadata(_dragStartNodeX!.Value, _draggingNodeX.Value);
         _dragStartNodeX = null;
         RefreshSegmentTable();
         TriggerCompRecompute();
@@ -3686,6 +4247,24 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         {
             _nodeLabelOffsets.Remove(oldX);
             _nodeLabelOffsets[newX] = (offset.LX + (newX - oldX), offset.LY);
+        }
+    }
+
+    /// <summary>
+    /// Same pattern as <see cref="RemapLabelOffset"/>, for the segment metadata keyed by StartCm
+    /// (see _segmentMetadata's own comment). A dragged node is the StartCm of one segment for the
+    /// whole gesture, so RefreshSegmentTable's per-tick save/restore (old key vs. the not-yet-
+    /// remapped new key) can't find that segment's name mid-drag — same harmless, self-healing
+    /// flicker the label offset already has. Calling this once at drag-end, before the final
+    /// RefreshSegmentTable(), restores the correct key so nothing is actually lost.
+    /// </summary>
+    private void RemapSegmentMetadata(double oldX, double newX)
+    {
+        if (oldX == newX) return;
+        if (_segmentMetadata.TryGetValue(oldX, out var meta))
+        {
+            _segmentMetadata.Remove(oldX);
+            _segmentMetadata[newX] = meta;
         }
     }
 
@@ -3786,7 +4365,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         // Design overlay — thinner lines for print
         // In modalità compensato il PDF mostra il profilo compensato con gradiente densità.
-        bool pdfUseComp = _inCompMode && !_showOriginalProfile && ProjectSegments.Any(s => s.HasCompensation);
+        bool pdfUseComp = (_inCompMode || _zoneDerivedComp) && ProjectSegments.Any(s => s.HasCompensation);
         var baseNodes   = pdfUseComp ? GetCompNodes() : _segmentNodes.OrderBy(n => n.X).ToList();
 
         if (baseNodes.Count >= 2)
@@ -3799,10 +4378,13 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
             if (pdfUseComp)
             {
-                // Densità quantizzate a max 4 materiali per uso produttivo
+                // Materiali reali già baked nei segmenti (vedi QuantizeCompensationToRealMaterials)
+                // — mai ri-quantizzati qui, altrimenti il grafico potrebbe mostrare meno materiali
+                // di quelli realmente usati nella geometria/tabella dello stesso PDF.
                 var compSegs = ProjectSegments.OrderBy(s => s.StartCm)
                     .Where(s => s.HasCompensation).ToList();
-                double[] qDens  = QuantizeAdaptive(compSegs.SelectMany(s => s.CompSliceDensities), DensityMergeThreshold);
+                double[] qDens  = compSegs.SelectMany(s => s.CompSliceDensities)
+                    .Where(d => d > 0).Distinct().OrderBy(d => d).ToArray();
                 double   minDens = qDens.Length > 0 ? qDens[0] : 0;
                 double   maxDens = qDens.Length > 0 ? qDens[^1] : 1;
                 double   densRng = Math.Max(maxDens - minDens, 1e-9);
@@ -3871,9 +4453,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             double dataPerPxX = (xSpan * 1.15) / 3000.0;
             double yEstSpan   = maxDiam + 2 * rowGap * (1.6 + 3 * 1.2);
             double dataPerPxY = yEstSpan / 480.0;
-            // In comp mode GetCompNodes() has epsilon-duplicate pairs at boundaries — deduplicate
+            // Comp mode: every manufacturing checkpoint (material AND taper-shape changes — see
+            // GetManufacturingCheckpoints), not every fine ~1cm node — a loaded C snapshot has
+            // hundreds of those, which would turn this into hundreds of Ø/position callouts.
             var labelNodes = (pdfUseComp && sorted.Count > 1)
-                ? sorted.Where((n, i) => i == 0 || Math.Abs(sorted[i - 1].X - n.X) > 0.5).ToList()
+                ? GetManufacturingCheckpoints(sorted)
                 : sorted;
 
             var placedBoxes = new List<(double X1, double Y1, double X2, double Y2)>();
@@ -3957,18 +4541,24 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 div.MarkerSize = 0;
             }
 
-            // Segment labels S1, S2… for PDF
+            // Segment labels S1, S2… for PDF — SEMPRE e SOLO i tapers fisici reali, mai i cambi di
+            // materiale (stesso principio mandatorio del grafico a schermo). Per un file C caricato
+            // ProjectSegments ha un "segmento" trivial per ogni ~1cm slice — molti consecutivi
+            // condividono lo stesso Name (vengono dallo stesso taper originale) — quindi si
+            // raggruppano con GetTaperShapeBoundaries invece di iterarli uno a uno, altrimenti la
+            // stessa etichetta "S1" verrebbe disegnata decine di volte, leggermente sfalsata.
             var segLabelColor = new ScottColor(40, 40, 40);
             if (pdfUseComp)
             {
-                // Comp mode: one label per original ProjectSegment (not per comp-node gap)
-                var segsOrdered = ProjectSegments.OrderBy(s => s.StartCm).ToList();
-                foreach (var seg in segsOrdered)
+                var taperBounds = GetTaperShapeBoundaries(sorted);
+                for (int si = 0; si < taperBounds.Count - 1; si++)
                 {
-                    double cx      = (seg.StartCm + seg.EndCm) / 2.0;
+                    double cx      = (taperBounds[si].X + taperBounds[si + 1].X) / 2.0;
                     double topAtCx = InterpolateProfileY(sorted, cx) / 2.0;
                     double gap     = InterpolateProfileY(sorted, cx) * 0.08;
-                    string lname   = string.IsNullOrWhiteSpace(seg.Name) ? $"S{seg.Index}" : seg.Name;
+                    var atCx = ProjectSegments.OrderBy(s => s.StartCm)
+                        .FirstOrDefault(s => cx >= s.StartCm && cx <= s.EndCm);
+                    string lname = !string.IsNullOrWhiteSpace(atCx?.Name) ? atCx!.Name : $"S{si + 1}";
                     var sl = plot.Add.Text(lname, cx, topAtCx + gap);
                     sl.LabelFontSize        = pdfLblSize;
                     sl.LabelBold            = false;
@@ -3979,6 +4569,28 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     sl.LabelPadding         = 2;
                     sl.OffsetX              = 0;
                     sl.OffsetY              = 0;
+                }
+
+                // Etichette "M{n}" per ogni zona di materiale — mai "S", stesso standard del
+                // grafico a schermo: un badge col colore reale dell'ugello, sul bordo del profilo.
+                foreach (var span in GetMaterialZoneSpans(sorted))
+                {
+                    double midX     = (span.StartX + span.EndX) / 2.0;
+                    double topAtMid = InterpolateProfileY(sorted, midX) / 2.0;
+                    var (matLabel, matColor) = GetMaterialTag(midX, span.Density);
+                    double luminance = (0.299 * matColor.R + 0.587 * matColor.G + 0.114 * matColor.B) / 255.0;
+                    var textColor = luminance > 0.6 ? new ScottColor(20, 20, 20) : ScottPlot.Colors.White;
+
+                    var ml = plot.Add.Text(matLabel, midX, topAtMid);
+                    ml.LabelFontSize        = pdfLblSize - 3;
+                    ml.LabelBold            = true;
+                    ml.LabelFontColor       = textColor;
+                    ml.LabelBackgroundColor = matColor;
+                    ml.LabelBorderColor     = new ScottColor(30, 30, 30);
+                    ml.LabelBorderWidth     = 0.8f;
+                    ml.LabelAlignment       = Alignment.LowerCenter;
+                    ml.LabelPadding         = 3;
+                    ml.OffsetX = 0; ml.OffsetY = 4;
                 }
             }
             else
@@ -4028,20 +4640,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             return;
         }
 
-        // Ask whether to export NC or C profile when comp data exists
-        bool exportComp = false;
-        if (_isSinking && ProjectSegments.Any(s => s.HasCompensation))
-        {
-            var choice = MessageBox.Show(
-                "This project has a compensated (C) profile.\n\n" +
-                "Yes  →  Export compensated profile (C)\n" +
-                "No   →  Export original NC profile",
-                "PDF Export — Profile selection",
-                MessageBoxButton.YesNoCancel,
-                MessageBoxImage.Question);
-            if (choice == MessageBoxResult.Cancel) return;
-            exportComp = choice == MessageBoxResult.Yes;
-        }
+        // No NC-or-C question any more: a file is one or the other, and the sheet documents what
+        // this file actually is — the per-slice materials of a C snapshot or of a zoned design.
+        bool exportComp = (_inCompMode || _zoneDerivedComp)
+                          && ProjectSegments.Any(s => s.HasCompensation);
 
         var dlg = new Microsoft.Win32.SaveFileDialog
         {
@@ -4069,27 +4671,30 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 laserMarkText = string.IsNullOrWhiteSpace(_laserMark)
                     ? $"at {string.Join(" and ", markPos)}"
                     : $"{_laserMark}   —   at {string.Join(" and ", markPos)}";
-            // Render chart in the correct mode (temporarily switch if needed)
-            bool wasinCompMode = _inCompMode;
-            if (exportComp != _inCompMode)
-            {
-                _inCompMode = exportComp;
-                RefreshPlot();
-            }
+            // The on-screen chart already renders exactly what this file is — no mode switch needed
             byte[] chartBytes = RenderPdfChart();
-            if (_inCompMode != wasinCompMode)
-            {
-                _inCompMode = wasinCompMode;
-                RefreshPlot();
-            }
-            string compNote = exportComp
-                ? $"Compensated profile — target sink {_compTargetSpeedIns:0.00} in/s. " +
-                  "Diameters are mass-preserving compensated values. Manufacture each section at the exact density shown."
-                : "";
-            FlyLinePdfExporter.Export(dlg.FileName, _projectName, chartBytes, ProjectSegments.ToList(),
+            // Read the real per-segment speed straight off the data being exported, not the
+            // window's own _compTargetSpeedIns — that field is never restored when a C snapshot is
+            // freshly loaded (self-contained files carry no "recipe" to read it back from) and can
+            // otherwise hold a stale value left over from a different design compensated earlier in
+            // the same session (see task 10). A uniform physics compensation gives every segment
+            // the same speed; a zone-derived profile gives each its own.
+            var segSpeedsIns = ProjectSegments.Where(s => s.HasCompensation)
+                .Select(s => s.CompensatedTargetSpeedMs * 39.3701).Where(v => v > 0).ToList();
+            bool uniformSegSpeed = segSpeedsIns.Count > 0 && (segSpeedsIns.Max() - segSpeedsIns.Min()) < 0.001;
+            string compNote = !exportComp ? ""
+                : uniformSegSpeed
+                    ? $"Compensated profile — target sink {segSpeedsIns[0]:0.00} in/s. " +
+                      "Diameters are mass-preserving compensated values. Manufacture each section at the exact density shown."
+                    : "Multi-material design — each zone uses its own material. " +
+                      "Diameters are mass-preserving values. Manufacture each section at the exact density shown.";
+            // DisplaySegments — grouped into material zones for a loaded compensated snapshot, so
+            // the PDF table shows the handful of real materials a producer needs, not one row per
+            // ~1cm slice. Identical to ProjectSegments for a normal design (see RefreshDisplaySegments).
+            FlyLinePdfExporter.Export(dlg.FileName, _projectName, chartBytes, DisplaySegments.ToList(),
                 _isSinking, _isFullLine, _waterIsSalt, _waterTempC, AfftaBadge, _colorNote,
                 pdfNozzleDefs, pdfNozzleZones, designHex,
-                _coreType, laserMarkText, exportComp, compNote, _compTargetSpeedIns);
+                _coreType, laserMarkText, exportComp, compNote);
             UiStatus = $"PDF exported: {System.IO.Path.GetFileName(dlg.FileName)}";
         }
         catch (Exception ex)
@@ -4182,6 +4787,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             // rather than keep showing the source's now-stale values.
             double newDensity = result.Segments.Count > 0 ? result.Segments[0].SpecWeightGCm3 : 0;
             foreach (var n in project.NozzleDefinitions) n.DensityGCm3 = newDensity;
+            // A source zone with its own material has no meaning any more: this variant is one
+            // new uniform density by definition (see GenerateSinkSpeedFamilyMember's own comment),
+            // so every nozzle above just got set to that same number. Leaving the zone rows in
+            // place would show a still-coloured "zone" pointing at a material that is now
+            // identical to the rest of the line — a stale, confusing leftover, not a real one.
+            project.NozzleZones.Clear();
         });
     }
 
@@ -4466,6 +5077,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _segmentNodes.RemoveAll(n => n.X == result.Value.cm);
         _segmentNodes.Add((result.Value.cm, result.Value.mm));
         RemapLabelOffset(hit.Value.X, result.Value.cm);
+        RemapSegmentMetadata(hit.Value.X, result.Value.cm);
 
         RefreshPlot();
         RefreshSegmentTable();
@@ -4930,20 +5542,179 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     }
 
 
+    /// <summary>
+    /// "C e NC sono due file distinti, completamente": compensating no longer switches this window
+    /// into a preview of the result. It asks for a target speed, solves the profile, writes it to
+    /// its own sibling C file and restores this design exactly as it was — same flow as the family
+    /// generators, so a C profile only ever exists as a file on disk.
+    /// </summary>
     private void Compensate_Click(object sender, RoutedEventArgs e)
     {
+        const string title = "Compensate";
+
         if (ProjectSegments.Count == 0)
         {
-            UiStatus = "No segments to compensate — draw nodes first";
+            MessageBox.Show("No segments to compensate — draw design nodes first.",
+                            title, MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
         if (ProjectSegments.All(s => s.SpecWeightGCm3 <= 0))
         {
-            UiStatus = "Set density (g/cm³) before computing compensation";
+            MessageBox.Show("Set the material density (g/cm³) first — compensation needs it.",
+                            title, MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
-        ComputeCompensation();
-        MarkDirty();
+        if (_currentProjectPath == null)
+        {
+            MessageBox.Show("Save the project first — the compensated file is named after it.",
+                            title, MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        UpdateSinkingSpeeds(); // refreshes _compMinSpeedMs / _compMaxSpeedMs
+        if (_compMaxSpeedMs <= 0)
+        {
+            MessageBox.Show("No section has a valid sink speed — set the material density first.",
+                            title, MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        // The physics pass solves the whole line from the base material and the drawn diameters,
+        // so it cannot carry a zone's own material over into the result.
+        if (_zoneDerivedComp && NozzleZones.Any(z => z.EndCm > z.StartCm))
+        {
+            var proceed = MessageBox.Show(
+                "This design has zones with their own material.\n\n" +
+                "A target-speed compensation re-solves the whole line from the base material (M1) " +
+                "and the drawn diameters, so the zone materials will NOT appear in the C file.\n\n" +
+                "Continue anyway?",
+                title, MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
+            if (proceed != MessageBoxResult.Yes) return;
+        }
+
+        string folder   = Path.GetDirectoryName(_currentProjectPath)!;
+        string baseName = Path.GetFileNameWithoutExtension(_currentProjectPath)!;
+
+        var dlg = new CompensateDialog(
+            _compMinSpeedMs * 39.3701,
+            _compMaxSpeedMs * 39.3701,
+            _compMaxSpeedMs * 39.3701,
+            ips => SanitizeFileName($"{baseName} C {ips:0.00}ips") + ProjectService.FileExtension)
+        { Owner = this };
+        if (dlg.ShowDialog() != true) return;
+
+        double targetIns = dlg.SelectedSpeedIns;
+        double targetMs  = targetIns / 39.3701;
+        // "ips" everywhere — same suffix Generate by Sink Speed uses for the same unit (in/s),
+        // so a folder of generated files doesn't carry two different abbreviations for one thing.
+        string compName  = $"{_projectName} C {targetIns:0.00}ips";
+        string compPath  = Path.Combine(folder,
+            SanitizeFileName($"{baseName} C {targetIns:0.00}ips") + ProjectService.FileExtension);
+
+        if (File.Exists(compPath))
+        {
+            var answer = MessageBox.Show(
+                $"{Path.GetFileName(compPath)} already exists and will be overwritten.\n\nContinue?",
+                title, MessageBoxButton.YesNo, MessageBoxImage.Warning);
+            if (answer != MessageBoxResult.Yes) return;
+        }
+
+        WriteCompensatedFile(compPath, compName, targetIns, targetMs, title);
+    }
+
+    /// <summary>
+    /// Solves the compensation, saves it as its own file, then puts this design back exactly as it
+    /// was — segments, nozzle materials, zone profile and dirty flag included. Nothing about the
+    /// open project changes; the only output is the file.
+    /// </summary>
+    private void WriteCompensatedFile(string compPath, string compName,
+                                      double targetIns, double targetMs, string title)
+    {
+        // Snapshot everything the solve is about to overwrite in place
+        var savedNozzles = Nozzles.Select(n => (n.ColorHex, n.Label, n.DensityGCm3)).ToList();
+        bool savedZoneComp   = _zoneDerivedComp;
+        bool savedDirty      = _isDirty;
+        double savedTargetMs = _compTargetSpeedMs, savedTargetIns = _compTargetSpeedIns;
+
+        int compCount;
+        bool anyClamped;
+        double worstSpeedErrIns;
+        try
+        {
+            _compTargetSpeedMs  = targetMs;
+            _compTargetSpeedIns = targetIns;
+            _zoneDerivedComp    = false; // the target-speed pass supersedes the zone-based profile
+            (compCount, anyClamped) = ComputeCompensationSlices(targetMs);
+            if (compCount == 0)
+            {
+                MessageBox.Show("Compensation produced no sections — set the material density first.",
+                                title, MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            // The ideal continuous solve above needs an unbounded number of materials — no real
+            // line can be extruded that way. Constrain it to a handful of real, manufacturable
+            // materials (same ≤4 nozzles the Materials legend already promises), leaving every
+            // slice's diameter exactly as the continuous solve produced it (never touched by the
+            // quantization) so the saved taper has no diameter discontinuity anywhere, including at
+            // material boundaries — the achieved speed absorbs the discretization error instead.
+            // Quantization re-flags clamped slices against the REAL assigned material, superseding
+            // the continuous-solve flag ComputeCompensationSlices returned above.
+            (anyClamped, worstSpeedErrIns) = QuantizeCompensationToRealMaterials(targetMs);
+
+            // The C file's material list is the quantized density gradient, not this design's
+            // nozzles — sync it in so BuildProjectObject picks it up, then restore below.
+            SyncNozzleDensitiesFromComp();
+
+            var compProject = BuildCompensatedSnapshotProject(new List<ImportedSeries>(), compName);
+            ProjectService.Save(compProject, compPath);
+            RecentFilesService.Add(compPath);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Could not write the compensated file:\n{ex.Message}",
+                            title, MessageBoxButton.OK, MessageBoxImage.Error);
+            return;
+        }
+        finally
+        {
+            // Back to a pure NC design: drop the solved slices, then rebuild whatever profile this
+            // design actually had. The nozzle restore comes last on purpose — UpdateCompModeUI has
+            // its own NC-restore branch, and the values snapshotted here are the authoritative ones.
+            foreach (var seg in ProjectSegments) seg.ClearCompensation();
+            _zoneDerivedComp    = savedZoneComp;
+            _compTargetSpeedMs  = savedTargetMs;
+            _compTargetSpeedIns = savedTargetIns;
+            if (savedZoneComp) MaybeApplyZoneDensityChange(forcePrompt: false);
+            UpdateSinkingSpeeds();
+            UpdateCompModeUI();
+            for (int i = 0; i < savedNozzles.Count && i < Nozzles.Count; i++)
+            {
+                Nozzles[i].ColorHex    = savedNozzles[i].ColorHex;
+                Nozzles[i].Label       = savedNozzles[i].Label;
+                Nozzles[i].DensityGCm3 = savedNozzles[i].DensityGCm3;
+            }
+            NozzleDefsGrid?.Items.Refresh();
+            UpdateNozzleBadge();
+            RefreshSegmentTable();
+            RefreshPlot();
+            _isDirty = savedDirty; // the design itself never changed
+            UpdateProjectTitle();
+        }
+
+        string clampWarn = anyClamped
+            ? "\n\n⚠ One or more sections use the ρ = 0.94 g/cm³ floor material — their diameter (and so their actual speed) departs a bit further from the target than the rest."
+            : string.Empty;
+        UiStatus = $"Compensated file saved: {Path.GetFileName(compPath)}  ({targetIns:0.000} in/s, worst deviation {worstSpeedErrIns:0.000} in/s)";
+        MessageBox.Show(
+            $"Saved {Path.GetFileName(compPath)}\n\n" +
+            $"{compCount} section(s) compensated toward {targetIns:0.000} in/s, using at most 4 real materials.\n" +
+            $"Diameters stay close to the original taper (mass-conserving, same rule as a zone) — actual " +
+            $"sink speed is an approximation, worst deviation {worstSpeedErrIns:0.000} in/s.\n" +
+            "This design is unchanged — open the C file to see or print the compensated profile." +
+            clampWarn,
+            title, MessageBoxButton.OK,
+            anyClamped ? MessageBoxImage.Warning : MessageBoxImage.Information);
     }
 
     private void AutoFitToggle_Click(object sender, RoutedEventArgs e)
@@ -5043,6 +5814,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private void SegmentsDataGrid_CellEditEnding(object sender, DataGridCellEditEndingEventArgs e)
     {
         if (e.EditAction != DataGridEditAction.Commit) return;
+        // A loaded compensated snapshot shows grouped zone rows here (DisplaySegments), not the
+        // real per-slice ProjectSegments — editing one wouldn't map back to real geometry, and this
+        // file is meant to be read-only baked data anyway (edit the NC source instead).
+        if (_isCompensatedDerivative) return;
         if (e.Row.Item is not ProjectSegment seg) return;
         if (e.EditingElement is not TextBox tb) return;
 
@@ -5082,9 +5857,18 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 }
                 case 5: // Length — move the end node's X position
                 {
-                    double newEndCm = seg.StartCm + newVal;
+                    double newEndCm = Math.Round(seg.StartCm + newVal, 1);
                     int idx = _segmentNodes.FindIndex(n => Math.Abs(n.X - seg.EndCm) < 0.05);
-                    if (idx >= 0) _segmentNodes[idx] = (Math.Round(newEndCm, 1), _segmentNodes[idx].Y);
+                    if (idx >= 0)
+                    {
+                        double oldEndX = _segmentNodes[idx].X;
+                        _segmentNodes[idx] = (newEndCm, _segmentNodes[idx].Y);
+                        // This node is the shared boundary — moving it is the same kind of edit as
+                        // dragging it on the chart, so it needs the same key remap (see
+                        // RemapSegmentMetadata's comment) for the segment that starts here.
+                        RemapLabelOffset(oldEndX, newEndCm);
+                        RemapSegmentMetadata(oldEndX, newEndCm);
+                    }
                     break;
                 }
             }

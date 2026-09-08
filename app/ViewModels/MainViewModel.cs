@@ -191,9 +191,22 @@ public class MainViewModel : ObservableObject
     /// <summary>
     /// Fetches /export from the ESP32 HTTP server and populates Points with the full history.
     /// Call this from the view after subscribing to OnConnected, with CollectionChanged temporarily unhooked.
+    ///
+    /// Only runs when Points is empty. This handler fires on EVERY successful connection, including
+    /// an automatic reconnect after a dropped WebSocket — not just the first connect at app startup.
+    /// Points already holds data whenever that reconnect happens mid-scan, or a project with its own
+    /// ScanPoints was opened before connecting; re-running the fetch would blindly append the device's
+    /// history on top (this method has no de-dup, unlike the live-point path), duplicating or
+    /// scrambling the curve. Skipping when there is already something to protect is the safe default.
     /// </summary>
     public async Task LoadHistoryAsync()
     {
+        if (Points.Count > 0)
+        {
+            AppendLog("Storico da /export non ricaricato — punti già presenti in sessione (evita duplicati su riconnessione)");
+            return;
+        }
+
         AppendLog("Caricamento storico da /export…");
         try
         {

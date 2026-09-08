@@ -44,7 +44,18 @@ public static class FlyLinePdfExporter
     {
         var arr = values.Where(v => v > 0).OrderBy(v => v).ToArray();
         if (arr.Length == 0) return Array.Empty<double>();
-        k = Math.Min(k, arr.Length);
+
+        // k-means with k fixed at 4 splits data that only has fewer real distinct densities into
+        // that many clusters anyway — e.g. a 2-material line would come back as 4 "materials", two
+        // of them near-duplicates of each other, printed as phantom cards nothing in the file
+        // actually uses. Cap k at the number of genuinely distinct values (grouped within a small
+        // tolerance) actually present, so the legend never claims more materials than are real.
+        const double distinctTol = 0.005;
+        int distinctCount = 1;
+        for (int i = 1; i < arr.Length; i++)
+            if (arr[i] - arr[i - 1] > distinctTol) distinctCount++;
+        k = Math.Min(k, distinctCount);
+
         if (k == 1) return new[] { arr.Average() };
         double[] c = new double[k];
         for (int i = 0; i < k; i++)
@@ -227,8 +238,7 @@ public static class FlyLinePdfExporter
         string coreType = "",
         string laserMark = "",
         bool showCompensation = false,
-        string compensationNote = "",
-        double compTargetSpeedIns = 0)
+        string compensationNote = "")
     {
         QuestPDF.Settings.License = LicenseType.Community;
 
@@ -238,11 +248,39 @@ public static class FlyLinePdfExporter
         const double GramsToGrains = 15.4324;
         const double CmToFt        = 1.0 / 30.48;
 
+        // A segment's own compensated slices are the source of truth for its real mass and real
+        // sink speed whenever it has them — never a value passed in from outside. A caller-supplied
+        // "target speed" field can go stale (a loaded C snapshot has nothing to restore it from —
+        // see task 10) or simply not apply (a zone-derived profile has no single shared target), so
+        // this document reads every number straight off the segments it's already printing.
+        double EffectiveMassG(ProjectSegment s)
+        {
+            if (!(showCompensation && s.HasCompensation && s.CompSliceDiamsMm.Length > 0))
+                return s.MassG;
+            // A row whose density doesn't actually vary (every DisplaySegments zone row — one row
+            // IS one constant-density material, by construction) is exactly the frustum s.MassG
+            // already computes correctly (π/4·ρ·L/3·(r1²+r1r2+r2²)) — summing per-slice cylinders
+            // both duplicates that work and gets it slightly wrong (a cylinder-per-slice sum isn't
+            // the same integral as a single frustum). Only fall back to slice-summing when density
+            // genuinely varies within the row (a live, not-yet-baked compensated segment whose
+            // internal slices still span more than one material).
+            if (s.CompSliceDensities.All(d => Math.Abs(d - s.CompSliceDensities[0]) < 1e-6))
+                return s.MassG;
+            double dl = s.LengthCm / Math.Max(1, s.CompSliceXsCm.Length);
+            double m = 0;
+            for (int si = 0; si < s.CompSliceDiamsMm.Length; si++)
+            {
+                double dCm = s.CompSliceDiamsMm[si] / 10.0;
+                m += Math.PI / 4.0 * dCm * dCm * dl * s.CompSliceDensities[si];
+            }
+            return m;
+        }
+
         // Pre-compute summary values
         var headSegs     = isFullLine ? segments.Where(s => s.IsHead).ToList() : segments;
-        double totalMassG   = segments.Sum(s => s.MassG);
+        double totalMassG   = segments.Sum(EffectiveMassG);
         double totalMassGr  = totalMassG * GramsToGrains;
-        double headMassGr   = headSegs.Sum(s => s.MassG) * GramsToGrains;
+        double headMassGr   = headSegs.Sum(EffectiveMassG) * GramsToGrains;
         double totalLenMm   = segments.Count > 0
             ? (segments[^1].EndCm - segments[0].StartCm) * 10.0 : 0;
         double headLenMm    = headSegs.Count > 0
@@ -251,6 +289,17 @@ public static class FlyLinePdfExporter
         string lineType   = isSinking  ? "Sinking"    : "Floating";
         string lineFormat = isFullLine ? "Full Line"  : "Shooting Head";
         string water      = isSalt     ? "Salt water" : "Fresh water";
+
+        // Real per-segment compensated sink speeds — a uniform physics compensation gives every
+        // segment the same value; a zone-derived profile gives each its own (see task 10).
+        var compSpeedsIns = segments.Where(s => s.HasCompensation)
+            .Select(s => s.CompensatedTargetSpeedMs * 39.3701)
+            .Where(v => v > 0)
+            .ToList();
+        bool   uniformCompSpeed = compSpeedsIns.Count > 0 && (compSpeedsIns.Max() - compSpeedsIns.Min()) < 0.001;
+        string targetSinkText   = compSpeedsIns.Count == 0 ? "—"
+            : uniformCompSpeed  ? $"{compSpeedsIns[0]:0.000} in/s"
+                                 : $"{compSpeedsIns.Min():0.000}–{compSpeedsIns.Max():0.000} in/s (per zone)";
 
         // Density range — use compensated slice densities when exporting a compensated profile
         string densityRange;
@@ -280,10 +329,13 @@ public static class FlyLinePdfExporter
         if (showCompensation)
         {
             dimNote    = "All dimensions are in millimeters. Diameters shown are compensated values.";
-            weightNote = compTargetSpeedIns > 0
-                ? $"Compensated profile — uniform sink speed {compTargetSpeedIns:0.00} in/s. " +
-                  $"Density varies along the line ({densityRange} g/cm³) — each zone must be produced at the exact specified density."
-                : $"Compensated profile. Density varies along the line ({densityRange} g/cm³).";
+            weightNote = uniformCompSpeed
+                ? $"Compensated profile — uniform sink speed {compSpeedsIns[0]:0.00} in/s. " +
+                  $"Density varies along the line ({densityRange}) — each zone must be produced at the exact specified density."
+                : compSpeedsIns.Count > 0
+                    ? $"Multi-material profile — each zone sinks at its own speed (see table). " +
+                      $"Density varies along the line ({densityRange}) — each zone must be produced at the exact specified density."
+                    : $"Compensated profile. Density varies along the line ({densityRange}).";
             changeNote = "Do not alter diameters. Each section must be manufactured at the exact density shown — the density is calculated and fixed.";
         }
         else
@@ -404,9 +456,9 @@ public static class FlyLinePdfExporter
                         }
                         else
                         {
-                            SpecBlock("Target sink",  compTargetSpeedIns > 0 ? $"{compTargetSpeedIns:0.000} in/s" : "—", ColAccent2);
+                            SpecBlock("Target sink",  targetSinkText, ColAccent2);
                             SpecBlock("Water",        water,  ColText);
-                            SpecBlock("Type",         "Compensated — uniform sink",  ColAccent);
+                            SpecBlock("Type",         uniformCompSpeed ? "Compensated — uniform sink" : "Multi-material — per-zone sink",  ColAccent);
                             if (hasClampedSection)
                                 SpecBlock("Warning", "⚠ sections at ρ min (0.94)", ColRed);
                         }
@@ -430,8 +482,12 @@ public static class FlyLinePdfExporter
 
                         if (hasZones)
                         {
+                            // M1 is the implicit base material everywhere no zone covers — it never
+                            // appears as a NozzleIndex in nozzleZones itself, so it must be added
+                            // unconditionally or the line's own "default" material goes unlisted.
                             var usedIndices = nozzleZones!
-                                .Select(z => z.NozzleIndex).Distinct().OrderBy(x => x).ToList();
+                                .Select(z => z.NozzleIndex).Append(0)
+                                .Distinct().OrderBy(x => x).ToList();
                             foreach (int idx in usedIndices)
                             {
                                 var def = (hasNozzles && idx < nozzleDefinitions!.Count)
@@ -524,14 +580,20 @@ public static class FlyLinePdfExporter
                                 .Text("Materials").FontSize(6.5f).Bold().FontColor(ColMuted);
                             legCol.Item().PaddingTop(3).Row(legRow =>
                             {
+                                // Only cards for nozzles actually in use — an empty M3/M4 slot
+                                // (density 0, never baked into any slice) is not part of this file
+                                // and must not be printed as if it were a real material.
                                 var nozzlesToShow = hasNozzles
                                     ? nozzleDefinitions!
-                                    : new List<NozzleDefinition>
-                                        { new NozzleDefinition { ColorHex = designColorHex.TrimStart('#'), DensityGCm3 = 0, Label = "" } };
+                                        .Select((nd, i) => (Idx: i, Def: nd))
+                                        .Where(x => x.Def.DensityGCm3 > 0)
+                                        .ToList()
+                                    : new List<(int Idx, NozzleDefinition Def)>
+                                        { (0, new NozzleDefinition { ColorHex = designColorHex.TrimStart('#'), DensityGCm3 = 0, Label = "" }) };
 
                                 for (int nmi = 0; nmi < nozzlesToShow.Count; nmi++)
                                 {
-                                    var nd  = nozzlesToShow[nmi];
+                                    var (origIdx, nd) = nozzlesToShow[nmi];
                                     string hex = (nd.ColorHex ?? "DC3232").TrimStart('#');
                                     if (hex.Length < 6) continue;
                                     try
@@ -543,7 +605,7 @@ public static class FlyLinePdfExporter
 
                                         legRow.AutoItem().Column(sCol =>
                                         {
-                                            sCol.Item().Text($"M{nmi + 1}")
+                                            sCol.Item().Text($"M{origIdx + 1}")
                                                 .FontSize(6.5f).Bold().FontColor(ColText).AlignCenter();
                                             sCol.Item().Border(0.5f).BorderColor(ColBorder)
                                                 .Element(e => DrawLambertSwatch(e, swatchColor, 44, 10));
@@ -606,36 +668,46 @@ public static class FlyLinePdfExporter
                                 : qDens.MinBy(c => Math.Abs(c - d));
                             int MatIdx(double d) => Array.IndexOf(qDens, NearestQ(d)) + 1;
 
-                            // ── Density legend (max 4 materials) ─────────────
-                            col.Item().Background(C("F7F8FA"))
-                                .Border(0.5f).BorderColor(ColBorder)
-                                .PaddingVertical(3).PaddingHorizontal(5).Row(mr =>
+                            // The real nozzle (M1-M4) nearest a given density, and its real colour —
+                            // never the synthetic blue-to-red DensityColorRgb heat scale, which paints
+                            // "Mat 1"/"Mat 2" in colours that don't exist anywhere on this line and
+                            // contradict the real swatches the Materials card above already shows.
+                            (string Label, byte R, byte G, byte B) RealMaterial(double dens)
                             {
-                                mr.AutoItem().AlignMiddle()
-                                    .Text("Density legend  ").FontSize(6.5f).Bold().FontColor(ColMuted);
-                                for (int mi = 0; mi < qDens.Length; mi++)
+                                if (hasNozzles)
                                 {
-                                    double dens = qDens[mi];
-                                    double t = Math.Clamp((dens - minD) / rng, 0, 1);
-                                    var (sr, sg, sb) = DensityColorRgb(t);
-                                    var sw = PdfColor.FromRGB(sr, sg, sb);
-                                    mr.AutoItem().Column(mc =>
+                                    int bestIdx = -1; double bestDiff = double.MaxValue;
+                                    for (int ni = 0; ni < nozzleDefinitions!.Count; ni++)
                                     {
-                                        mc.Item().Border(0.5f).BorderColor(ColBorder)
-                                            .Element(e => DrawLambertSwatch(e, sw, 60, 10));
-                                        mc.Item().Width(60)
-                                            .Text($"Mat {mi + 1}")
-                                            .FontSize(6.5f).Bold().FontColor(ColText).AlignCenter();
-                                        mc.Item().Width(60)
-                                            .Text($"{dens:0.00} g/cm³")
-                                            .FontSize(7f).Bold().FontColor(C("0F6B50")).AlignCenter();
-                                    });
-                                    mr.ConstantItem(8);
+                                        if (nozzleDefinitions[ni].DensityGCm3 <= 0) continue;
+                                        double diff = Math.Abs(nozzleDefinitions[ni].DensityGCm3 - dens);
+                                        if (diff < bestDiff) { bestDiff = diff; bestIdx = ni; }
+                                    }
+                                    if (bestIdx >= 0)
+                                    {
+                                        string hx = (nozzleDefinitions[bestIdx].ColorHex ?? "DC3232").TrimStart('#');
+                                        if (hx.Length >= 6)
+                                        {
+                                            byte rr = System.Convert.ToByte(hx[0..2], 16);
+                                            byte gg = System.Convert.ToByte(hx[2..4], 16);
+                                            byte bb = System.Convert.ToByte(hx[4..6], 16);
+                                            return ($"M{bestIdx + 1}", rr, gg, bb);
+                                        }
+                                    }
                                 }
-                            });
+                                double t = Math.Clamp((dens - minD) / rng, 0, 1);
+                                var (sr, sg, sb) = DensityColorRgb(t);
+                                return ("Mat", sr, sg, sb);
+                            }
 
                             // ── Density bands: contiguous position runs of same material ──
-                            // Build ordered list of (positionMm, matIdx, quantizedDensity) per slice
+                            // Build ordered list of (positionMm, matIdx, quantizedDensity) per slice.
+                            // PosMm is each slice's own CENTER (CompSliceXsCm stores slice-center
+                            // offsets), not its edge — used directly as a band's start/end, it put
+                            // every band a half-slice short at the true line ends and, at a material
+                            // transition, printed each side's boundary from its own slice center
+                            // instead of the shared point between them (a 0-3100mm / 3100-18500mm
+                            // real split coming out as 5-3105 / 3105-18505 in the exported PDF).
                             var allSlices = compSegs
                                 .SelectMany(seg => seg.CompSliceXsCm
                                     .Select((x, i) => (
@@ -646,26 +718,24 @@ public static class FlyLinePdfExporter
                                 .OrderBy(s => s.PosMm)
                                 .ToList();
 
-                            // Group into contiguous runs of same material
+                            // Group into contiguous runs of same material — anchored to the real
+                            // line start/end, and to the true midpoint between two slice centers at
+                            // every internal transition (same approach as GetMaterialZoneSpans on
+                            // the on-screen chart, kept in sync so the two never disagree).
                             var bands = new List<(double StartMm, double EndMm, int Mat, double Dens)>();
                             if (allSlices.Count > 0)
                             {
-                                double sliceStep = allSlices.Count > 1
-                                    ? allSlices[1].PosMm - allSlices[0].PosMm : 10.0;
-                                var cur = (StartMm: allSlices[0].PosMm, EndMm: allSlices[0].PosMm,
-                                           Mat: allSlices[0].Mat, Dens: allSlices[0].Dens);
-                                for (int si = 1; si < allSlices.Count; si++)
+                                double lineStartMm = compSegs.Min(s => s.StartCm) * 10.0;
+                                double lineEndMm   = compSegs.Max(s => s.EndCm)   * 10.0;
+                                double spanStart = lineStartMm;
+                                for (int si = 0; si < allSlices.Count; si++)
                                 {
-                                    if (allSlices[si].Mat == cur.Mat)
-                                        cur.EndMm = allSlices[si].PosMm;
-                                    else
-                                    {
-                                        bands.Add((cur.StartMm, cur.EndMm + sliceStep, cur.Mat, cur.Dens));
-                                        cur = (allSlices[si].PosMm, allSlices[si].PosMm,
-                                               allSlices[si].Mat, allSlices[si].Dens);
-                                    }
+                                    bool last = si == allSlices.Count - 1;
+                                    if (!last && allSlices[si + 1].Mat == allSlices[si].Mat) continue;
+                                    double x = last ? lineEndMm : (allSlices[si].PosMm + allSlices[si + 1].PosMm) / 2.0;
+                                    bands.Add((spanStart, x, allSlices[si].Mat, allSlices[si].Dens));
+                                    spanStart = x;
                                 }
-                                bands.Add((cur.StartMm, cur.EndMm + sliceStep, cur.Mat, cur.Dens));
                             }
 
                             col.Item().Background(C("F7F8FA"))
@@ -676,15 +746,14 @@ public static class FlyLinePdfExporter
                                     .Text("Density zones  ").FontSize(6.5f).Bold().FontColor(ColMuted);
                                 foreach (var (startMm, endMm, mat, dens) in bands)
                                 {
-                                    double t2 = Math.Clamp((dens - minD) / rng, 0, 1);
-                                    var (sr2, sg2, sb2) = DensityColorRgb(t2);
+                                    var (matLabel, sr2, sg2, sb2) = RealMaterial(dens);
                                     var sw2 = PdfColor.FromRGB(sr2, sg2, sb2);
                                     dr.AutoItem().Column(sc =>
                                     {
                                         sc.Item().Border(0.5f).BorderColor(ColBorder)
                                             .Element(e => DrawLambertSwatch(e, sw2, 56, 10));
                                         sc.Item().Width(56)
-                                            .Text($"Mat {mat}")
+                                            .Text(matLabel)
                                             .FontSize(6.5f).Bold().FontColor(C("0F6B50")).AlignCenter();
                                         sc.Item().Width(56)
                                             .Text($"{dens:0.00} g/cm³")
@@ -781,7 +850,6 @@ public static class FlyLinePdfExporter
                                    .Text(h).FontSize(6.5f).Bold().FontColor(ColAccent);
                         });
 
-                        double totalCompMassG = 0;
                         for (int i = 0; i < segments.Count; i++)
                         {
                             var seg   = segments[i];
@@ -804,15 +872,7 @@ public static class FlyLinePdfExporter
                                 double d1 = seg.CompSliceDiamsMm.Length > 0 ? seg.CompSliceDiamsMm[0]  : seg.StartDiameterMm;
                                 double d2 = seg.CompSliceDiamsMm.Length > 0 ? seg.CompSliceDiamsMm[^1] : seg.EndDiameterMm;
                                 double avgRho = seg.CompSliceDensities.Length > 0 ? seg.CompSliceDensities.Average() : 0;
-                                // Comp mass: sum(π/4 × d_i² × dl × ρ_i) with d in cm
-                                double compMassG = 0;
-                                double dl = seg.LengthCm / Math.Max(1, seg.CompSliceXsCm.Length);
-                                for (int si = 0; si < seg.CompSliceDiamsMm.Length; si++)
-                                {
-                                    double dCm = seg.CompSliceDiamsMm[si] / 10.0;
-                                    compMassG += Math.PI / 4.0 * dCm * dCm * dl * seg.CompSliceDensities[si];
-                                }
-                                totalCompMassG += compMassG;
+                                double compMassG = EffectiveMassG(seg);
                                 double compTaper = Math.Abs(d2 - d1) < 0.001 ? 0 : (d2 - d1) / (seg.LengthCm / 100.0);
                                 double grPerFt  = compMassG > 0 && seg.LengthCm > 0
                                     ? (compMassG * GramsToGrains) / (seg.LengthCm * CmToFt) : 0;
@@ -830,7 +890,7 @@ public static class FlyLinePdfExporter
                                 Cell(compMassG > 0 ? $"{compMassG:0.000}" : "—");
                                 Cell(compMassG > 0 ? $"{compMassG * GramsToGrains:0.0}" : "—");
                                 Cell(grPerFt > 0 ? $"{grPerFt:0.0}" : "—");
-                                Cell(compTargetSpeedIns > 0 ? $"{compTargetSpeedIns:0.000}" : "—");
+                                Cell(seg.CompSpeedText);
                                 Cell(clamped ? "⚠ ρ min" : "OK", clamped ? ColRed : ColAccent);
                             }
                             else
@@ -847,13 +907,12 @@ public static class FlyLinePdfExporter
                                 Cell($"{seg.StartDiameterMm:0.00}");
                                 Cell($"{seg.EndDiameterMm:0.00}");
                                 Cell(seg.IsCylinder ? "—" : $"{seg.TaperMmPerMeter:+0.00;-0.00}");
-                                Cell(seg.SpecWeightGCm3 > 0 ? $"{seg.SpecWeightGCm3:0.00}" : "—");
+                                Cell(seg.EffectiveSpecWeightGCm3 > 0 ? $"{seg.EffectiveSpecWeightGCm3:0.00}" : "—");
                                 Cell(seg.MassG > 0 ? $"{seg.MassG:0.000}" : "—");
                                 Cell(seg.MassG > 0 ? $"{seg.MassG * GramsToGrains:0.0}" : "—");
                                 Cell(grPerFt > 0 ? $"{grPerFt:0.0}" : "—");
                                 Cell(seg.SinkSpeedText);
                                 Cell(isHd ? "HEAD" : "RUN", isHd ? ColAccent : ColMuted);
-                                totalCompMassG += seg.MassG;
                             }
                         }
 
@@ -868,7 +927,7 @@ public static class FlyLinePdfExporter
                                 .FontColor(hi ? ColAccent2 : ColText);
                         }
 
-                        double sumMassG  = showCompensation ? totalCompMassG : totalMassG;
+                        double sumMassG  = totalMassG; // already the compensated sum when showCompensation is true
                         double sumMassGr = sumMassG * GramsToGrains;
                         TotCell("∑"); TotCell("TOTAL");
                         TotCell(""); TotCell(""); TotCell("");

@@ -56,10 +56,30 @@ public class ProjectSegment : INotifyPropertyChanged
             {
                 _specWeightGCm3 = value;
                 Notify(nameof(SpecWeightGCm3));
+                Notify(nameof(EffectiveSpecWeightGCm3));
                 Notify(nameof(MassG));
                 Notify(nameof(MassText));
             }
         }
+    }
+
+    /// <summary>
+    /// What the Sp. W. column actually shows and edits. A live zone override (see
+    /// ApplyZoneDensities) never touches SpecWeightGCm3 — that field stays at the design's shared
+    /// base density even while this segment's real, applied material is different — so reading
+    /// SpecWeightGCm3 directly showed the base density for every zone-covered segment, not the
+    /// zone's own. This reads the real applied density instead whenever one exists (averaged across
+    /// its slices, for the rare case a segment straddles a zone edge), falling back to
+    /// SpecWeightGCm3 otherwise. Editing always writes straight to SpecWeightGCm3 — hand-typing a
+    /// density sets the design's own base material, never a zone override, which comes from the
+    /// Zones grid instead.
+    /// </summary>
+    public double EffectiveSpecWeightGCm3
+    {
+        get => HasCompensation && _compSliceDensities.Length > 0
+            ? _compSliceDensities.Average()
+            : _specWeightGCm3;
+        set => SpecWeightGCm3 = value;
     }
 
     public double LengthCm  { get => EndCm - StartCm; set { /* handled by CellEditEnding */ } }
@@ -83,11 +103,14 @@ public class ProjectSegment : INotifyPropertyChanged
         }
     }
 
-    /// <summary>Mass in grams. Zero when SpecWeightGCm3 is not set.</summary>
-    public double MassG => _specWeightGCm3 > 0 ? VolumeCm3 * _specWeightGCm3 : 0;
+    /// <summary>
+    /// Mass in grams, from the real applied density (EffectiveSpecWeightGCm3 — the zone's own
+    /// density where one applies, not the design's base) — zero when neither is set.
+    /// </summary>
+    public double MassG => EffectiveSpecWeightGCm3 > 0 ? VolumeCm3 * EffectiveSpecWeightGCm3 : 0;
 
     public string VolumeText => $"{VolumeCm3:0.000}";
-    public string MassText   => _specWeightGCm3 > 0 ? $"{MassG:0.000}" : "—";
+    public string MassText   => EffectiveSpecWeightGCm3 > 0 ? $"{MassG:0.000}" : "—";
 
     /// <summary>Taper rate in mm per metre (positive = thicker toward end, negative = taper off).</summary>
     public double TaperMmPerMeter =>
@@ -97,17 +120,55 @@ public class ProjectSegment : INotifyPropertyChanged
         IsCylinder ? "—" : $"{TaperMmPerMeter:+0.000;-0.000} mm/m";
 
     private double _sinkSpeedMs = double.NaN;
-    /// <summary>Terminal sinking speed in m/s. Set externally by MainWindow after computing.</summary>
+    /// <summary>
+    /// Whole-segment rigid-body terminal sinking speed in m/s. Set externally by MainWindow only
+    /// for a segment with real per-slice materials (a zone with its own density) — there the
+    /// segment genuinely is one physically joined piece, so treating it as one rigid body is the
+    /// correct model. A plain uniform-density segment instead uses <see cref="SinkSpeedStartMs"/>/
+    /// <see cref="SinkSpeedEndMs"/> below; see SinkSpeedText for which one wins.
+    /// </summary>
     public double SinkSpeedMs
     {
         get => _sinkSpeedMs;
         set { if (_sinkSpeedMs != value) { _sinkSpeedMs = value; Notify(nameof(SinkSpeedMs)); Notify(nameof(SinkSpeedText)); } }
     }
 
+    private double _sinkSpeedStartMs = double.NaN;
+    private double _sinkSpeedEndMs   = double.NaN;
+    /// <summary>
+    /// Local (isolated-cylinder) terminal sink speed in m/s at this segment's own Start/End
+    /// diameter — the same per-point model the chart's Sink Map heat-map already colours by,
+    /// not a whole-segment average. Set externally by MainWindow; NaN for a segment whose real
+    /// speed instead comes from <see cref="SinkSpeedMs"/> (see its own comment).
+    /// </summary>
+    public double SinkSpeedStartMs
+    {
+        get => _sinkSpeedStartMs;
+        set { if (_sinkSpeedStartMs != value) { _sinkSpeedStartMs = value; Notify(nameof(SinkSpeedStartMs)); Notify(nameof(SinkSpeedText)); } }
+    }
+
+    public double SinkSpeedEndMs
+    {
+        get => _sinkSpeedEndMs;
+        set { if (_sinkSpeedEndMs != value) { _sinkSpeedEndMs = value; Notify(nameof(SinkSpeedEndMs)); Notify(nameof(SinkSpeedText)); } }
+    }
+
     public string SinkSpeedText
     {
         get
         {
+            // Local model (matches the Sink Map): show the true range across this segment — a
+            // taper shows exactly the two extremes the colour gradient shows, a cylinder
+            // collapses to one value since both ends are the same diameter.
+            if (!double.IsNaN(_sinkSpeedStartMs) && !double.IsNaN(_sinkSpeedEndMs))
+            {
+                double sIns = _sinkSpeedStartMs * 39.3701;
+                double eIns = _sinkSpeedEndMs   * 39.3701;
+                if (sIns <= 0 && eIns <= 0) return "floating";
+                if (Math.Abs(sIns - eIns) < 0.001) return $"{sIns:0.000} in/s";
+                return $"{sIns:0.000} → {eIns:0.000} in/s";
+            }
+            // Rigid-body model (zone-derived segment — see SinkSpeedMs's own comment)
             if (double.IsNaN(_sinkSpeedMs)) return "—";
             double ins = _sinkSpeedMs * 39.3701;
             if (ins <= 0) return "floating";
@@ -153,6 +214,9 @@ public class ProjectSegment : INotifyPropertyChanged
         Notify(nameof(CompEndDiamText));
         Notify(nameof(CompStartDensityText));
         Notify(nameof(CompEndDensityText));
+        Notify(nameof(EffectiveSpecWeightGCm3));
+        Notify(nameof(MassG));
+        Notify(nameof(MassText));
     }
 
     public void ClearCompensation()
@@ -169,6 +233,9 @@ public class ProjectSegment : INotifyPropertyChanged
         Notify(nameof(CompEndDiamText));
         Notify(nameof(CompStartDensityText));
         Notify(nameof(CompEndDensityText));
+        Notify(nameof(EffectiveSpecWeightGCm3));
+        Notify(nameof(MassG));
+        Notify(nameof(MassText));
     }
 
     public string CompSpeedText
