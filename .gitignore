@@ -13,3 +13,7 @@ publish/
 
 # Arduino IDE temp files
 *.bak
+
+# CLI build output
+cli/bin/
+cli/obj/

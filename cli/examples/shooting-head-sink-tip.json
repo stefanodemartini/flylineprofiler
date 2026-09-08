@@ -1,0 +1,36 @@
+{
+  // Example spec: floating shooting head with a denser sink tip.
+  // Sections chain automatically — omit startDiameterMm and each one continues from the
+  // previous end, which is the only way a taper stays makeable (no diameter steps).
+  "name": "Demo Head 11m sink tip",
+  "notes": "Spec-built demo: floating head, denser first 3 m.",
+  "isFullLine": false,
+  "isSinking": false,
+  "waterType": "fresh",
+  "waterTempC": 20,
+
+  "densityGCm3": 0.92,
+  "baseColorHex": "E8E4D8",
+  "coreType": "Polyester (Dacron) braid",
+
+  "segments": [
+    { "name": "Tip",         "lengthCm":  30, "startDiameterMm": 0.90, "endDiameterMm": 0.90 },
+    { "name": "Front taper", "lengthCm": 250, "endDiameterMm": 1.30 },
+    { "name": "Belly",       "lengthCm": 600, "endDiameterMm": 1.35 },
+    { "name": "Rear taper",  "lengthCm": 200, "endDiameterMm": 1.05 },
+    { "name": "Back",        "lengthCm": 100, "endDiameterMm": 1.05 }
+  ],
+
+  // The zone edge lands exactly on the Front taper / Belly node (30 + 250 = 280 cm), so the
+  // mass-preserving scaling cannot leave a step: that node carries one diameter for both sides.
+  "zones": [
+    {
+      "startCm": 0,
+      "endCm": 280,
+      "densityGCm3": 1.06,
+      "colorHex": "FFD700",
+      "label": "Sink tip",
+      "preserveMass": true
+    }
+  ]
+}

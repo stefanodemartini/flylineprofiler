@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <!-- Must match the referenced app: it is a WPF assembly, so the CLI has to be
+         windows-targeted too even though it never opens a window. -->
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>flyline</AssemblyName>
+    <RootNamespace>FlyLineCli</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- The whole point: one implementation of the physics and the file format,
+         shared with the GUI instead of reimplemented here. -->
+    <ProjectReference Include="..\app\DiametroLineaDesktop.csproj" />
+  </ItemGroup>
+</Project>
