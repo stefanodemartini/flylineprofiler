@@ -61,6 +61,13 @@ La finestra si apre in **Modalità Design** (toggle "Design Mode" attivo in alto
 ### Chiudere
 - L'app avvisa se ci sono modifiche non salvate (Yes = salva, No = scarta, Cancel = annulla)
 
+> **Bug corretto (2026-09-09)**: dopo File → Close, la tabella segmenti mostrava ancora le righe del
+> progetto appena chiuso. La tabella è collegata a `DisplaySegments` (una vista separata da
+> `ProjectSegments`, usata per raggruppare le zone materiale di uno snapshot C — vedi
+> `RefreshDisplaySegments`), e `ClearProjectState()` svuotava solo `ProjectSegments`, mai
+> `DisplaySegments`. Corretto aggiungendo `DisplaySegments.Clear()` a `ClearProjectState()`
+> (`Views/MainWindow.xaml.cs`).
+
 ---
 
 ## 2. Modalità SCAN (acquisizione hardware)
@@ -206,6 +213,7 @@ Sotto la tabella appare la riga **Totals**:
 - **Add Zone** → aggiunge una zona al profilo (start cm, end cm, ugello assegnato)
 - La zona viene colorata con Lambert cylindrical shading (aspetto 3D solido)
 - **Delete** su riga selezionata → elimina la zona
+- Sopra la griglia è fissata una riga informativa **M1** (colore, densità, "default — fills where no zone below applies"): M1 non è mai una riga della griglia perché è il materiale base implicito, non una zona esplicita — questa riga evita che sembri "mancante" dalla tabella
 
 ### Zona con Densità Propria (materiale diverso da M1)
 Se la zona appena aggiunta (o un ugello già assegnato a una zona) ha una densità che differisce da quella di M1 di più di 0.02 g/cm³, l'app considera la zona un materiale realmente diverso — non solo un colore — e chiede:
@@ -226,18 +234,92 @@ Dopo la conferma:
 Con l'adattamento di massa attivo (**Yes**), un cambio netto di densità impone matematicamente un
 salto di diametro sul bordo: la massa è proporzionale a ρ·d², quindi se ρ salta e la massa deve
 restare quella, d salta con lei. Non è un difetto di calcolo — non esiste modo di avere insieme
-densità esatta, massa esatta e diametro continuo attraverso un confine netto. Le vie d'uscita:
+densità esatta, massa esatta e diametro continuo attraverso un confine netto **usando un solo
+segmento**. La soluzione (dal 2026-09-09): **il bordo della zona viene sempre trattato come un nodo**,
+e il segmento appena fuori dalla zona viene *rimodellato* fino al suo nodo lontano per assorbire la
+transizione:
 
-- **Far coincidere il bordo della zona con un nodo del disegno** e portare i diametri già scalati
-  nei nodi stessi *(soluzione consigliata)*: un nodo ha un solo diametro, condiviso dai due segmenti
-  che vi si incontrano, quindi la continuità è garantita dalla struttura del disegno e la massa
-  resta esatta. In questo caso la zona va poi impostata con **No** all'adattamento, perché la
-  geometria è già corretta e adattarla di nuovo la restringerebbe due volte
-- **Rampa di transizione**: con l'adattamento attivo la densità non commuta di colpo sul bordo ma
-  sfuma su ~10 cm a cavallo di esso, così anche il diametro resta continuo. In cambio, gli ultimi
-  centimetri prima del bordo non sono più esattamente alla densità nominale
+- **Dentro la zona**: densità piena, nominale, per tutta la sua estensione — nessuna sfumatura.
+  Il diametro al bordo della zona = disegnato × √(ρ_base/ρ_zona) (con floor a 0.94 g/cm³), la stessa
+  identità usata ovunque per la massa costante.
+- **Il segmento appena fuori dalla zona** (quello che la tocca) prende quello stesso valore esatto
+  come proprio estremo vicino; il suo estremo lontano resta **esattamente quello disegnato**
+  (invariato); resta una retta tra i due, solo con un'altra pendenza rispetto all'originale.
+- La continuità al bordo è quindi strutturale (stesso numero, stesso identico calcolo, condiviso da
+  entrambi i lati) — zero gradino per costruzione, non una rampa che lo nasconde.
+- È lo stesso algoritmo già usato da `LineDesignBuilder` per la CLI (spec JSON → file), applicato ora
+  anche alla modalità live delle Nozzle Zones nell'editor.
+- **Caso limite**: due zone di densità diverse che si toccano bordo a bordo (senza un tratto M1 in
+  mezzo) — quel nodo condiviso non può soddisfare esattamente entrambe. L'app applica la media dei
+  due fattori su quel nodo e avvisa in fondo alla finestra ("Two adjacent zones... that node was set
+  to the average of both"), senza bloccare.
 - **Rinunciare alla massa costante** (**No**): il diametro resta quello disegnato — continuo per
-  definizione — e a cambiare è il peso della zona
+  definizione — e a cambiare è il peso della zona; nessun rimodellamento del segmento adiacente in
+  questo caso (non serve).
+
+> **Storia del fix**: la prima versione usava una rampa di transizione di ~10 cm attorno al bordo
+> (densità sfumata invece che netta). Il primo giro di correzioni (2026-09-09) ha eliminato l'errore
+> di *lettura* del bordo (grafico/tabella/PDF leggevano il centro della fetta invece del bordo vero,
+> poi lo leggevano per estrapolazione invece che con la formula esatta) — ma la rampa stessa lasciava
+> comunque un gradino residuo minimo, perché proprio sul confine la densità non era mai esattamente
+> quella nominale. Su proposta di Stefano, la rampa è stata rimossa del tutto e sostituita col
+> rimodellamento del segmento adiacente descritto sopra (`ApplyZoneDensities` in
+> `Views/MainWindow.xaml.cs`) — zero gradino per costruzione, non un'approssimazione più fine.
+> Il resto del rendering (riempimento colore, Sink Map, `RigidBodySinkSpeed`) non ha dovuto cambiare:
+> ogni tratto tra due punti risolti è ora esattamente lineare a densità costante, quindi ricampionarlo
+> con le stesse fette fini da ~1cm di prima non introduce più nessun errore.
+>
+> **Bug correlato corretto lo stesso giorno**: le etichette dei nodi nel grafico a schermo (Ø/posizione,
+> divisori, tag "S{n}"/"M{n}") in modalità compensata leggevano il diametro dal profilo **disegnato**
+> (`sorted` = `_segmentNodes`) invece che da quello **compensato** (`GetCompNodes()`) — sembravano "non
+> aggiornarsi" perché mostravano sempre il valore pre-rimodellamento. Il PDF/CLI (`ChartRenderer.cs`)
+> non aveva questo problema, perché lì la variabile equivalente era già impostata al profilo giusto.
+> Corretto in `RenderSegmentOverlay` (`Views/MainWindow.xaml.cs`): tutte le posizioni delle etichette
+> in modalità compensata ora interpolano da `GetCompNodes()`.
+>
+> **Bug correlato corretto lo stesso giorno**: nella griglia Nozzles, premere Invio su una cella
+> densità senza averla modificata faceva comunque comparire il dialogo "Adjust diameters?" e rilanciava
+> il ricalcolo zona — comportamento standard del `DataGrid` WPF, che spara `CellEditEnding` con
+> `EditAction.Commit` ogni volta che una cella esce dalla modifica, anche senza modifiche reali.
+> Verificato con un log temporaneo (poi rimosso) che il calcolo stesso è corretto su un intero ciclo
+> su/giù di densità (nessun accumulo, direzione sempre giusta) — il problema era solo il trigger
+> spurio. Corretto in `NozzleDefsGrid_BeginningEdit`/`NozzleDefsGrid_CellEditEnding`
+> (`Views/MainWindow.xaml.cs`): il valore viene confrontato prima/dopo l'edit, il dialogo/ricalcolo
+> scatta solo se la densità è davvero cambiata.
+>
+> **Regressione e secondo fix, stesso giorno**: il primo tentativo confrontava il valore digitato
+> leggendo `NozzleDefinitionVm.DensityGCm3` (il binding della griglia) dentro un `Dispatcher.InvokeAsync`
+> — ma il commit del binding gira a priorità più bassa di `Normal`, quindi anche lì il valore letto era
+> ancora quello *vecchio*: il confronto risultava sempre "non cambiato" e il dialogo non compariva più
+> **mai**, nemmeno per un cambio vero. Il codice originale funzionava per puro caso: leggeva la densità
+> solo *dopo* il dialogo modale di conferma, che pompando il proprio message loop dava al binding il
+> tempo di arrivare. Corretto leggendo il testo digitato direttamente dalla `TextBox` di modifica
+> (`e.EditingElement`) invece di aspettare il binding, con parsing a doppio tentativo (cultura corrente,
+> poi invariante) per non confondersi tra punto e virgola decimale.
+>
+> **Terzo fix, stesso giorno — il diametro mostrato era sempre quello del passo precedente**: dopo i
+> due fix sopra, cambiare densità mostrava un diametro coerente ma sfasato di un passo (a 1.10 il
+> diametro mostrato era quello corretto per 1.05, a 1.15 quello di 1.10, ecc. — confermato passo per
+> passo confrontando i valori riportati con quelli attesi dalla formula). Causa: `NozzleDefsGrid_CellEditEnding`
+> chiamava `RefreshPlot()` **prima** di aprire il dialogo "Adjust diameters?", disegnando un frame con
+> la compensazione ancora *vecchia* — chi guarda tabella/grafico mentre il dialogo è aperto (prima di
+> cliccare Yes) vede quel frame stantio; il valore giusto arriva solo dopo, quando `ApplyZoneDensities`
+> (chiamata dopo il click su Yes) fa il proprio `RefreshPlot()` con i dati nuovi. Corretto saltando il
+> refresh intermedio quando sta per scattare un ricalcolo di zona: `ApplyZoneDensities` fa l'unico
+> refresh, e lo fa con i dati già corretti.
+>
+> **Quarto fix, stesso giorno — vera race condition col binding della griglia**: rimuovendo il refresh
+> del terzo fix è sparito anche il tempo "morto" che per caso lasciava al binding della griglia (una
+> `TwoWay` che si aggiorna a priorità più bassa di `Normal`) il tempo di scrivere il valore digitato
+> in `Nozzles[i].DensityGCm3` — così `ApplyZoneDensities`, chiamata subito dopo, tornava a leggere la
+> densità **vecchia** anche dopo aver risposto Yes al dialogo (confermato dal log: `ApplyZoneDensities`
+> vedeva ancora 1.1 anche dopo aver cambiato a 1.2). Non è un problema di ordine tra due `RefreshPlot()`
+> ma una vera corsa critica sul timing del binding, sensibile a quanto lavoro sincrono capita di
+> esserci prima della lettura. Fix definitivo: `NozzleDefsGrid_CellEditEnding` non aspetta più il
+> binding della griglia per niente — scrive lei stessa il valore digitato (già letto dalla `TextBox`
+> per il confronto "è cambiato?") dentro `editedNozzle.DensityGCm3`, sincrono, prima di qualunque cosa
+> a valle legga quella proprietà. Il binding della griglia arriverà comunque più tardi e scriverà lo
+> stesso valore, in modo innocuo.
 
 ---
 

@@ -1120,6 +1120,35 @@
                                 Padding="6,2" FontSize="11"
                                 ToolTip="Add a zone using the active nozzle"/>
                     </StackPanel>
+                    <!-- M1 is never a row in NozzleZones (it's the implicit base material, not an
+                         explicit zone) — pinned here so it doesn't read as missing from the table. -->
+                    <Border DockPanel.Dock="Top"
+                            BorderBrush="{StaticResource BorderBrush2}" BorderThickness="1,1,1,0"
+                            Background="#1A1E2A" Padding="4,3"
+                            ToolTip="{Binding ElementName=MainWin, Path=M1ZoneSummaryText}">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="28"/>
+                                <ColumnDefinition Width="50"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="60"/>
+                            </Grid.ColumnDefinitions>
+                            <Rectangle Grid.Column="0" Width="16" Height="12"
+                                       Fill="{Binding ElementName=MainWin, Path=M1ZoneColorHex, Converter={StaticResource HexToBrush}}"
+                                       Stroke="#888" StrokeThickness="0.5"/>
+                            <TextBlock Grid.Column="1" Text="M1" FontSize="11"
+                                       HorizontalAlignment="Center"
+                                       Foreground="{StaticResource TextPrimary}"/>
+                            <TextBlock Grid.Column="2" Text="default — fills where no zone below applies"
+                                       FontSize="10" FontStyle="Italic"
+                                       Foreground="{StaticResource TextMuted}"
+                                       VerticalAlignment="Center" Margin="4,0,0,0"/>
+                            <TextBlock Grid.Column="3"
+                                       Text="{Binding ElementName=MainWin, Path=Nozzles[0].DensityGCm3, StringFormat='0.00'}"
+                                       FontSize="11" HorizontalAlignment="Center"
+                                       Foreground="{StaticResource TextPrimary}"/>
+                        </Grid>
+                    </Border>
                     <Border BorderBrush="{StaticResource BorderBrush2}" BorderThickness="1">
                         <DataGrid x:Name="NozzleZonesGrid"
                                   Style="{StaticResource DarkGrid}"

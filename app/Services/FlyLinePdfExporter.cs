@@ -869,8 +869,8 @@ public static class FlyLinePdfExporter
                             if (showCompensation && seg.HasCompensation)
                             {
                                 // ── Compensated row ────────────────────────
-                                double d1 = seg.CompSliceDiamsMm.Length > 0 ? seg.CompSliceDiamsMm[0]  : seg.StartDiameterMm;
-                                double d2 = seg.CompSliceDiamsMm.Length > 0 ? seg.CompSliceDiamsMm[^1] : seg.EndDiameterMm;
+                                double d1 = seg.CompSliceDiamsMm.Length > 0 ? seg.EffectiveBoundaryStartDiamMm : seg.StartDiameterMm;
+                                double d2 = seg.CompSliceDiamsMm.Length > 0 ? seg.EffectiveBoundaryEndDiamMm   : seg.EndDiameterMm;
                                 double avgRho = seg.CompSliceDensities.Length > 0 ? seg.CompSliceDensities.Average() : 0;
                                 double compMassG = EffectiveMassG(seg);
                                 double compTaper = Math.Abs(d2 - d1) < 0.001 ? 0 : (d2 - d1) / (seg.LengthCm / 100.0);

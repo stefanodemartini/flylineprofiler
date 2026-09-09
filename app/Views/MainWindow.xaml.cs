@@ -77,6 +77,20 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     // below the practical resolution of blending/extrusion in production.
     private const double DensityMergeThreshold = 0.02;
 
+    /// <summary>M1 never appears as a row in NozzleZones — it's the implicit base material, not an
+    /// explicit zone (same reasoning as the chart legend and the PDF materials card). Shown as a
+    /// pinned caption above the zones grid so it isn't read as "missing".</summary>
+    public string M1ZoneColorHex => Nozzles.Count > 0 ? Nozzles[0].ColorHex : "888888";
+    public string M1ZoneSummaryText => Nozzles.Count > 0
+        ? $"M1 · ρ {Nozzles[0].DensityGCm3:0.00} g/cm³ · default — fills the line wherever no zone below applies"
+        : string.Empty;
+
+    private void NotifyM1ZoneSummaryChanged()
+    {
+        OnPropertyChanged(nameof(M1ZoneColorHex));
+        OnPropertyChanged(nameof(M1ZoneSummaryText));
+    }
+
     private string _colorNote = string.Empty;
     public string ColorNote
     {
@@ -367,6 +381,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 RefreshPlot();
                 if (ev.PropertyName != nameof(NozzleDefinitionVm.IsActive)) MarkDirty();
                 UpdateNozzleBadge();
+                if (noz.Number == 1) NotifyM1ZoneSummaryChanged();
             };
             Nozzles.Add(noz);
         }
@@ -378,6 +393,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 foreach (NozzleZoneVm z in e.NewItems)
                     z.PropertyChanged += (_, _) => UpdateNozzleUsageLabels();
             RefreshPlot(); MarkDirty(); UpdateNozzleUsageLabels(); RefreshVisibleNozzles();
+            NotifyM1ZoneSummaryChanged();
         };
 
         PlotControl.Refresh();
@@ -877,6 +893,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         foreach (var seg in ProjectSegments) seg.PropertyChanged -= OnSegmentPropertyChanged;
         _segmentMetadata.Clear();
         ProjectSegments.Clear();
+        // The segments table (and the PDF built from it) binds to DisplaySegments, not
+        // ProjectSegments directly (see RefreshDisplaySegments — it groups a loaded C snapshot's
+        // fine slices into zone rows). Clearing only ProjectSegments left the table showing the
+        // previous project's rows after Close, since nothing ever told DisplaySegments to empty too.
+        DisplaySegments.Clear();
         DesignNodes.Clear();
         TotalVolumeText   = string.Empty;
         _lastImportedFile = "-";
@@ -997,15 +1018,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             // A slice's diameter is measured at its own CENTER, not at the segment's true edge —
             // using the last/first slice's own value as-is for the boundary node leaves the taper's
             // last half-slice of change unaccounted for, which is exactly what showed up as a small
-            // but real step at every segment boundary. Linearly extrapolate from the two nearest
-            // slice centers instead, so the boundary node reflects where the taper actually is at
-            // that exact X.
-            double ExtrapStart(ProjectSegment s) => s.CompSliceDiamsMm.Length >= 2
-                ? s.CompSliceDiamsMm[0] - (s.CompSliceDiamsMm[1] - s.CompSliceDiamsMm[0]) * 0.5
-                : s.CompSliceDiamsMm[0];
-            double ExtrapEnd(ProjectSegment s) => s.CompSliceDiamsMm.Length >= 2
-                ? s.CompSliceDiamsMm[^1] + (s.CompSliceDiamsMm[^1] - s.CompSliceDiamsMm[^2]) * 0.5
-                : s.CompSliceDiamsMm[^1];
+            // but real step at every segment boundary. Extrapolate from the two nearest slice
+            // centers instead (see ProjectSegment.ExtrapolateBoundaryStart/End — same helper the
+            // chart, table and PDF now all read the boundary through), so the boundary node reflects
+            // where the taper actually is at that exact X.
+            double ExtrapStart(ProjectSegment s) => ProjectSegment.ExtrapolateBoundaryStart(s.CompSliceDiamsMm);
+            double ExtrapEnd(ProjectSegment s)   => ProjectSegment.ExtrapolateBoundaryEnd(s.CompSliceDiamsMm);
 
             // Contiguous with the previous segment (the normal case): continue the same polyline —
             // share its last node as this segment's start instead of adding a second point at the
@@ -2139,7 +2157,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     var cbl = plot.Add.Scatter(cxs, cybs);
                     cbl.Color = designColor; cbl.LineWidth = 2.5f; cbl.MarkerSize = 0;
 
-                    foreach (var n in GetManufacturingCheckpoints(sorted))
+                    foreach (var n in GetManufacturingCheckpoints(cn))
                     {
                         var tick = plot.Add.Scatter(
                             new[] { n.X, n.X }, new[] { n.Y / 2.0, -n.Y / 2.0 });
@@ -2190,6 +2208,13 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
         else
         {
+            // All positions below read the Y (diameter) off the COMPENSATED profile, not the drawn
+            // one — a zone-derived comp can reshape a segment's diameter away from what's drawn (see
+            // ApplyZoneDensities), and reading `sorted` here left every label/divider/tag showing the
+            // pre-compensation diameter, silently stale the moment adaptation actually changed a
+            // segment's shape.
+            var compNodes = GetCompNodes();
+
             // Nodi compensati + divider + etichette Ø/posizione — a EVERY manufacturing checkpoint
             // (material changes AND taper-shape changes, see GetManufacturingCheckpoints; the two
             // don't always coincide, so a producer needs the diameter/position at both, not just
@@ -2197,7 +2222,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             // geometry — a design with a non-monotonic taper can revisit the same material more
             // than once (e.g. a belly that thickens then thins again), so this is exactly the real
             // structure of the taper, never a fixed "top N points" cutoff.
-            var labelNodes = GetManufacturingCheckpoints(sorted);
+            var labelNodes = GetManufacturingCheckpoints(compNodes);
 
             double[] cnxs = labelNodes.Select(n => n.X).ToArray();
             double[] cnts = labelNodes.Select(n =>  n.Y / 2.0).ToArray();
@@ -2247,13 +2272,13 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             // mai i cambi di colore/densità: è un principio mandatorio, non un'approssimazione.
             // "S" identifica una forma di taper, non un materiale — i due non devono mai mescolarsi
             // nella stessa etichetta, anche quando corrispondono numericamente sulla stessa linea.
-            var labelSorted   = GetTaperShapeBoundaries(sorted);
+            var labelSorted   = GetTaperShapeBoundaries(compNodes);
             var segLabelColor = new ScottColor(40, 40, 40);
             for (int si = 0; si < labelSorted.Count - 1; si++)
             {
                 double cx      = (labelSorted[si].X + labelSorted[si + 1].X) / 2.0;
-                double topAtCx = InterpolateProfileY(sorted, cx) / 2.0;
-                double gap     = InterpolateProfileY(sorted, cx) * 0.08;
+                double topAtCx = InterpolateProfileY(compNodes, cx) / 2.0;
+                double gap     = InterpolateProfileY(compNodes, cx) * 0.08;
                 var sl = plot.Add.Text($"S{si + 1}", cx, topAtCx + gap);
                 sl.LabelFontSize = 15; sl.LabelBold = false;
                 sl.LabelFontColor       = segLabelColor;
@@ -2273,10 +2298,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             // dell'ugello sopra un profilo dipinto con un colore arcobaleno scollegato da esso.
             if (!_showSinkSpeedMap)
             {
-                foreach (var span in GetMaterialZoneSpans(sorted))
+                foreach (var span in GetMaterialZoneSpans(compNodes))
                 {
                     double midX     = (span.StartX + span.EndX) / 2.0;
-                    double topAtMid = InterpolateProfileY(sorted, midX) / 2.0;
+                    double topAtMid = InterpolateProfileY(compNodes, midX) / 2.0;
                     var (matLabel, matColor) = GetMaterialTag(midX, span.Density);
                     double luminance = (0.299 * matColor.R + 0.587 * matColor.G + 0.114 * matColor.B) / 255.0;
                     var textColor = luminance > 0.6 ? new ScottColor(20, 20, 20) : ScottPlot.Colors.White;
@@ -2355,7 +2380,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     // Preserves compensation data across RefreshSegmentTable() rebuilds (keyed by 0-based index)
     private readonly record struct CompSnapshot(
         double StartCm, double[] SliceXsCm, double[] SliceDiamsMm,
-        double[] SliceDensities, bool[] Clamped, double TargetSpeedMs);
+        double[] SliceDensities, bool[] Clamped, double TargetSpeedMs,
+        double ExactBoundaryStartDiamMm, double ExactBoundaryEndDiamMm);
 
     private void RefreshSegmentTable()
     {
@@ -2370,7 +2396,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             if (s.HasCompensation)
                 compSnapshots[s.StartCm] = new CompSnapshot(
                     s.CompStartCm, s.CompSliceXsCm, s.CompSliceDiamsMm,
-                    s.CompSliceDensities, s.CompSliceClamped, s.CompensatedTargetSpeedMs);
+                    s.CompSliceDensities, s.CompSliceClamped, s.CompensatedTargetSpeedMs,
+                    s.ExactBoundaryStartDiamMm, s.ExactBoundaryEndDiamMm);
             s.PropertyChanged -= OnSegmentPropertyChanged;
         }
 
@@ -2409,7 +2436,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             // (correct: it genuinely wasn't compensated before, restoring by index would have
             // silently attached some other segment's slices to it).
             if (compSnapshots.TryGetValue(startCm, out var cs))
-                seg.SetCompensation(cs.StartCm, cs.SliceXsCm, cs.SliceDiamsMm, cs.SliceDensities, cs.Clamped, cs.TargetSpeedMs);
+                seg.SetCompensation(cs.StartCm, cs.SliceXsCm, cs.SliceDiamsMm, cs.SliceDensities, cs.Clamped, cs.TargetSpeedMs,
+                    cs.ExactBoundaryStartDiamMm, cs.ExactBoundaryEndDiamMm);
 
             seg.PropertyChanged += OnSegmentPropertyChanged;
             ProjectSegments.Add(seg);
@@ -2694,17 +2722,55 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         MaybeApplyZoneDensityChange(forcePrompt: introducesDensity);
     }
 
+    // Set by NozzleDefsGrid_BeginningEdit, read by NozzleDefsGrid_CellEditEnding — WPF's DataGrid
+    // fires CellEditEnding with EditAction.Commit whenever a cell's edit session ends, even when the
+    // user typed nothing and just pressed Enter/Tab through it. Without this, that reopened the
+    // "Adjust diameters?" dialog and reran the zone recompute on every pass through the density
+    // column, not only on an actual change.
+    private double _preEditNozzleDensity = double.NaN;
+
     private void NozzleDefsGrid_CellEditEnding(object sender, DataGridCellEditEndingEventArgs e)
     {
         if (e.EditAction != DataGridEditAction.Commit) return;
         bool isDensityColumn = e.Column.Header?.ToString() == "ρ g/cm³";
         var editedNozzle = e.Row.Item as NozzleDefinitionVm;
+        double preEditDensity = _preEditNozzleDensity;
+        _preEditNozzleDensity = double.NaN;
+
+        // The grid's own TwoWay binding hasn't pushed the typed text into DensityGCm3 yet at this
+        // point — not even after a Dispatcher.InvokeAsync (its commit runs at a lower priority than
+        // Normal, and how much of a gap that leaves is timing-dependent, not guaranteed — a change
+        // elsewhere in this same handler that happened to add a bit of synchronous work before the
+        // deferred read was enough to flip this from "always stale" to "always fresh" and back).
+        // Read what was actually typed straight from the editing TextBox — trying the current
+        // culture first (what the grid's own converter would use) and falling back to invariant
+        // (a "." decimal point typed under a comma-decimal culture) — and write it into the model
+        // ourselves right here, synchronously, so every reader downstream (ApplyZoneDensities
+        // included) sees the real value regardless of whenever the grid's own binding gets to it.
+        bool changed = false;
+        if (isDensityColumn && editedNozzle != null && !double.IsNaN(preEditDensity)
+            && e.EditingElement is System.Windows.Controls.TextBox tb)
+        {
+            const System.Globalization.NumberStyles styles = System.Globalization.NumberStyles.Float;
+            bool parsed = double.TryParse(tb.Text, styles, System.Globalization.CultureInfo.CurrentCulture, out double typedDensity)
+                       || double.TryParse(tb.Text, styles, System.Globalization.CultureInfo.InvariantCulture, out typedDensity);
+            changed = parsed && Math.Abs(typedDensity - preEditDensity) > 1e-9;
+            if (changed) editedNozzle.DensityGCm3 = typedDensity;
+        }
+
         Dispatcher.InvokeAsync(() =>
         {
-            NozzleZonesGrid.Items.Refresh(); RefreshPlot(); MarkDirty(); UpdateNozzleBadge();
-            if (isDensityColumn && editedNozzle != null && editedNozzle.Number > 1
-                && NozzleZones.Any(z => z.NozzleIndex == editedNozzle.Number - 1))
+            NozzleZonesGrid.Items.Refresh(); MarkDirty(); UpdateNozzleBadge();
+            bool willRecomputeZone = changed && editedNozzle!.Number > 1
+                && NozzleZones.Any(z => z.NozzleIndex == editedNozzle.Number - 1);
+            if (willRecomputeZone)
+                // ApplyZoneDensities (called from here) does its own RefreshPlot() once the new
+                // density has actually been solved — refreshing here first would draw one frame from
+                // the OLD compensation while the confirm dialog is still open, which is exactly the
+                // stale value a reader glancing at the table/chart before clicking Yes would see.
                 MaybeApplyZoneDensityChange(forcePrompt: true);
+            else
+                RefreshPlot();
         });
     }
 
@@ -2713,9 +2779,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     /// two inputs can't drift out of sync.</summary>
     private void NozzleDefsGrid_BeginningEdit(object sender, DataGridBeginningEditEventArgs e)
     {
-        if (e.Column.Header?.ToString() == "ρ g/cm³" &&
-            e.Row.Item is NozzleDefinitionVm nz && nz.Number == 1)
-            e.Cancel = true;
+        if (e.Column.Header?.ToString() != "ρ g/cm³" || e.Row.Item is not NozzleDefinitionVm nz) return;
+        if (nz.Number == 1) { e.Cancel = true; return; }
+        _preEditNozzleDensity = nz.DensityGCm3;
     }
 
     private void NozzleZonesGrid_CellEditEnding(object sender, DataGridCellEditEndingEventArgs e)
@@ -2843,34 +2909,53 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
     }
 
-    // Total width of the smooth density ramp straddling each zone edge (half on each side) — see
-    // ApplyZoneDensities. A hard density jump forces a diameter jump too (mass ∝ ρ·d², and d must
-    // stay continuous), so instead of switching density instantly at a zone boundary, it's blended
-    // linearly across this band. Small relative to a real line's length; not user-configurable yet.
-    private const double ZoneTransitionCm = 10.0;
-
     /// <summary>
     /// Builds a C profile straight from the manually-assigned zone densities: outside any zone,
     /// slices keep the base (M1) density and the drawn diameter; inside a zone, slices use that
     /// zone's density, with the diameter mass-conserved from the original taper
     /// (ρ_new·d_new² = ρ_orig·d_orig², same convention as the physics Compensate button) unless
     /// <paramref name="adaptDiameters"/> is false, in which case the drawn diameters are kept as-is.
-    /// A zone's density doesn't switch on instantly at its edge — see ZoneTransitionCm — so the
-    /// mass-conserved diameter stays continuous there too; only deep inside a zone (or deep outside
-    /// every zone) does density sit flat at its nominal value. Unlike the physics Compensate button,
-    /// each segment ends up at whatever sink speed its own materials produce — there is no single
-    /// shared target.
+    ///
+    /// A zone sits at its full nominal density end to end — no blending, no ramp — so continuity at
+    /// its edge instead comes from also reshaping the segment immediately outside the zone: that
+    /// segment's near end (touching the zone) takes the zone's own exact mass-conserving value, its
+    /// far end stays exactly as drawn, and it stays a straight line between them. Same technique as
+    /// <see cref="LineDesignBuilder.Build"/>'s zone handling for the CLI — "pin the zone edge to a
+    /// node, scale every node inside the zone by the same constant factor" — adapted to a live
+    /// overlay that must never write into DesignNodes (see the class-level "two independent
+    /// compensation systems" note). Two adjacent segments evaluating a shared boundary X resolve to
+    /// bit-identical values (same pure computation, same input), so there is no step to approximate
+    /// away. Unlike the physics Compensate button, each segment ends up at whatever sink speed its
+    /// own materials produce — there is no single shared target.
     /// </summary>
     private void ApplyZoneDensities(bool adaptDiameters)
     {
         double baseDensity = Nozzles.Count > 0 ? Nozzles[0].DensityGCm3 : 0;
         if (baseDensity <= 0) return;
 
-        double lineMinX = _segmentNodes.Count > 0 ? _segmentNodes.Min(n => n.X) : 0.0;
-        double lineMaxX = _segmentNodes.Count > 0 ? _segmentNodes.Max(n => n.X) : 0.0;
-        double halfTransition = ZoneTransitionCm / 2.0;
+        var validSegs = ProjectSegments.Where(s => s.LengthCm > 0 && s.StartDiameterMm > 0 && s.EndDiameterMm > 0)
+                                        .OrderBy(s => s.StartCm).ToList();
+        foreach (var s in ProjectSegments.Except(validSegs)) s.ClearCompensation();
+        if (validSegs.Count == 0)
+        {
+            _zoneDerivedComp = false;
+            UpdateSinkingSpeeds();
+            UpdateCompModeUI();
+            RefreshPlot();
+            MarkDirty();
+            return;
+        }
 
-        // The density at any exact X, ignoring the ramp — "which zone (if any) contains this point".
+        double lineMinX = validSegs[0].StartCm, lineMaxX = validSegs[^1].EndCm;
+        const double eps = 1e-6;
+
+        // A zone within DensityMergeThreshold of the base is the same material for every purpose
+        // below — treated as no zone at all, not as a (pointless) near-base scale factor.
+        var realZones = NozzleZones
+            .Where(z => z.EndCm > z.StartCm && Math.Abs(z.DensityGCm3 - baseDensity) > DensityMergeThreshold)
+            .OrderBy(z => z.StartCm).ToList();
+
+        // The density at any exact X — "which zone (if any) contains this point", hard-edged.
         double HardDensity(double x)
         {
             var zone = NozzleZones.FirstOrDefault(z => x >= z.StartCm && x < z.EndCm);
@@ -2878,76 +2963,111 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             return Math.Abs(r - baseDensity) <= DensityMergeThreshold ? baseDensity : r;
         }
 
-        // The real density used for the physics: flat at HardDensity(x) away from every zone edge,
-        // linearly blended across ZoneTransitionCm around whichever edge is nearest. An edge that
-        // coincides with the line's own tip or butt end is a free end, not a splice — nothing to
-        // blend into there, so it's left hard.
-        double DensityAt(double x)
-        {
-            double nearestEdge = double.NaN, bestDist = double.MaxValue;
-            foreach (var z in NozzleZones)
-            {
-                foreach (var edge in new[] { z.StartCm, z.EndCm })
-                {
-                    if (edge <= lineMinX + 1e-6 || edge >= lineMaxX - 1e-6) continue;
-                    double dist = Math.Abs(x - edge);
-                    if (dist < bestDist) { bestDist = dist; nearestEdge = edge; }
-                }
-            }
-            if (double.IsNaN(nearestEdge) || bestDist >= halfTransition) return HardDensity(x);
-
-            double before = HardDensity(nearestEdge - halfTransition - 1e-6);
-            double after  = HardDensity(nearestEdge + halfTransition + 1e-6);
-            double t = Math.Clamp((x - (nearestEdge - halfTransition)) / ZoneTransitionCm, 0.0, 1.0);
-            return before + t * (after - before);
-        }
-
         const double sliceLenCm = 1.0;
         bool anyClampedSlice = false;
-        foreach (var seg in ProjectSegments)
+        bool conflictAtEdge  = false;
+
+        if (!adaptDiameters)
         {
-            if (seg.LengthCm <= 0 || seg.StartDiameterMm <= 0 || seg.EndDiameterMm <= 0)
+            // Diameter never depends on density in this mode — nothing to reshape, drawn shape as-is.
+            foreach (var seg in validSegs)
             {
-                seg.ClearCompensation();
-                continue;
-            }
-
-            int    n  = Math.Max(1, (int)Math.Ceiling(seg.LengthCm / sliceLenCm));
-            double dl = seg.LengthCm / n;
-            var xs      = new double[n];
-            var diams   = new double[n];
-            var dens    = new double[n];
-            var clamped = new bool[n];
-
-            for (int i = 0; i < n; i++)
-            {
-                double t     = (i + 0.5) / n;
-                double xAbs  = seg.StartCm + (i + 0.5) * dl;
-                double dOrig = seg.StartDiameterMm + t * (seg.EndDiameterMm - seg.StartDiameterMm);
-                xs[i] = (i + 0.5) * dl;
-
-                // The ramp only exists to keep the mass-conserving diameter continuous across a
-                // zone edge (see DensityAt) — with adaptDiameters off, diameter never depends on
-                // density in the first place, so a smoothed density here would only turn one clean
-                // row into ~10 near-identical ones for no reason. Use the plain hard-edged density.
-                double rho = adaptDiameters ? DensityAt(xAbs) : HardDensity(xAbs);
-
-                double d = dOrig;
-                bool   wasClamped = false;
-                if (adaptDiameters && rho != baseDensity)
+                int    n  = Math.Max(1, (int)Math.Ceiling(seg.LengthCm / sliceLenCm));
+                double dl = seg.LengthCm / n;
+                var xs = new double[n]; var diams = new double[n];
+                var dens = new double[n]; var clamped = new bool[n];
+                for (int i = 0; i < n; i++)
                 {
-                    if (rho < SinkingSpeedCalc.RhoFloor) { rho = SinkingSpeedCalc.RhoFloor; wasClamped = true; }
-                    d = dOrig * Math.Sqrt(baseDensity / rho);
+                    double t = (i + 0.5) / n;
+                    xs[i]    = (i + 0.5) * dl;
+                    diams[i] = seg.StartDiameterMm + t * (seg.EndDiameterMm - seg.StartDiameterMm);
+                    dens[i]  = HardDensity(seg.StartCm + (i + 0.5) * dl);
                 }
-                diams[i]   = d;
-                dens[i]    = rho;
-                clamped[i] = wasClamped;
+                double segSpeed = SinkingSpeedCalc.RigidBodySinkSpeed(_waterIsSalt, _waterTempC,
+                    diams, Enumerable.Repeat(dl, n).ToArray(), dens);
+                seg.SetCompensation(seg.StartCm, xs, diams, dens, clamped, segSpeed,
+                    seg.StartDiameterMm, seg.EndDiameterMm);
+            }
+        }
+        else
+        {
+            // Mass-preserving scale at one exact X: 1.0 outside every zone; a zone's own factor
+            // inside or at the edge of exactly one zone; the average of the two factors where two
+            // differently-dense zones share an edge with no base-material gap between them — that
+            // single shared node can't hold both exact values, and splitting the difference is
+            // gentler for a live preview than LineDesignBuilder's hard refusal for the same case.
+            double FactorFor(NozzleZoneVm z) => Math.Sqrt(baseDensity / Math.Max(z.DensityGCm3, SinkingSpeedCalc.RhoFloor));
+            double FactorAt(double x)
+            {
+                var claiming = realZones.Where(z => x >= z.StartCm - eps && x <= z.EndCm + eps).ToList();
+                if (claiming.Count == 0) return 1.0;
+                if (claiming.Count == 1) return FactorFor(claiming[0]);
+                if (claiming.Max(z => z.DensityGCm3) - claiming.Min(z => z.DensityGCm3) > DensityMergeThreshold)
+                    conflictAtEdge = true;
+                return claiming.Average(FactorFor);
             }
 
-            double segSpeed = SinkingSpeedCalc.RigidBodySinkSpeed(_waterIsSalt, _waterTempC,
-                diams, Enumerable.Repeat(dl, n).ToArray(), dens);
-            seg.SetCompensation(seg.StartCm, xs, diams, dens, clamped, segSpeed);
-            if (seg.HasClampedSlices) anyClampedSlice = true;
+            // Drawn diameter at one exact X, interpolated within whichever segment contains it.
+            double OrigDiamAt(double x)
+            {
+                var seg = validSegs.FirstOrDefault(s => x >= s.StartCm - eps && x <= s.EndCm + eps) ?? validSegs[^1];
+                double t = seg.LengthCm > eps ? Math.Clamp((x - seg.StartCm) / seg.LengthCm, 0, 1) : 0;
+                return seg.StartDiameterMm + t * (seg.EndDiameterMm - seg.StartDiameterMm);
+            }
+
+            // Every point the resolved (scaled) diameter is needed at: every segment's own two
+            // ends, plus any real zone edge that falls strictly inside the line — even mid-segment,
+            // since the same material can start or end anywhere along a taper, not only at a slope
+            // change.
+            var xs = new SortedSet<double>();
+            foreach (var s in validSegs) { xs.Add(s.StartCm); xs.Add(s.EndCm); }
+            foreach (var z in realZones)
+            {
+                if (z.StartCm > lineMinX + eps && z.StartCm < lineMaxX - eps) xs.Add(z.StartCm);
+                if (z.EndCm   > lineMinX + eps && z.EndCm   < lineMaxX - eps) xs.Add(z.EndCm);
+            }
+            var xList = xs.ToList();
+            var resolvedDiam = xList.ToDictionary(x => x, x => OrigDiamAt(x) * FactorAt(x));
+
+            foreach (var seg in validSegs)
+            {
+                var localXs = xList.Where(x => x >= seg.StartCm - eps && x <= seg.EndCm + eps).ToList();
+                if (localXs.Count < 2) localXs = new List<double> { seg.StartCm, seg.EndCm };
+
+                var allXs = new List<double>(); var allDiams = new List<double>();
+                var allDens = new List<double>(); var allLens = new List<double>(); var allClamped = new List<bool>();
+
+                for (int p = 0; p < localXs.Count - 1; p++)
+                {
+                    double px0 = localXs[p], px1 = localXs[p + 1];
+                    double pieceLen = px1 - px0;
+                    if (pieceLen <= eps) continue; // a float sliver where a zone edge nearly matches a node
+
+                    double pd0 = resolvedDiam[px0], pd1 = resolvedDiam[px1];
+                    double pieceRho = HardDensity((px0 + px1) / 2.0);
+                    bool   wasClamped = pieceRho < SinkingSpeedCalc.RhoFloor;
+                    if (wasClamped) pieceRho = SinkingSpeedCalc.RhoFloor;
+
+                    int    n  = Math.Max(1, (int)Math.Ceiling(pieceLen / sliceLenCm));
+                    double dl = pieceLen / n;
+                    for (int i = 0; i < n; i++)
+                    {
+                        double t = (i + 0.5) / n;
+                        allXs.Add(px0 + t * pieceLen - seg.StartCm);
+                        allDiams.Add(pd0 + t * (pd1 - pd0));
+                        allDens.Add(pieceRho);
+                        allLens.Add(dl);
+                        allClamped.Add(wasClamped);
+                    }
+                }
+
+                var diams = allDiams.ToArray(); var dens = allDens.ToArray();
+                var clamped = allClamped.ToArray(); var xsArr = allXs.ToArray(); var lens = allLens.ToArray();
+                double segSpeed = SinkingSpeedCalc.RigidBodySinkSpeed(_waterIsSalt, _waterTempC, diams, lens, dens);
+                seg.SetCompensation(seg.StartCm, xsArr, diams, dens, clamped, segSpeed,
+                    resolvedDiam[seg.StartCm], resolvedDiam[seg.EndCm]);
+                if (seg.HasClampedSlices) anyClampedSlice = true;
+            }
         }
 
         // A zone with its own material is part of the DESIGN, not a compensation: the window stays
@@ -2959,7 +3079,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         RefreshPlot();
         MarkDirty();
         UiStatus = "Zone densities applied — each zone's own sink speed is shown in the segments table."
-            + (anyClampedSlice ? " ⚠ A zone's density was below the practical floor (0.94 g/cm³) and was clamped." : string.Empty);
+            + (anyClampedSlice ? " ⚠ A zone's density was below the practical floor (0.94 g/cm³) and was clamped." : string.Empty)
+            + (conflictAtEdge ? " ⚠ Two adjacent zones of different density share an edge with no gap — that node was set to the average of both." : string.Empty);
     }
 
     private void AddNode_Click(object sender, RoutedEventArgs e)

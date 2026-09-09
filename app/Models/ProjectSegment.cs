@@ -182,6 +182,12 @@ public class ProjectSegment : INotifyPropertyChanged
     private double[] _compSliceDensities = Array.Empty<double>(); // g/cm³ per slice
     private bool[]   _compSliceClamped   = Array.Empty<bool>();   // true → density hit RhoFloor
     private double   _compStartCm = 0;
+    // NaN = no closed form available (physics Compensate's continuous solve) — fall back to
+    // extrapolating from the slice centres. Set (zone-derived comp only, which does have a closed
+    // form for density at any x) when the producer already evaluated the boundary exactly — see
+    // EffectiveBoundaryStartDiamMm/EndDiamMm.
+    private double   _exactBoundaryStartDiamMm = double.NaN;
+    private double   _exactBoundaryEndDiamMm   = double.NaN;
 
     public double[] CompSliceXsCm       => _compSliceXsCm;
     public double[] CompSliceDiamsMm    => _compSliceDiamsMm;
@@ -189,6 +195,10 @@ public class ProjectSegment : INotifyPropertyChanged
     public bool[]   CompSliceClamped    => _compSliceClamped;
     public double   CompStartCm         => _compStartCm;
     public bool HasClampedSlices        => _compSliceClamped.Any(c => c);
+    // Raw producer-supplied value (possibly NaN) — for round-tripping through a snapshot/restore;
+    // read EffectiveBoundaryStartDiamMm/EndDiamMm below for the resolved, always-a-number value.
+    public double   ExactBoundaryStartDiamMm => _exactBoundaryStartDiamMm;
+    public double   ExactBoundaryEndDiamMm   => _exactBoundaryEndDiamMm;
 
     private double _compensatedTargetSpeedMs = double.NaN;
     public double CompensatedTargetSpeedMs
@@ -199,7 +209,35 @@ public class ProjectSegment : INotifyPropertyChanged
 
     public bool HasCompensation => _compSliceDiamsMm.Length > 0;
 
-    public void SetCompensation(double startCm, double[] sliceXsCm, double[] sliceDiamsMm, double[] sliceDensities, bool[] clamped, double targetSpeedMs)
+    /// <summary>A slice's value is measured at its own centre, not at the segment's true edge —
+    /// reading slice 0 / slice ^1 as-is for the boundary leaves the last half-slice of change
+    /// unaccounted for, which showed up as a small but real step at every segment boundary (chart,
+    /// table and PDF each read this independently and must all extrapolate the same way).</summary>
+    public static double ExtrapolateBoundaryStart(IReadOnlyList<double> sliceValues) =>
+        sliceValues.Count >= 2 ? sliceValues[0] - (sliceValues[1] - sliceValues[0]) * 0.5 : sliceValues[0];
+
+    public static double ExtrapolateBoundaryEnd(IReadOnlyList<double> sliceValues) =>
+        sliceValues.Count >= 2
+            ? sliceValues[^1] + (sliceValues[^1] - sliceValues[^2]) * 0.5
+            : sliceValues[^1];
+
+    /// <summary>The true compensated diameter at this segment's start edge. Exact when the producer
+    /// evaluated its closed-form density-at-x formula directly at this X (zone-derived comp — see
+    /// ApplyZoneDensities), which two adjacent segments do identically at their shared boundary, so
+    /// there is no step to reconcile. Falls back to extrapolating from the slice centres otherwise
+    /// (physics Compensate's continuous solve has no such formula).</summary>
+    public double EffectiveBoundaryStartDiamMm => double.IsNaN(_exactBoundaryStartDiamMm)
+        ? (_compSliceDiamsMm.Length > 0 ? ExtrapolateBoundaryStart(_compSliceDiamsMm) : 0)
+        : _exactBoundaryStartDiamMm;
+
+    /// <summary>The true compensated diameter at this segment's end edge — see
+    /// <see cref="EffectiveBoundaryStartDiamMm"/>.</summary>
+    public double EffectiveBoundaryEndDiamMm => double.IsNaN(_exactBoundaryEndDiamMm)
+        ? (_compSliceDiamsMm.Length > 0 ? ExtrapolateBoundaryEnd(_compSliceDiamsMm) : 0)
+        : _exactBoundaryEndDiamMm;
+
+    public void SetCompensation(double startCm, double[] sliceXsCm, double[] sliceDiamsMm, double[] sliceDensities, bool[] clamped, double targetSpeedMs,
+        double exactBoundaryStartDiamMm = double.NaN, double exactBoundaryEndDiamMm = double.NaN)
     {
         _compStartCm        = startCm;
         _compSliceXsCm      = sliceXsCm;
@@ -207,6 +245,8 @@ public class ProjectSegment : INotifyPropertyChanged
         _compSliceDensities = sliceDensities;
         _compSliceClamped   = clamped;
         _compensatedTargetSpeedMs = targetSpeedMs;
+        _exactBoundaryStartDiamMm = exactBoundaryStartDiamMm;
+        _exactBoundaryEndDiamMm   = exactBoundaryEndDiamMm;
         Notify(nameof(HasCompensation));
         Notify(nameof(HasClampedSlices));
         Notify(nameof(CompSpeedText));
@@ -226,6 +266,8 @@ public class ProjectSegment : INotifyPropertyChanged
         _compSliceDensities = Array.Empty<double>();
         _compSliceClamped   = Array.Empty<bool>();
         _compensatedTargetSpeedMs = double.NaN;
+        _exactBoundaryStartDiamMm = double.NaN;
+        _exactBoundaryEndDiamMm   = double.NaN;
         Notify(nameof(HasCompensation));
         Notify(nameof(HasClampedSlices));
         Notify(nameof(CompSpeedText));
@@ -249,13 +291,15 @@ public class ProjectSegment : INotifyPropertyChanged
         }
     }
 
-    /// <summary>Compensated diameter at the start of this segment (first slice).</summary>
+    /// <summary>Compensated diameter at the start of this segment (true edge — see
+    /// <see cref="EffectiveBoundaryStartDiamMm"/>).</summary>
     public string CompStartDiamText => _compSliceDiamsMm.Length > 0
-        ? $"{_compSliceDiamsMm[0]:0.00}" : "—";
+        ? $"{EffectiveBoundaryStartDiamMm:0.00}" : "—";
 
-    /// <summary>Compensated diameter at the end of this segment (last slice).</summary>
+    /// <summary>Compensated diameter at the end of this segment (true edge — see
+    /// <see cref="EffectiveBoundaryEndDiamMm"/>).</summary>
     public string CompEndDiamText => _compSliceDiamsMm.Length > 0
-        ? $"{_compSliceDiamsMm[_compSliceDiamsMm.Length - 1]:0.00}" : "—";
+        ? $"{EffectiveBoundaryEndDiamMm:0.00}" : "—";
 
     /// <summary>Required density at start of compensated segment (first slice).</summary>
     public string CompStartDensityText => _compSliceDensities.Length > 0

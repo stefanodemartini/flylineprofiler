@@ -28,8 +28,8 @@ public static class ChartGeometry
             double xs = seg.StartCm;
             if (nodes.Count > 0 && Math.Abs(nodes[^1].X - xs) < 1e-6)
                 xs += 1e-4;
-            nodes.Add((xs, seg.CompSliceDiamsMm[0]));
-            nodes.Add((seg.EndCm, seg.CompSliceDiamsMm[^1]));
+            nodes.Add((xs, seg.EffectiveBoundaryStartDiamMm));
+            nodes.Add((seg.EndCm, seg.EffectiveBoundaryEndDiamMm));
         }
         return nodes;
     }
