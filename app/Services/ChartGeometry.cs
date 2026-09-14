@@ -1,4 +1,5 @@
 using DiametroLineaDesktop.Models;
+using SkiaSharp;
 using ScottColor = ScottPlot.Color;
 
 namespace DiametroLineaDesktop.Services;
@@ -178,6 +179,90 @@ public static class ChartGeometry
         var n = nozzles[idx];
         TryParseHexColor(n.ColorHex, out var col);
         return ($"M{idx + 1}", col);
+    }
+
+    /// <summary>
+    /// A single 45°-diagonal stroke, the classic architectural stand-in for an arrowhead where a
+    /// dimension line meets its extension line. Built as a custom <see cref="ScottPlot.IMarker"/> so
+    /// the diagonal is computed in PIXEL space (<see cref="Render"/> only ever sees the already-
+    /// projected <paramref name="center"/>) — a 45° tick built from data-space coordinates would not
+    /// look like 45° on screen here, since the chart's X axis (cm, hundreds) and Y axis (mm ÷ 2,
+    /// single digits) never share a common scale.
+    /// </summary>
+    private sealed class DiagonalTickMarker : ScottPlot.IMarker
+    {
+        public void Render(SKCanvas canvas, SKPaint paint, ScottPlot.Pixel center, float size, ScottPlot.MarkerStyle markerStyle)
+        {
+            float offset = size / 2f;
+            var path = new SKPath();
+            path.MoveTo(center.X - offset, center.Y + offset);
+            path.LineTo(center.X + offset, center.Y - offset);
+            ScottPlot.Drawing.DrawPath(canvas, paint, path, markerStyle.LineStyle);
+        }
+    }
+
+    /// <summary>
+    /// Draws a continuous chain of length dimension callouts along <paramref name="boundaries"/> —
+    /// technical-drawing style: a vertical extension tick from the profile edge up to a shared
+    /// dimension row at each boundary, a 45° diagonal tick (<see cref="DiagonalTickMarker"/>) where
+    /// the dimension line crosses each extension tick, and the segment length in a plain horizontal
+    /// label sitting just above the line (never rotated, never breaking the line itself), unitless
+    /// (the row itself is always centimetres, same as the X axis). Drawn ABOVE the profile, well clear
+    /// of the S1/S2 taper tags and M{n} material badges that also live up there (those sit right
+    /// against the profile edge; this row sits much further out) — the Ø/position node labels are the
+    /// only thing below the profile, so the two callout systems never compete for the same band any
+    /// more. Extension ticks and their diagonal marks are drawn once per boundary, not once per
+    /// adjacent segment, so the chain is continuous with no gap or double line where one segment's end
+    /// is the next one's start.
+    /// </summary>
+    public static void DrawLengthDimensionChain(
+        ScottPlot.Plot plot,
+        List<(double X, double Y)> boundaries,
+        List<(double X, double Y)> profile,
+        ScottColor color,
+        float fontSize)
+    {
+        if (boundaries.Count < 2 || profile.Count == 0) return;
+
+        double maxDiam   = profile.Max(n => n.Y);
+        double baselineY = maxDiam * 1.55;
+        double labelY    = baselineY + maxDiam * 0.05;
+
+        foreach (var b in boundaries)
+        {
+            double edgeY = InterpolateProfileY(profile, b.X) / 2.0;
+            var ext = plot.Add.Scatter(new[] { b.X, b.X }, new[] { edgeY, baselineY });
+            ext.Color = color.WithAlpha(0.45f);
+            ext.LineWidth = 0.8f;
+            ext.MarkerSize = 0;
+
+            var tick = plot.Add.Marker(b.X, baselineY, ScottPlot.MarkerShape.FilledCircle, 11f, color);
+            tick.MarkerLineColor = color;
+            tick.MarkerLineWidth = 1.6f;
+            tick.MarkerStyle.CustomRenderer = new DiagonalTickMarker();
+        }
+
+        for (int i = 0; i < boundaries.Count - 1; i++)
+        {
+            double x0 = boundaries[i].X, x1 = boundaries[i + 1].X;
+            double midX = (x0 + x1) / 2.0;
+            string text = $"{x1 - x0:0.#}";
+
+            var dim = plot.Add.Scatter(new[] { x0, x1 }, new[] { baselineY, baselineY });
+            dim.Color = color;
+            dim.LineWidth = 1.0f;
+            dim.MarkerSize = 0;
+
+            var lbl = plot.Add.Text(text, midX, labelY);
+            lbl.LabelFontSize        = fontSize;
+            lbl.LabelBold            = false;
+            lbl.LabelFontColor       = color;
+            lbl.LabelAlignment       = ScottPlot.Alignment.LowerCenter;
+            lbl.LabelBackgroundColor = ScottPlot.Colors.Transparent;
+            lbl.LabelBorderWidth     = 0;
+            lbl.LabelPadding         = 2;
+            lbl.OffsetX = 0; lbl.OffsetY = 0;
+        }
     }
 
     // ── Low-level primitives ────────────────────────────────────────────────

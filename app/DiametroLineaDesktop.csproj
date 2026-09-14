@@ -10,7 +10,7 @@
     <AssemblyName>FlyLineProfiler</AssemblyName>
     <RootNamespace>DiametroLineaDesktop</RootNamespace>
     <Product>FlyLine Profiler</Product>
-    <Version>1.1.0</Version>
+    <Version>1.2.0</Version>
     <!-- Stamped at compile time and shown in About: the fastest way to tell whether the copy
          being tested is the one that was just built (the Desktop copy is easy to miss). -->
     <BuildStamp>$([System.DateTime]::Now.ToString("yyyy-MM-dd HH:mm"))</BuildStamp>

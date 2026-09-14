@@ -141,8 +141,10 @@ public static class ChartRenderer
 
             // Node labels + leaders.  True collision avoidance: each label's
             // bounding box (estimated from its text) is tested against every box
-            // already placed; slots are tried below, above, then further out
-            // until a free spot is found.
+            // already placed; slots are tried at increasing rows below the profile
+            // until a free spot is found. Always below, never above — the length
+            // dimension chain (DrawLengthDimensionChain) now owns the space above the
+            // profile, and a label placed up there would land right on top of it.
             var leaderColor = new ScottColor(100, 100, 100);
             double xSpan    = sorted[^1].X - sorted[0].X;
             double maxDiam  = sorted.Max(n => n.Y);
@@ -165,23 +167,17 @@ public static class ChartRenderer
                 var node         = labelNodes[ni];
                 double chartYTop =  node.Y / 2.0;
                 double chartYBot = -node.Y / 2.0;
-                string text      = $"Ø {node.Y:0.00}  {node.X:0.0} cm";
+                string text      = $"Ø {node.Y:0.##}  {node.X:0.#} cm";
                 double boxW      = text.Length * pdfLblSize * 0.62 * dataPerPxX;
                 double boxH      = (pdfLblSize * 1.5 + 8) * dataPerPxY;
                 double defaultLX = node.X;
                 double defaultLY = chartYBot - rowGap;
-                // Try slots: below row0, above row0, below row1, above row1, …
-                for (int slot = 0; slot < 8; slot++)
+                // Try increasingly deep rows below the profile until a free spot is found.
+                for (int row = 0; row < 10; row++)
                 {
-                    bool above = slot % 2 == 1;
-                    int  row   = slot / 2;
-                    // Above-labels start further out so they clear the S1/S2 segment labels
-                    double tryY = above
-                        ? chartYTop + rowGap * (1.6 + row * 1.2)
-                        : chartYBot - rowGap * (1.0 + row * 1.2);
-                    // Anchor is LowerCenter when above, UpperCenter when below
-                    double y1 = above ? tryY : tryY - boxH;
-                    double y2 = above ? tryY + boxH : tryY;
+                    double tryY = chartYBot - rowGap * (1.0 + row * 1.2);
+                    double y1 = tryY - boxH;
+                    double y2 = tryY;
                     bool collides = placedBoxes.Any(b =>
                         node.X - boxW / 2 < b.X2 && node.X + boxW / 2 > b.X1 &&
                         y1 < b.Y2 && y2 > b.Y1);
@@ -212,7 +208,7 @@ public static class ChartRenderer
                 leader.LineWidth  = 1.0f;
                 leader.MarkerSize = 0;
 
-                var lbl = plot.Add.Text($"Ø {node.Y:0.00}  {node.X:0.0} cm", lx, ly);
+                var lbl = plot.Add.Text($"Ø {node.Y:0.##}  {node.X:0.#} cm", lx, ly);
                 lbl.LabelFontSize        = pdfLblSize;
                 lbl.LabelBold            = true;
                 lbl.LabelFontColor       = new ScottColor(50, 50, 50);
@@ -269,6 +265,10 @@ public static class ChartRenderer
                     sl.OffsetY              = 0;
                 }
 
+                // Quote di lunghezza — una catena continua sotto il profilo, stessi confini
+                // (taperBounds) delle etichette S sopra, stile disegno tecnico.
+                DrawLengthDimensionChain(plot, taperBounds, sorted, segLabelColor, pdfLblSize - 2);
+
                 // Etichette "M{n}" per ogni zona di materiale — mai "S", stesso standard del
                 // grafico a schermo: un badge col colore reale dell'ugello, sul bordo del profilo.
                 foreach (var span in GetMaterialZoneSpans(segments, sorted))
@@ -309,6 +309,10 @@ public static class ChartRenderer
                     sl.OffsetX              = 0;
                     sl.OffsetY              = 0;
                 }
+
+                // Quote di lunghezza — una catena continua sotto il profilo, un segmento per nodo
+                // design (stessi confini delle etichette S sopra), stile disegno tecnico.
+                DrawLengthDimensionChain(plot, sorted, sorted, segLabelColor, pdfLblSize - 2);
             }
         }
 

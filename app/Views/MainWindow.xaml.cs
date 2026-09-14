@@ -496,7 +496,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             {
                 double lastX    = pts[^1].X;
                 double lastDiam = displayedYs[^1];
-                var ann = plot.Add.Text($"Ø {lastDiam:0.00} mm\n{lastX:0.0} cm",
+                var ann = plot.Add.Text($"Ø {lastDiam:0.##} mm\n{lastX:0.#} cm",
                                         lastX, lastDiam / 2.0);
                 ann.LabelFontSize        = 11;
                 ann.LabelBold            = true;
@@ -560,21 +560,24 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             double xMax = sorted[^1].X;
             double yTop = sorted.Max(n => n.Y) / 2.0;
 
-            var tipLbl = plot.Add.Text("◀ FLY TIP", xMin, yTop);
+            // Anchored so the text box sits entirely outside the profile's own X range (left of
+            // xMin, right of xMax) — arrows still point inward at the actual end — so it never
+            // overlaps the dimension chain, S1 tag or node labels that live inside that range.
+            var tipLbl = plot.Add.Text("FLY TIP >", xMin, yTop);
             tipLbl.LabelFontSize        = 10;
             tipLbl.LabelBold            = true;
             tipLbl.LabelFontColor       = new ScottColor(80, 200, 255);
             tipLbl.LabelBackgroundColor = ScottPlot.Colors.Transparent;
             tipLbl.LabelBorderColor     = ScottPlot.Colors.Transparent;
-            tipLbl.LabelAlignment       = Alignment.UpperLeft;
+            tipLbl.LabelAlignment       = Alignment.UpperRight;
 
-            var reelLbl = plot.Add.Text("REEL ▶", xMax, yTop);
+            var reelLbl = plot.Add.Text("< REEL", xMax, yTop);
             reelLbl.LabelFontSize        = 10;
             reelLbl.LabelBold            = true;
             reelLbl.LabelFontColor       = new ScottColor(80, 200, 255);
             reelLbl.LabelBackgroundColor = ScottPlot.Colors.Transparent;
             reelLbl.LabelBorderColor     = ScottPlot.Colors.Transparent;
-            reelLbl.LabelAlignment       = Alignment.UpperRight;
+            reelLbl.LabelAlignment       = Alignment.UpperLeft;
         }
 
         plot.XLabel("Length (cm)");
@@ -825,7 +828,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         lbl.LabelAlignment       = Alignment.LowerLeft;
         lbl.OffsetX              = 4;
 
-        ap.Title("Mass Distribution  |  red = head  blue = running  ◆ = segment CoM  — = total CoM");
+        ap.Title("Mass Distribution  |  red = head  blue = running  * = segment CoM  - = total CoM");
         ap.XLabel("Position (cm)");
         ap.YLabel("gr / ft");
         ap.ShowLegend();
@@ -1705,7 +1708,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         {
             double lastX    = pts[^1].X;
             double lastDiam = displayedYs[^1];
-            var ann = plot.Add.Text($"Ø {lastDiam:0.00} mm\n{lastX:0.0} cm",
+            var ann = plot.Add.Text($"Ø {lastDiam:0.##} mm\n{lastX:0.#} cm",
                                     lastX, lastDiam / 2.0);
             ann.LabelFontSize        = 11;
             ann.LabelBold            = true;
@@ -2196,7 +2199,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     new double[] { chartYBottom * 0.85, ly });
                 leader.Color = leaderColor; leader.LineWidth = 1.2f; leader.MarkerSize = 0;
 
-                var lbl = plot.Add.Text($"Ø {node.Y:0.00}  {node.X:0.0} cm", lx, ly);
+                var lbl = plot.Add.Text($"Ø {node.Y:0.##}  {node.X:0.#} cm", lx, ly);
                 lbl.LabelFontSize = 11; lbl.LabelBold = true;
                 lbl.LabelFontColor       = new ScottColor(50, 50, 50);
                 lbl.LabelAlignment       = Alignment.UpperCenter;
@@ -2205,6 +2208,30 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 lbl.LabelBorderWidth     = 1f;
                 lbl.LabelPadding = 3; lbl.OffsetX = 0; lbl.OffsetY = 0;
             }
+
+            // Etichette S1, S2… — mai disegnate qui prima: la modalità NC/design mostrava le
+            // etichette Ø/posizione ma non i tapers, a differenza del PDF (RenderPdfChart, ramo
+            // else) che le disegna sempre. Un nodo design = un vertice di taper reale, quindi qui
+            // basta iterare `sorted` direttamente, senza passare da GetTaperShapeBoundaries (serve
+            // solo per raggruppare le tante slice da 1cm di un file C caricato in modalità comp).
+            var segLabelColorNc = new ScottColor(40, 40, 40);
+            for (int si = 0; si < sorted.Count - 1; si++)
+            {
+                double cx      = (sorted[si].X + sorted[si + 1].X) / 2.0;
+                double topAtCx = InterpolateProfileY(sorted, cx) / 2.0;
+                double gap     = InterpolateProfileY(sorted, cx) * 0.08;
+                var sl = plot.Add.Text($"S{si + 1}", cx, topAtCx + gap);
+                sl.LabelFontSize = 15; sl.LabelBold = false;
+                sl.LabelFontColor       = segLabelColorNc;
+                sl.LabelAlignment       = Alignment.LowerCenter;
+                sl.LabelBackgroundColor = ScottPlot.Colors.Transparent;
+                sl.LabelBorderWidth     = 0; sl.LabelPadding = 2;
+                sl.OffsetX = 0; sl.OffsetY = 0;
+            }
+
+            // Quote di lunghezza — una catena continua sotto il profilo, un segmento per taper
+            // fisico reale (stessi confini delle etichette S sopra), stile disegno tecnico.
+            ChartGeometry.DrawLengthDimensionChain(plot, sorted, sorted, segLabelColorNc, 15f);
         }
         else
         {
@@ -2248,7 +2275,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     new double[] { chartYBottom * 0.85, ly });
                 leader.Color = leaderColor; leader.LineWidth = 1.2f; leader.MarkerSize = 0;
 
-                var lbl = plot.Add.Text($"Ø {node.Y:0.00}  {node.X:0.0} cm", lx, ly);
+                var lbl = plot.Add.Text($"Ø {node.Y:0.##}  {node.X:0.#} cm", lx, ly);
                 lbl.LabelFontSize = 11; lbl.LabelBold = true;
                 lbl.LabelFontColor       = new ScottColor(50, 50, 50);
                 lbl.LabelAlignment       = Alignment.UpperCenter;
@@ -2287,6 +2314,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 sl.LabelBorderWidth     = 0; sl.LabelPadding = 2;
                 sl.OffsetX = 0; sl.OffsetY = 0;
             }
+
+            // Quote di lunghezza — una catena continua sotto il profilo, un segmento per taper
+            // fisico reale (stessi confini delle etichette S sopra), stile disegno tecnico.
+            ChartGeometry.DrawLengthDimensionChain(plot, labelSorted, compNodes, segLabelColor, 15f);
 
             // Etichette "M{n}" per ogni zona di materiale — MAI "S" (vedi sopra): un badge col
             // colore reale dell'ugello, centrato sulla zona, sul bordo del profilo. Standard
