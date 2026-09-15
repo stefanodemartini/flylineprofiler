@@ -512,6 +512,11 @@
 
                     <Separator Style="{StaticResource ToolSep}"/>
 
+                    <Button Content="Simulatore Lanci"
+                            Style="{StaticResource BtnGhost}"
+                            Click="Simulatore_Click"
+                            ToolTip="Simula il comportamento di lancio di una o due linee (.flp) su scenari fissi"/>
+
                     <Button Content="Settings"
                             Style="{StaticResource BtnGhost}"
                             Click="Settings_Click"

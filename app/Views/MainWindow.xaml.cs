@@ -5591,6 +5591,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
     }
 
+    private void Simulatore_Click(object sender, RoutedEventArgs e)
+    {
+        var win = new SimulatorWindow { Owner = this };
+        win.Show();
+    }
+
     private void Exit_Click(object sender, RoutedEventArgs e) => Close();
 
     // Log

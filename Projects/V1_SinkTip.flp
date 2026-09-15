@@ -1,0 +1,119 @@
+﻿{
+  "Version": 1,
+  "Name": "V1_SinkTip",
+  "CreatedAt": "2026-09-15T09:22:50.8370298Z",
+  "ModifiedAt": "2026-09-15T09:28:56.7519311Z",
+  "Notes": "",
+  "UseSharedDensity": true,
+  "SharedDensityGCm3": 0.92,
+  "IsSinking": true,
+  "IsFullLine": false,
+  "WaterType": "fresh",
+  "WaterTempC": 20,
+  "ScanPoints": [],
+  "ImportedSeries": [],
+  "DesignNodes": [
+    {
+      "X": 0,
+      "Y": 0.8385
+    },
+    {
+      "X": 30,
+      "Y": 0.8385
+    },
+    {
+      "X": 280,
+      "Y": 1.2111
+    },
+    {
+      "X": 880,
+      "Y": 1.35
+    },
+    {
+      "X": 1080,
+      "Y": 1.05
+    },
+    {
+      "X": 1180,
+      "Y": 1.05
+    }
+  ],
+  "SegmentMetadata": [
+    {
+      "StartCm": 0,
+      "EndCm": 30,
+      "Name": "Tip",
+      "SpecWeight": 0.92,
+      "IsHead": true
+    },
+    {
+      "StartCm": 30,
+      "EndCm": 280,
+      "Name": "Front taper",
+      "SpecWeight": 0.92,
+      "IsHead": true
+    },
+    {
+      "StartCm": 280,
+      "EndCm": 880,
+      "Name": "Belly",
+      "SpecWeight": 0.92,
+      "IsHead": true
+    },
+    {
+      "StartCm": 880,
+      "EndCm": 1080,
+      "Name": "Rear taper",
+      "SpecWeight": 0.92,
+      "IsHead": true
+    },
+    {
+      "StartCm": 1080,
+      "EndCm": 1180,
+      "Name": "Back",
+      "SpecWeight": 0.92,
+      "IsHead": true
+    }
+  ],
+  "NodeLabelOffsets": [],
+  "DesignLineColorHex": "E8E4D8",
+  "ColorNote": "",
+  "CoreType": "Polyester (Dacron) braid",
+  "LaserMark": "",
+  "LaserMarkFromTipMm": "",
+  "LaserMarkFromEndMm": "",
+  "ColorSections": [],
+  "NozzleDefinitions": [
+    {
+      "ColorHex": "E8E4D8",
+      "DensityGCm3": 0.92,
+      "Label": "Base"
+    },
+    {
+      "ColorHex": "FFD700",
+      "DensityGCm3": 1.06,
+      "Label": "Sink tip"
+    },
+    {
+      "ColorHex": "28A428",
+      "DensityGCm3": 0,
+      "Label": ""
+    },
+    {
+      "ColorHex": "3296FF",
+      "DensityGCm3": 0,
+      "Label": ""
+    }
+  ],
+  "NozzleZones": [
+    {
+      "StartCm": 0,
+      "EndCm": 280,
+      "NozzleIndex": 1
+    }
+  ],
+  "CompTargetSpeedMs": 0,
+  "ShowCompProfile": false,
+  "IsCompensatedDerivative": false,
+  "ZoneDensityAdaptDiameters": false
+}

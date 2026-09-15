@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(where pdftoppm *)",
+      "Read(//c/ProgramData/chocolatey/lib/**)",
+      "Read(//c/ProgramData/chocolatey/bin/**)",
+      "Bash(\"C:/Users/dem/AppData/Local/Programs/Python/Python313/python.exe\" -m pip install --user --quiet pymupdf)",
+      "Bash(/c/Users/dem/AppData/Local/Programs/Python/Python313/python.exe -m pip install --user --quiet pymupdf)",
+      "Bash(ls \"/c/Users/dem/AppData/Local/Programs/Python/Python313/\" 2>&1 | head -30)",
+      "Read(//c/Users/dem/AppData/Local/Programs/Python/Python313//**)",
+      "PowerShell(Get-Command python -ErrorAction SilentlyContinue)",
+      "PowerShell(Get-Command py -ErrorAction SilentlyContinue)",
+      "PowerShell(py --version)",
+      "Bash(pdftotext -layout \"articlesportsengineeringrev4d.pdf\" /tmp/sports_eng.txt)",
+      "Bash(git add *)",
+      "Bash(git status *)"
+    ]
+  }
+}

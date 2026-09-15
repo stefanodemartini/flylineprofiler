@@ -1,0 +1,70 @@
+<Window x:Class="DiametroLineaDesktop.Views.SimulatorWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ScottPlot="clr-namespace:ScottPlot.WPF;assembly=ScottPlot.WPF"
+        Title="Simulatore Lanci — FlyLine Profiler"
+        Height="880" Width="1400"
+        WindowStartupLocation="CenterScreen">
+    <Grid Margin="10">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="300"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <!-- Left panel: load, scenario, run -->
+        <StackPanel Grid.Column="0" Margin="0,0,10,0">
+            <TextBlock Text="Linee" FontWeight="Bold" Margin="0,0,0,6"/>
+
+            <Button x:Name="BtnLoadV1" Content="Carica Linea V1..." Click="BtnLoadV1_Click" Margin="0,0,0,4" Padding="6,4"/>
+            <TextBlock x:Name="TxtV1Name" Text="(nessuna)" TextWrapping="Wrap" Foreground="#DC3232" Margin="0,0,0,10"/>
+
+            <Button x:Name="BtnLoadV2" Content="Carica Linea V2 (confronto)..." Click="BtnLoadV2_Click" Margin="0,0,0,4" Padding="6,4"/>
+            <TextBlock x:Name="TxtV2Name" Text="(nessuna)" TextWrapping="Wrap" Foreground="#3296FF" Margin="0,0,0,14"/>
+
+            <Separator Margin="0,0,0,10"/>
+
+            <TextBlock Text="Scenario" FontWeight="Bold" Margin="0,0,0,6"/>
+            <ComboBox x:Name="CmbScenario" SelectedIndex="0" Margin="0,0,0,10">
+                <ComboBoxItem Content="Overhead Cast"/>
+                <ComboBoxItem Content="Distanza"/>
+            </ComboBox>
+
+            <Button x:Name="BtnRun" Content="Esegui Simulazione" Click="BtnRun_Click" Padding="6,6" FontWeight="Bold" Margin="0,0,0,10"/>
+            <TextBlock x:Name="TxtStatus" Text="Carica almeno Linea 1 per iniziare." TextWrapping="Wrap" Foreground="Gray" Margin="0,0,0,10"/>
+
+            <Separator Margin="0,0,0,10"/>
+
+            <TextBlock Text="Riproduzione" FontWeight="Bold" Margin="0,0,0,6"/>
+            <Slider x:Name="SldTime" Minimum="0" Maximum="1" Value="0" ValueChanged="SldTime_ValueChanged" IsEnabled="False" Margin="0,0,0,4"/>
+            <StackPanel Orientation="Horizontal">
+                <Button x:Name="BtnPlay" Content="▶ Play" Click="BtnPlay_Click" Width="70" IsEnabled="False" Margin="0,0,6,0"/>
+                <TextBlock x:Name="TxtFrameTime" Text="t = 0.00 s" VerticalAlignment="Center"/>
+            </StackPanel>
+        </StackPanel>
+
+        <!-- Right: animated loop shape + comparison charts -->
+        <Grid Grid.Column="1">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="260"/>
+            </Grid.RowDefinitions>
+
+            <GroupBox Grid.Row="0" Header="Forma del loop (piano verticale di lancio)">
+                <ScottPlot:WpfPlot x:Name="PlotLoopShape"/>
+            </GroupBox>
+
+            <Grid Grid.Row="1" Margin="0,8,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <GroupBox Grid.Column="0" Header="Velocità estremità libera" Margin="0,0,4,0">
+                    <ScottPlot:WpfPlot x:Name="PlotSpeed"/>
+                </GroupBox>
+                <GroupBox Grid.Column="1" Header="Perdita di quota per drag" Margin="4,0,0,0">
+                    <ScottPlot:WpfPlot x:Name="PlotHeightLoss"/>
+                </GroupBox>
+            </Grid>
+        </Grid>
+    </Grid>
+</Window>
